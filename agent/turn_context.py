@@ -1094,8 +1094,9 @@ def build_api_messages(
         # at API time only; `messages` is untouched beyond the api_content stamp.
         if msg is current_turn_message and msg.get("role") == "user":
             if isinstance(_api_content, str) and _api_content:
-                # Reuse the prologue's stamp so sidecar and wire cannot drift
-                # and every pass this turn sends identical bytes.
+                # Reuse the prologue's stamp so sidecar and wire cannot drift.
+                # The Live Delta suffix appended below is the one request-local
+                # exception to "every pass this turn sends identical bytes".
                 api_msg["content"] = _api_content
             else:
                 # Callers that bypass the prologue stamping: compose live.

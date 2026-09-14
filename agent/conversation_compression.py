@@ -2798,7 +2798,7 @@ def _fold_todo_snapshot(agent: Any, compressed: list) -> None:
 def _rebuild_system_prompt_at_boundary(agent: Any, system_message: str) -> str:
     """Refresh tool schemas and rebuild the system prompt at the commit boundary."""
     cached_system_prompt = agent._cached_system_prompt
-    agent._invalidate_system_prompt()
+    agent._invalidate_system_prompt(reason="compression")
 
     # Refresh dynamic tool schemas at the same admitted-commit boundary that rebuilds the system prompt
     # (maintainer-directed, #95681 arc): forever-sessions (Bot Mode chats, gateway channels) never

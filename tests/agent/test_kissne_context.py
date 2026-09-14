@@ -24,7 +24,11 @@ def test_semantic_layers_keep_runtime_cache_tiers_separate():
     assert read.system_prompt == "complete Hermes runtime prompt"
     assert read.turn_recall == "recalled fact"
     assert list(read.unified_history) == history
-    assert read.unified_history is not layers.unified_history
+    # The contract is immutability + independence, not object identity: for a
+    # tuple input, ``tuple(t) is t`` is implementation-defined. Mutating the
+    # source list after the snapshot must not reach the read.
+    history.append({"role": "user", "content": "later"})
+    assert list(read.unified_history) == [{"role": "user", "content": "hello"}]
 
 
 def test_live_delta_has_exact_request_time_and_provenance():

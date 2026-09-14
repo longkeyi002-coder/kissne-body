@@ -1501,6 +1501,15 @@ def _context_section(content: str, label: str, warn_name: str, path: Path, conte
     return _truncate_content(body, warn_name, context_length=context_length, read_path=str(path))
 
 
+def _self_md_candidates(home: Path) -> "tuple[Path, ...]":
+    """SELF.md locations in priority order.
+
+    Root first — next to SOUL.md, which owns the same identity slot — then the
+    memories dir, for a profile that keeps SELF.md beside MEMORY.md/USER.md.
+    """
+    return (home / "SELF.md", home / "memories" / "SELF.md")
+
+
 def load_self_md(
     context_length: Optional[int] = None,
     home_override: "Path | None" = None,
@@ -1510,15 +1519,14 @@ def load_self_md(
     SELF is read only when a new Session Snapshot is built. Normal turns reuse
     the cached system prompt and therefore cannot hot-reload this file.
     """
-    self_path = (
-        Path(home_override) if home_override is not None else get_hermes_home()
-    ) / "SELF.md"
-    content = _read_context_file(self_path)
-    if not content:
-        return None
-    return _context_section(
-        content, "SELF", "SELF.md", self_path, context_length
-    )
+    home = Path(home_override) if home_override is not None else Path(get_hermes_home())
+    for self_path in _self_md_candidates(home):
+        content = _read_context_file(self_path)
+        if content:
+            return _context_section(
+                content, "SELF", "SELF.md", self_path, context_length
+            )
+    return None
 
 
 def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
