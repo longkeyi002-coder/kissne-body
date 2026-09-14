@@ -446,6 +446,7 @@ def guard_active() -> bool:
     """
     return True
 
+
 def detect_self_repo_git_mutation(
     command: str, cwd: str | None, source_root: Path | None = None) -> tuple[bool, str | None]:
     """-> (blocked, message): whether a command would rewrite the live source checkout."""
