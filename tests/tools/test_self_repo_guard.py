@@ -8,6 +8,7 @@ import pytest
 from tools.self_repo_guard import (
     detect_self_repo_git_mutation,
     get_running_source_root,
+    guard_active,
 )
 
 
@@ -325,6 +326,12 @@ class TestWorktreeTargetingSourceRoot:
     def test_incomplete_worktree_command_is_not_blocked(self, repo, sub):
         hit, _ = _detect(f"git worktree {sub}".strip(), repo, repo)
         assert hit is False
+
+
+class TestGuardPolicy:
+    def test_guard_active_is_enabled_on_every_platform(self):
+        """Core Patch protection is a product boundary, not an OS quirk."""
+        assert guard_active() is True
 
 
 class TestSourceRootResolution:
