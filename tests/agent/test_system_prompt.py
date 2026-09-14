@@ -586,22 +586,42 @@ def _build(builder, **overrides):
 
 
 class TestSkillsInVolatileBand:
-    """The skills index is runtime-mutable, so it lives in the volatile band,
-    not the stable band, to keep the cached stable prefix reusable when a
-    rebuild picks up a skill change."""
+    """Skills remain volatile, behind the more stable Kissne Snapshot blocks.
+
+    KISSNE-CTX-14 fixes the physical head as SELF -> MEMORY -> Skills Index.
+    Putting the more stable snapshot first also preserves the longest reusable
+    prefix when the runtime-mutable skills index changes.
+    """
 
     def test_skills_not_in_stable_band(self):
         parts = _build(build_system_prompt_parts)
         assert _SKILLS not in parts["stable"]
 
-    def test_skills_lead_the_volatile_band(self):
-        parts = _build(build_system_prompt_parts)
-        assert parts["volatile"].startswith(_SKILLS)
+    def test_snapshot_leads_the_volatile_band_before_skills(self):
+        with (
+            patch(
+                "agent.prompt_builder.load_self_md",
+                return_value="SELF_SNAPSHOT_SENTINEL",
+            ),
+            patch(
+                "agent.system_prompt._memory_parts",
+                return_value=["MEMORY_SNAPSHOT_SENTINEL"],
+            ),
+        ):
+            parts = _build(build_system_prompt_parts)
+
+        volatile = parts["volatile"]
+        assert volatile.startswith("SELF_SNAPSHOT_SENTINEL")
+        assert (
+            volatile.index("SELF_SNAPSHOT_SENTINEL")
+            < volatile.index("MEMORY_SNAPSHOT_SENTINEL")
+            < volatile.index(_SKILLS)
+        )
 
     def test_full_order_is_stable_context_then_skills(self):
         # build_system_prompt joins stable + context + volatile, so the skills
-        # index renders after the context files and before the per-turn
-        # memory/timestamp tail.
+        # index renders after context files and the Session Snapshot, but
+        # before the session timestamp tail.
         full = _build(build_system_prompt)
         assert full.index(_CONTEXT) < full.index(_SKILLS)
         assert full.index(_SKILLS) < full.index("Conversation started:")

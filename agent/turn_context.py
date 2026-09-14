@@ -81,22 +81,6 @@ def _agent_stale_thinking_on_wire(agent: Any) -> bool:
         return True
 
 
-def compose_user_api_content(
-    content: Any, ext_prefetch_cache: str, plugin_user_context: str
-) -> Optional[str]:
-    """Compose the API-bound content of the current turn's user message.
-
-    Single source for the ``api_content`` sidecar and the wire bytes so they never drift
-    (what turn N sends is what turn N+1 replays). ``None`` when nothing is injected."""
-    if not isinstance(content, str):
-        return None
-    fenced = build_memory_context_block(ext_prefetch_cache) if ext_prefetch_cache else ""
-    injections = [part for part in (fenced, plugin_user_context) if part]
-    if not injections:
-        return None
-    return content + "\n\n" + "\n\n".join(injections)
-
-
 def substitute_api_content(api_msg: Dict[str, Any]) -> Optional[str]:
     """Pop the ``api_content`` sidecar and substitute it into ``content`` (keeps the
     prompt-cache prefix byte-stable). Returns the popped sidecar, or ``None``."""
@@ -793,53 +777,6 @@ def _memory_turn_start_and_prefetch(
     return ext_prefetch_cache
 
 
-def _stamp_api_content_sidecar(
-    agent: Any, messages: List[Any], current_turn_user_idx: int, ext_prefetch_cache: str,
-    plugin_user_context: str, *, preflight_compressed: bool,
-) -> None:
-    """api_content sidecar — persist what you send: injected context lives only in the
-    API copy, so stamp the exact sent bytes on the live dict for replay."""
-    _turn_user_msg = messages[current_turn_user_idx]
-    live_content = _turn_user_msg.get("content")
-    from agent.session_persistence import _persist_lock, durable_user_row_content
-    # Match the row the flush wrote (persist override = clean transcript), not the live bytes.
-    durable_content, _api_content = durable_user_row_content(
-        agent, _turn_user_msg, live_content,
-        compose_user_api_content(live_content or "", ext_prefetch_cache, plugin_user_context),
-    )
-    if _api_content is None or _api_content == durable_content:
-        return
-    _turn_user_msg["api_content"] = _api_content
-
-    # When another writer materialized this turn's user row BEFORE the sidecar existed — in-place
-    # preflight compaction, or a close/early flush that raced the prologue (#102194) — the crash
-    # persist marker-skips the message and the stamp never reaches the DB, so the next turn replays
-    # clean content and the request prefix diverges here. Both writers stamp ``_row_id`` on the live
-    # dict, which is at once the proof a row exists and the address to update.
-    #
-    # Never widen this to an unconditional positional backfill — see set_latest_user_api_content.
-    #
-    # ``_row_id`` is read under ``_session_persist_lock``: a close flush holds it while it commits
-    # the row and only then writes ``_row_id`` back (``sync_flushed_message_markers``). Read outside
-    # it, the stamp can land in between, see no id, return — and the flush then marks the message
-    # persisted with ``api_content = NULL``, leaving no writer to correct the row.
-    with _persist_lock(agent):
-        _row_id = _turn_user_msg.get("_row_id")
-        _in_place_compacted = preflight_compressed and bool(getattr(agent, "_last_compaction_in_place", False))
-        _db = getattr(agent, "_session_db", None)
-        if _db is None or not (isinstance(_row_id, int) or _in_place_compacted):
-            return
-        try:
-            if isinstance(_row_id, int):
-                _db.set_message_api_content(agent.session_id, _row_id, durable_content, _api_content)
-            else:
-                # Compacted copies carry no row id; positional is safe only because
-                # archive_and_compact just made this message the newest active user row.
-                _db.set_latest_user_api_content(agent.session_id, durable_content, _api_content)
-        except Exception:
-            logger.warning("api_content backfill failed for session=%s", agent.session_id or "none", exc_info=True)
-
-
 def _persist_turn_start(
     agent: Any, messages: List[Any], conversation_history: Optional[List[Any]],
     pending_cli_message: Any,
@@ -1038,24 +975,37 @@ def build_api_messages(
     """Build the wire copy of ``messages`` for one API call plus the effective system
     message. Returns ``(api_messages, effective_system)``.
 
-    Prompt-cache invariant: historical user/assistant rows replay their ``api_content``
-    sidecar (the exact bytes sent live) so the prefix stays byte-stable; the current
-    user turn reuses the prologue's stamp (or composes live when a caller bypassed the
-    prologue). Ephemeral context (prefetch, ``pre_llm_call`` hooks,
-    ``ephemeral_system_prompt``) is added at API time only — ``messages`` stays untouched
-    beyond the sidecar stamp, and the system prompt is built ONCE per session and
-    replayed verbatim."""
+    Prompt-cache invariant: generic historical user/assistant ``api_content``
+    sidecars still replay exact provider bytes. Kissne Live Delta, Turn Recall and
+    runtime context are different: their projection is request-local, is never
+    persisted or replayed, and therefore is excluded from the cache-eligible prefix.
+    The cached system prompt and older canonical history remain byte-stable; the
+    immediately previous turn's ephemeral projection is an intentional cache break.
+    The system prompt is built once per Session Snapshot and replayed verbatim."""
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
     from agent.replay_cleanup import canonicalize_replay_history
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
     current_turn_message = messages[current_turn_user_idx] if has_current else None
-    # Evaluate on every build_api_messages call, including retries and tool-loop
-    # follow-ups. This is request-local and never written to api_content/history.
-    _call_live_delta = build_live_delta(
-        earth_state=getattr(agent, "_kissne_earth_state", ""),
-        ai_world_state=getattr(agent, "_kissne_ai_world_state", ""),
+    # MoA mutates its own per-call user projection, while codex_app_server owns a
+    # separate protocol boundary. Keep Kissne's wrapper off both paths until
+    # adapter-specific compatibility is verified.
+    kissne_projection_enabled = (
+        getattr(agent, "api_mode", None) != "codex_app_server"
+        and getattr(agent, "provider", None) != "moa"
+        and moa_config is None
+    )
+    # Evaluate on every eligible build_api_messages call, including retries and
+    # tool-loop follow-ups. This is request-local and never written to
+    # api_content/history.
+    _call_live_delta = (
+        build_live_delta(
+            earth_state=getattr(agent, "_kissne_earth_state", ""),
+            ai_world_state=getattr(agent, "_kissne_ai_world_state", ""),
+        )
+        if kissne_projection_enabled
+        else None
     )
 
     # Replay consumers canonicalize the persisted prefix on read; the request copy must
@@ -1087,7 +1037,11 @@ def build_api_messages(
         # KISSNE-CTX-06/11A: build a request-only current-user view.
         # Live Delta, Turn Recall and runtime context precede the exact user text
         # and are never copied back to messages or api_content.
-        if msg is current_turn_message and msg.get("role") == "user":
+        if (
+            kissne_projection_enabled
+            and msg is current_turn_message
+            and msg.get("role") == "user"
+        ):
             if isinstance(_api_content, str) and _api_content:
                 # Preserve an independently-produced provider/sanitization
                 # sidecar, but do not create one for Kissne ephemeral context.

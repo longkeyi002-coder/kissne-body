@@ -1505,14 +1505,21 @@ def load_self_md(
     context_length: Optional[int] = None,
     home_override: "Path | None" = None,
 ) -> Optional[str]:
-    """Load the one canonical SELF.md from HERMES_HOME.
+    """Load SELF.md from the canonical home root, with one migration fallback.
 
     SELF is an identity file beside SOUL.md, not a MemoryStore document beside
-    MEMORY.md/USER.md. It is read only when a Session Snapshot is built.
-    Normal turns therefore cannot hot-reload it.
+    MEMORY.md/USER.md. Pre-migration installs may still have
+    ``memories/SELF.md``; use it only while the canonical root file is absent.
+    The file is read only when a Session Snapshot is built, so normal turns
+    cannot hot-reload it.
     """
     home = Path(home_override) if home_override is not None else Path(get_hermes_home())
-    self_path = home / "SELF.md"
+    canonical_path = home / "SELF.md"
+    self_path = (
+        canonical_path
+        if canonical_path.exists()
+        else home / "memories" / "SELF.md"
+    )
     content = _read_context_file(self_path)
     if not content:
         return None

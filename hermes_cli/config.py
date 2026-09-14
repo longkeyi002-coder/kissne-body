@@ -26,7 +26,7 @@ import yaml
 from hermes_cli.cli_output import line_input
 from hermes_cli.colors import Colors, color
 from hermes_cli import managed_scope
-from hermes_cli.default_self import DEFAULT_SELF_MD
+from hermes_cli.default_self import DEFAULT_SELF_MD, is_placeholder_self_md
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.secret_prompt import masked_secret_prompt
 # Re-export from hermes_constants — canonical definition lives there.
@@ -625,12 +625,34 @@ def _ensure_default_soul_md(home: Path) -> None:
 
 
 def _ensure_default_self_md(home: Path) -> None:
-    """Seed the canonical SELF.md on first run without overwriting user state."""
+    """Seed or migrate canonical SELF.md without overwriting user-authored state."""
     self_path = home / "SELF.md"
+    legacy_path = home / "memories" / "SELF.md"
+    existing = None
     if self_path.exists():
-        return
-    self_path.write_text(DEFAULT_SELF_MD, encoding="utf-8")
-    _secure_file(self_path)
+        try:
+            existing = self_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        if not is_placeholder_self_md(existing):
+            return
+
+    # Preserve pre-Kissne identity state: copy it to the canonical root without
+    # deleting the legacy file. This also repairs the HTML-comment placeholder
+    # seeded by the first PR revision before it can shadow a real legacy SELF.
+    if legacy_path.exists():
+        try:
+            legacy_content = legacy_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        if legacy_content.strip():
+            self_path.write_text(legacy_content, encoding="utf-8")
+            _secure_file(self_path)
+            return
+
+    if existing != DEFAULT_SELF_MD:
+        self_path.write_text(DEFAULT_SELF_MD, encoding="utf-8")
+        _secure_file(self_path)
 
 
 # Home paths whose directory skeleton was created this process. Only successful passes are
