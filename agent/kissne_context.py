@@ -18,7 +18,7 @@ memory store.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Optional
 
@@ -188,12 +188,6 @@ class ContextRead:
         return self.runtime_system_prompt or _join_prompt_parts(
             self.stable_core, self.session_snapshot.render()
         )
-
-    def with_request_history(
-        self, messages: Iterable[Mapping[str, Any]]
-    ) -> "ContextRead":
-        """Return a diagnostic view after ContextEngine read-time selection."""
-        return replace(self, unified_history=tuple(messages))
 
 
 def make_context_layers(

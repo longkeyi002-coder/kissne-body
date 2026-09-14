@@ -77,8 +77,9 @@ class _WireAgent:
 def test_request_assembly_injects_live_delta_without_changing_history():
     messages = [{"role": "user", "content": "current user"}]
 
+    agent = _WireAgent()
     wire, system = build_api_messages(
-        _WireAgent(),
+        agent,
         messages,
         current_turn_user_idx=0,
         ext_prefetch_cache="recalled memory",
@@ -93,6 +94,10 @@ def test_request_assembly_injects_live_delta_without_changing_history():
     assert "<kissne_live_delta>" in wire[1]["content"]
     assert "Exact Earth time:" in wire[1]["content"]
     assert messages == [{"role": "user", "content": "current user"}]
+    assert list(agent._kissne_context_last_read.unified_history) == messages
+    assert "<kissne_live_delta>" not in str(
+        agent._kissne_context_last_read.unified_history
+    )
 
 
 def test_resume_fallback_does_not_reread_or_relabel_cached_prompt():

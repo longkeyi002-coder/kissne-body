@@ -1158,11 +1158,13 @@ def build_api_messages(
             snapshot_origin="resume_persisted_prompt",
         )
     _context_read = _layers.read(
-        unified_history=api_messages,
+        # Canonical messages are the Unified History truth. api_messages is
+        # already a request projection with sidecars and must never be relabeled
+        # or persisted as history.
+        unified_history=messages,
         turn_recall=ext_prefetch_cache or "",
         live_delta=_call_live_delta,
     )
-    api_messages = list(_context_read.unified_history)
     with suppress(Exception):
         agent._kissne_context_last_read = _context_read
 
