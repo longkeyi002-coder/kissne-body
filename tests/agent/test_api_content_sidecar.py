@@ -1,4 +1,11 @@
-"""Tests for the generic api_content wire/durable sidecar.\n\nKissne Live Delta, Turn Recall and runtime/plugin context are request-local and\nmust not use this sidecar. api_content remains for independent wire bytes\nthat differ from canonical history, including persist overrides and sanitizer\ndivergence. These tests cover storage, replay, row-addressed backfill and the\nretired ephemeral behavior.\n"""
+"""Tests for the generic api_content wire/durable sidecar.
+
+Kissne Live Delta, Turn Recall and runtime/plugin context are request-local and
+must not use this sidecar. api_content remains for independent wire bytes
+that differ from canonical history, including persist overrides and sanitizer
+divergence. These tests cover storage, replay, row-addressed backfill and the
+retired ephemeral behavior.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent.turn_context import build_turn_context
+from agent.turn_context import build_turn_context, reanchor_current_turn_user_idx
 from hermes_state import SessionDB
 
 

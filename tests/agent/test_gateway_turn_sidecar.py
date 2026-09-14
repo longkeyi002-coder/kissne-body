@@ -1,4 +1,9 @@
-"""Gateway must-deliver notes on the current user request.\n\nString notes join request-local runtime context and are not persisted or\nreplayed through api_content. Multimodal content keeps the existing\ndurable text-part fallback because the string projection cannot represent it.\n"""
+"""Gateway must-deliver notes on the current user request.
+
+String notes join request-local runtime context and are not persisted or
+replayed through api_content. Multimodal content keeps the existing
+durable text-part fallback because the string projection cannot represent it.
+"""
 
 from __future__ import annotations
 

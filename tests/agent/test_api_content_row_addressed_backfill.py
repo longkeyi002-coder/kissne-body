@@ -1,4 +1,11 @@
-"""Row-addressed backfill for durable API/canonical text divergence.\n\nKissne request-local context is deliberately excluded from api_content.\nThe remaining protection covers independently-produced API text, such as a\nvoice prefix, when an early flush or in-place compaction has already inserted\nthe clean canonical row. Row ids prevent repeated prompts from updating the\nwrong turn (NousResearch/hermes-agent#102194).\n"""
+"""Row-addressed backfill for durable API/canonical text divergence.
+
+Kissne request-local context is deliberately excluded from api_content.
+The remaining protection covers independently-produced API text, such as a
+voice prefix, when an early flush or in-place compaction has already inserted
+the clean canonical row. Row ids prevent repeated prompts from updating the
+wrong turn (NousResearch/hermes-agent#102194).
+"""
 
 from __future__ import annotations
 
