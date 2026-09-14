@@ -436,11 +436,15 @@ def _find_mutation(command: str, cwd: Path, root: Path, depth: int = 0) -> str |
 
 
 def guard_active() -> bool:
-    """Windows-only: NTFS locks loaded .py/.pyd files, so overwriting the live checkout can
-    corrupt the running process. On POSIX open handles keep the old inode alive; the mixed-module
-    hazard is limited to later lazy imports — not worth blocking every git workflow for."""
-    return os.name == "nt"
+    """Return whether the live-source checkout guard is enabled.
 
+    Core Patch operations are a product-level boundary, not a Windows-only
+    filesystem workaround. POSIX keeps already-open inodes alive, but later
+    lazy imports can still mix module versions after a checkout rewrite.
+    Hermes therefore requires the same candidate/test/promotion discipline on
+    every platform.
+    """
+    return True
 
 def detect_self_repo_git_mutation(
     command: str, cwd: str | None, source_root: Path | None = None) -> tuple[bool, str | None]:
