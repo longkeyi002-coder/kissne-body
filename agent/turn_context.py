@@ -777,6 +777,60 @@ def _memory_turn_start_and_prefetch(
     return ext_prefetch_cache
 
 
+def _stamp_durable_user_api_content_sidecar(
+    agent: Any, messages: List[Any], current_turn_user_idx: int, *,
+    preflight_compressed: bool,
+) -> None:
+    """Persist only independently-produced API/durable user-text divergence.
+
+    Kissne Live Delta, Turn Recall, plugin context and gateway string notes are
+    intentionally absent: they are request-local and must not replay. The
+    remaining sidecar covers payloads such as an API-only voice prefix and
+    keeps the row-addressed early-flush protection from issue #102194.
+    """
+    turn_user_msg = messages[current_turn_user_idx]
+    live_content = turn_user_msg.get("content")
+    existing_sidecar = turn_user_msg.get("api_content")
+    if not isinstance(existing_sidecar, str):
+        existing_sidecar = None
+
+    from agent.session_persistence import _persist_lock, durable_user_row_content
+
+    durable_content, api_content = durable_user_row_content(
+        agent, turn_user_msg, live_content, existing_sidecar
+    )
+    if api_content is None or api_content == durable_content:
+        return
+    turn_user_msg["api_content"] = api_content
+
+    # An early close flush or in-place compaction may already have inserted the
+    # clean row. Backfill only a proven row id; positional fallback remains
+    # limited to the just-committed in-place compaction boundary.
+    with _persist_lock(agent):
+        row_id = turn_user_msg.get("_row_id")
+        in_place_compacted = preflight_compressed and bool(
+            getattr(agent, "_last_compaction_in_place", False)
+        )
+        db = getattr(agent, "_session_db", None)
+        if db is None or not (isinstance(row_id, int) or in_place_compacted):
+            return
+        try:
+            if isinstance(row_id, int):
+                db.set_message_api_content(
+                    agent.session_id, row_id, durable_content, api_content
+                )
+            else:
+                db.set_latest_user_api_content(
+                    agent.session_id, durable_content, api_content
+                )
+        except Exception:
+            logger.warning(
+                "durable api_content backfill failed for session=%s",
+                agent.session_id or "none",
+                exc_info=True,
+            )
+
+
 def _persist_turn_start(
     agent: Any, messages: List[Any], conversation_history: Optional[List[Any]],
     pending_cli_message: Any,
@@ -929,9 +983,22 @@ def build_turn_context(
     _bind_interrupt_scope(agent, ra)
     ext_prefetch_cache = _memory_turn_start_and_prefetch(agent, original_user_message, turn_author)
 
-    # KISSNE-CTX-11A: recall/plugin context is request-local. Do not stamp it
-    # into api_content, because historical api_content is replayed on later turns.
-    # The provider projection is assembled in build_api_messages() instead.
+    # KISSNE-CTX-11A: recall/plugin/gateway string context is request-local and
+    # is assembled in build_api_messages(). Keep the generic api_content
+    # sidecar only for independently-produced API text (for example a voice
+    # prefix) that differs from the canonical persisted user text.
+    if (
+        not moa_active
+        and getattr(agent, "api_mode", None) != "codex_app_server"
+        and 0 <= current_turn_user_idx < len(messages)
+        and messages[current_turn_user_idx].get("role") == "user"
+    ):
+        _stamp_durable_user_api_content_sidecar(
+            agent,
+            messages,
+            current_turn_user_idx,
+            preflight_compressed=compaction.compressed,
+        )
 
     _persist_turn_start(agent, messages, conversation_history, pending_cli_message)
 
