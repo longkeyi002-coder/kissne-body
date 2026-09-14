@@ -79,7 +79,7 @@ def _read_text_with_timeout(path: Path, timeout: Optional[float] = None) -> Opti
 
 
 def _scan_context_content(content: str, filename: str) -> str:
-    """Scan a context file (AGENTS.md, .cursorrules, SOUL.md) for injection; matches are BLOCKED.
+    """Scan a context file (AGENTS.md, .cursorrules, SOUL.md, SELF.md) for injection; matches are BLOCKED.
 
     "context" scope only (strict-scope SSH-backdoor/persistence/exfil patterns are too aggressive for a
     cloned repo's docs); blocking, not warning, because the file would otherwise enter the prompt verbatim.
@@ -1499,6 +1499,34 @@ def _context_section(content: str, label: str, warn_name: str, path: Path, conte
     """Threat-scan *content*, render it as ``## <label>``, cap it to the budget (*warn_name* labels warnings)."""
     body = f"## {label}\n\n{_scan_context_content(content, label)}"
     return _truncate_content(body, warn_name, context_length=context_length, read_path=str(path))
+
+
+def _self_md_candidates(home: Path) -> "tuple[Path, ...]":
+    """SELF.md locations in priority order.
+
+    Root first — next to SOUL.md, which owns the same identity slot — then the
+    memories dir, for a profile that keeps SELF.md beside MEMORY.md/USER.md.
+    """
+    return (home / "SELF.md", home / "memories" / "SELF.md")
+
+
+def load_self_md(
+    context_length: Optional[int] = None,
+    home_override: "Path | None" = None,
+) -> Optional[str]:
+    """SELF.md from HERMES_HOME, rendered as Kissne's growing identity layer.
+
+    SELF is read only when a new Session Snapshot is built. Normal turns reuse
+    the cached system prompt and therefore cannot hot-reload this file.
+    """
+    home = Path(home_override) if home_override is not None else Path(get_hermes_home())
+    for self_path in _self_md_candidates(home):
+        content = _read_context_file(self_path)
+        if content:
+            return _context_section(
+                content, "SELF", "SELF.md", self_path, context_length
+            )
+    return None
 
 
 def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str:

@@ -401,6 +401,12 @@ class AIAgent(
         # The workspace snapshot is pinned per session (agent/system_prompt.py::_coding_parts); a
         # /new, /resume or /branch on the same agent must re-snapshot at its own session start.
         self._frozen_workspace_snapshot = None
+        # Kissne snapshot/history read state belongs to the old conversation.
+        # Keep the legacy cached-prompt reset logic authoritative, but never
+        # let the new layer adapter carry a prior session into the next one.
+        self._kissne_context_layers = None
+        self._kissne_context_last_read = None
+        self._kissne_snapshot_refresh_reason = "fresh_session"
 
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0

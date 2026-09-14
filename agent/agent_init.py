@@ -587,6 +587,10 @@ _SESSION_STATE: Dict[str, Any] = {
     # prefix, kept separately only to place an early cache marker.
     "_cached_system_prompt": None,
     "_cached_system_prompt_static": None,
+    # Kissne context substrate.  The legacy cached prompt remains the durable
+    # compatibility representation; these fields are request-layer state only.
+    "_kissne_context_layers": None,
+    "_kissne_snapshot_refresh_reason": "fresh_session",
     # ``(cwd, workspace_block)`` pinned on the first build: the git/workspace snapshot is
     # probed once per session and replayed on every rebuild, so a moving repo can't push the
     # prefix-cache divergence point ahead of the volatile band at a compaction boundary.

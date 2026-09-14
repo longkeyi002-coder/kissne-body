@@ -26,6 +26,7 @@ from agent.prompt_builder import (
 )
 from agent import prompt_builder as _pb
 from agent.runtime_cwd import resolve_context_cwd
+from agent.kissne_context import make_context_layers
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
 
@@ -602,19 +603,27 @@ def _join_tier(parts: List[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
+_PROMPT_TIER_KEYS = ("stable", "context", "volatile")
+
+
+def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
     ``volatile`` (skills index, memory, user profile, external memory block,
-    timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
+    timestamp line, runtime environment hints), plus the Kissne semantic slots
+    (``kissne_stable_core`` / ``kissne_self`` / ``kissne_memory``) that
+    :func:`build_system_prompt` turns into the layer adapter.  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
     Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
     # ── Stable tier ────────────────────────────────────────────────
-    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    stable_identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    # Hermes' whole stable cache tier is not Kissne Stable Core. Only the
+    # identity slot (SOUL or its fallback) owns that semantic role.
+    stable_parts = list(stable_identity_parts)
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
@@ -649,7 +658,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
     # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
-    volatile_parts: List[str] = [skills_prompt, *_memory_parts(agent)]
+    wants_identity_snapshot = agent.load_soul_identity or not agent.skip_context_files
+    self_snapshot = (
+        _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))
+        if wants_identity_snapshot else None
+    )
+    memory_snapshot_parts = _memory_parts(agent)
+    volatile_parts: List[str] = [skills_prompt, self_snapshot, *memory_snapshot_parts]
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))
@@ -660,25 +675,63 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
+    return {
+        "stable": _join_tier(stable_parts),
+        "context": _join_tier(context_parts),
+        "volatile": _join_tier(volatile_parts),
+        "kissne_stable_core": _join_tier(stable_identity_parts),
+        "kissne_self": self_snapshot or "",
+        "kissne_memory": _join_tier(memory_snapshot_parts),
+    }
+
+
+def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
+    """Public three-tier view of :func:`_assemble_prompt_parts`.
+
+    Kept to the stable/context/volatile contract on purpose: callers
+    (``hermes_cli.prompt_size``, ``agent.context_breakdown``, the
+    token-accounting evals, tests) treat the mapping as "the prompt", so the
+    Kissne slots must not travel through it.
+    """
+    parts = _assemble_prompt_parts(agent, system_message=system_message)
+    return {tier: parts[tier] for tier in _PROMPT_TIER_KEYS}
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
     """Assemble the full prompt; cached on ``agent._cached_system_prompt`` and
     only rebuilt after compression.  Tiers are ordered stable -> context ->
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
-    parts = build_system_prompt_parts(agent, system_message=system_message)
+    parts = _assemble_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
+    full_prompt = "\n\n".join(
+        part for part in (
+            parts["stable"], parts["context"], parts["volatile"]
+        ) if part
+    )
+    agent._kissne_context_layers = make_context_layers(
+        stable_core=parts["kissne_stable_core"],
+        self_state=parts["kissne_self"],
+        memory_state=parts["kissne_memory"],
+        runtime_system_prompt=full_prompt,
+        snapshot_origin=getattr(
+            agent, "_kissne_snapshot_refresh_reason", "fresh_session"
+        ),
+    )
+    agent._kissne_snapshot_refresh_reason = "cached"
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_status(warning)
-    return "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
+    return full_prompt
 
 
-def invalidate_system_prompt(agent: Any) -> None:
+def invalidate_system_prompt(agent: Any, reason: Optional[str] = None) -> None:
     """Force a rebuild on the next turn (after compression): reload memory from
     disk and clear the frozen plugin snapshot (previous bytes stashed as the
     fail-open fallback) so plugins re-render at the same boundary.
+
+    ``reason`` is the Kissne snapshot-origin label for the rebuild that follows
+    (``"compression"``, ``"model_switch"``, ...). Callers that pass nothing get
+    ``"invalidated"`` rather than a wrong guess.
 
     Called after context compression events. Also reloads memory from disk so the rebuilt prompt captures
     any writes from this session, and clears the frozen plugin-section snapshot so plugins re-render at the
@@ -689,6 +742,11 @@ def invalidate_system_prompt(agent: Any) -> None:
     """
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
+    agent._kissne_context_layers = None
+    # Truthful origin label for the rebuild that follows: this function also
+    # serves the model-switch / session-reset paths, so "compression" is not safe
+    # to assume here.
+    agent._kissne_snapshot_refresh_reason = reason or "invalidated"
     if hasattr(agent, "_plugin_system_prompt_sections_snapshot"):
         agent._plugin_system_prompt_sections_previous = agent._plugin_system_prompt_sections_snapshot
         del agent._plugin_system_prompt_sections_snapshot
