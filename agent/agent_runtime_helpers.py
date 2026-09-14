@@ -2194,6 +2194,7 @@ def switch_model(
     agent._cached_system_prompt = None
     agent._kissne_context_layers = None
     agent._kissne_context_last_read = None
+    agent._kissne_snapshot_refresh_reason = "model_switch"
     # Publish the destination capability map only after every runtime setup above has succeeded.
     # Failed switches must leave the old map intact.
     agent.runtime_capabilities = destination_capabilities

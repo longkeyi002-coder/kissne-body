@@ -406,6 +406,7 @@ class AIAgent(
         # let the new layer adapter carry a prior session into the next one.
         self._kissne_context_layers = None
         self._kissne_context_last_read = None
+        self._kissne_snapshot_refresh_reason = "fresh_session"
 
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0

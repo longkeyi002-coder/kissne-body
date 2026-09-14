@@ -615,7 +615,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
     # ── Stable tier ────────────────────────────────────────────────
-    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    stable_identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
+    # Hermes' whole stable cache tier is not Kissne Stable Core. Only the
+    # identity slot (SOUL or its fallback) owns that semantic role.
+    stable_parts = list(stable_identity_parts)
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
@@ -650,7 +653,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
     # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
-    volatile_parts: List[str] = [skills_prompt, *_memory_parts(agent)]
+    wants_identity_snapshot = agent.load_soul_identity or not agent.skip_context_files
+    self_snapshot = (
+        _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))
+        if wants_identity_snapshot else None
+    )
+    memory_snapshot_parts = _memory_parts(agent)
+    volatile_parts: List[str] = [skills_prompt, self_snapshot, *memory_snapshot_parts]
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))
@@ -661,7 +670,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
+    return {
+        "stable": _join_tier(stable_parts),
+        "context": _join_tier(context_parts),
+        "volatile": _join_tier(volatile_parts),
+        "kissne_stable_core": _join_tier(stable_identity_parts),
+        "kissne_self": self_snapshot or "",
+        "kissne_memory": _join_tier(memory_snapshot_parts),
+    }
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
@@ -670,17 +686,25 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
-    # Keep the logical context layers alongside the legacy cached string.  The
-    # legacy value remains the persisted/source-compatible representation; the
-    # layer object is the new read boundary used by request assembly.
-    agent._kissne_context_layers = make_context_layers(
-        stable_core=parts["stable"],
-        snapshot=_join_tier([parts["context"], parts["volatile"]]),
+    full_prompt = "\n\n".join(
+        part for part in (
+            parts["stable"], parts["context"], parts["volatile"]
+        ) if part
     )
+    agent._kissne_context_layers = make_context_layers(
+        stable_core=parts["kissne_stable_core"],
+        self_state=parts["kissne_self"],
+        memory_state=parts["kissne_memory"],
+        runtime_system_prompt=full_prompt,
+        snapshot_origin=getattr(
+            agent, "_kissne_snapshot_refresh_reason", "fresh_session"
+        ),
+    )
+    agent._kissne_snapshot_refresh_reason = "cached"
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_status(warning)
-    return "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
+    return full_prompt
 
 
 def invalidate_system_prompt(agent: Any) -> None:
@@ -698,6 +722,7 @@ def invalidate_system_prompt(agent: Any) -> None:
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
     agent._kissne_context_layers = None
+    agent._kissne_snapshot_refresh_reason = "compression"
     if hasattr(agent, "_plugin_system_prompt_sections_snapshot"):
         agent._plugin_system_prompt_sections_previous = agent._plugin_system_prompt_sections_snapshot
         del agent._plugin_system_prompt_sections_snapshot

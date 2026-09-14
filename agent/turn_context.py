@@ -24,7 +24,7 @@ from agent.memory_provider import is_trivial_prompt
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_request_tokens_rough
 from agent.image_token_cost import bind_image_token_cost
-from agent.kissne_context import ContextReadPolicy, make_context_layers
+from agent.kissne_context import build_live_delta, make_context_layers
 from agent.usage_anchor import anchored_context_tokens, restore_usage_anchor
 from agent.turn_author import parse_turn_author
 
@@ -1057,6 +1057,12 @@ def build_api_messages(
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
     current_turn_message = messages[current_turn_user_idx] if has_current else None
+    # Evaluate on every build_api_messages call, including retries and tool-loop
+    # follow-ups. This is request-local and never written to api_content/history.
+    _call_live_delta = build_live_delta(
+        earth_state=getattr(agent, "_kissne_earth_state", ""),
+        ai_world_state=getattr(agent, "_kissne_ai_world_state", ""),
+    )
 
     # Replay consumers canonicalize the persisted prefix on read; the request copy must
     # carry the same bytes or a resume diverges mid-prefix. Only the rows BEFORE this
@@ -1098,6 +1104,13 @@ def build_api_messages(
                 )
                 if _composed is not None:
                     api_msg["content"] = _composed
+            # api_content is the frozen per-turn sidecar. Live Delta is layered
+            # on the wire copy afterwards so exact time is refreshed per API call.
+            _with_live_delta = compose_user_api_content(
+                api_msg.get("content", ""), "", _call_live_delta.render()
+            )
+            if _with_live_delta is not None:
+                api_msg["content"] = _with_live_delta
         elif (
             isinstance(_api_content, str) and _api_content
             and msg.get("role") in ("user", "assistant")
@@ -1132,50 +1145,30 @@ def build_api_messages(
         # continuity.
         api_messages.append(api_msg)
 
-    # Final system message = cached prompt + ephemeral additions (API-time only).
-    # Plugin/recall context goes into the user message, never the system prompt: the
-    # prompt is built ONCE per session and replayed verbatim (stable cache prefix).
-    # First-layer Kissne read boundary. The legacy path above still owns all
-    # provider-specific sanitization and sidecar replay. This projection is
-    # request-local: filtering can never rewrite persisted conversation history.
+    # Kissne semantic read view. The source list is Unified History: facts
+    # that actually happened. Recall and Live Delta remain separate request-only
+    # inputs. Read-time filtering is intentionally delegated to Hermes'
+    # ContextEngine.select_context(), the existing per-provider-request hook.
     _layers = getattr(agent, "_kissne_context_layers", None)
     if _layers is None:
-        # Resumed/older agents may only have the persisted full prompt. Treat
-        # it as the stable core until the next normal prompt build.
-        _layers = make_context_layers(stable_core=active_system_prompt or "")
-    _policy = getattr(agent, "_kissne_context_read_policy", None)
-    if not isinstance(_policy, ContextReadPolicy):
-        _policy = ContextReadPolicy()
-    _live_delta = "\n\n".join(
-        part for part in (
-            build_memory_context_block(ext_prefetch_cache) if ext_prefetch_cache else "",
-            plugin_user_context,
-        ) if part
-    )
+        # Resume preserves the persisted cached prompt. Do not silently reread
+        # SELF/MEMORY and invent a different snapshot for an existing session.
+        _layers = make_context_layers(
+            runtime_system_prompt=active_system_prompt or "",
+            snapshot_origin="resume_persisted_prompt",
+        )
     _context_read = _layers.read(
-        policy=_policy,
-        current_turn_user_index=(
-            current_turn_user_idx if isinstance(current_turn_user_idx, int) else None
-        ),
-        history=api_messages,
-        live_delta=_live_delta,
+        unified_history=api_messages,
+        turn_recall=ext_prefetch_cache or "",
+        live_delta=_call_live_delta,
     )
-    api_messages = list(_context_read.history)
-    # Keep this last read visible for diagnostics/tests without making it part
-    # of the persisted transcript or provider payload.
+    api_messages = list(_context_read.unified_history)
     with suppress(Exception):
         agent._kissne_context_last_read = _context_read
 
-    # The persisted legacy prompt remains authoritative when the policy does
-    # not deliberately remove a system-side layer. This protects resumed
-    # sessions whose stored prompt predates the substrate (or whose layer
-    # snapshot could not be reconstructed). A policy that explicitly filters
-    # the stable core/snapshot is allowed to use the new projection.
-    _system_filtered = not (_policy.include_stable_core and _policy.include_snapshot)
-    effective_system = (
-        _context_read.system_prompt if _system_filtered or not active_system_prompt
-        else active_system_prompt
-    )
+    # The full Hermes prompt remains authoritative during this migration; its
+    # cache tiers contain runtime guidance beyond SOUL/SELF/MEMORY semantics.
+    effective_system = active_system_prompt or _context_read.system_prompt
     if agent.ephemeral_system_prompt:
         effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
     if effective_system:

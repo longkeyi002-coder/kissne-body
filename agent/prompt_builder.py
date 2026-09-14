@@ -79,7 +79,7 @@ def _read_text_with_timeout(path: Path, timeout: Optional[float] = None) -> Opti
 
 
 def _scan_context_content(content: str, filename: str) -> str:
-    """Scan a context file (AGENTS.md, .cursorrules, SOUL.md) for injection; matches are BLOCKED.
+    """Scan a context file (AGENTS.md, .cursorrules, SOUL.md, SELF.md) for injection; matches are BLOCKED.
 
     "context" scope only (strict-scope SSH-backdoor/persistence/exfil patterns are too aggressive for a
     cloned repo's docs); blocking, not warning, because the file would otherwise enter the prompt verbatim.
@@ -1499,6 +1499,26 @@ def _context_section(content: str, label: str, warn_name: str, path: Path, conte
     """Threat-scan *content*, render it as ``## <label>``, cap it to the budget (*warn_name* labels warnings)."""
     body = f"## {label}\n\n{_scan_context_content(content, label)}"
     return _truncate_content(body, warn_name, context_length=context_length, read_path=str(path))
+
+
+def load_self_md(
+    context_length: Optional[int] = None,
+    home_override: "Path | None" = None,
+) -> Optional[str]:
+    """SELF.md from HERMES_HOME, rendered as Kissne's growing identity layer.
+
+    SELF is read only when a new Session Snapshot is built. Normal turns reuse
+    the cached system prompt and therefore cannot hot-reload this file.
+    """
+    self_path = (
+        Path(home_override) if home_override is not None else get_hermes_home()
+    ) / "SELF.md"
+    content = _read_context_file(self_path)
+    if not content:
+        return None
+    return _context_section(
+        content, "SELF", "SELF.md", self_path, context_length
+    )
 
 
 def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str:

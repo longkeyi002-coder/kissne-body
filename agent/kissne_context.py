@@ -1,183 +1,233 @@
-"""Kissne's first context substrate for Hermes.
+"""Kissne semantic context boundary on top of Hermes.
 
-The substrate separates the inputs to a model request without changing the
-existing persistence format:
+Hermes cache tiers are an implementation detail. They are deliberately kept
+separate from Kissne semantics:
 
-``stable_core``
-    The byte-stable identity/instruction prefix.  It is rebuilt only at the
-    same boundaries as Hermes' cached system prompt.
-``snapshot``
-    Session-start (or post-compaction) context that is read-only during a
-    turn.  The first integration stores Hermes' existing non-stable prompt
-    tier here; later layers can replace its producer without changing the
-    request seam.
-``history``
-    The persisted conversation projected for this request.  Read-time
-    filtering returns a new list and never mutates SessionDB state.
-``live_delta``
-    Per-request material such as memory recall and gateway/plugin context.
-    It is deliberately not added to the cached system prompt.
+SOUL -> stable_core
+SELF + memory -> session_snapshot
+persisted transcript -> unified_history
+per-turn memory lookup -> turn_recall
+per-provider-call state -> live_delta
 
-This module is intentionally small.  It is an adapter boundary, not a second
-memory store or a second transcript database.
+Unified History is the truth of what happened. Turn Recall and Live Delta are
+request-local inputs and must never be written back as conversation history.
+Hermes ContextEngine.select_context remains the single read-time filtering
+extension point; this module does not create a second filtering pipeline or
+memory store.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from typing import Any, Iterable, Mapping, Optional
 
 
 def _join_prompt_parts(*parts: str) -> str:
-    """Join prompt parts using Hermes' existing blank-line convention."""
-    return "\n\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+    return "\n\n".join(
+        part.strip() for part in parts
+        if isinstance(part, str) and part.strip()
+    )
 
 
-def _role(message: Any) -> str:
-    return message.get("role", "") if isinstance(message, Mapping) else ""
+def _now() -> datetime:
+    from hermes_time import now as hermes_now
+    return hermes_now()
+
+
+def _timezone_for(moment: datetime):
+    from hermes_time import get_timezone
+    if moment.tzinfo is not None:
+        return moment.tzinfo
+    return get_timezone()
+
+
+def _iso_seconds(moment: datetime) -> str:
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_timezone_for(moment))
+    return moment.isoformat(timespec="seconds")
+
+
+def _zone_label(moment: datetime) -> str:
+    tz = _timezone_for(moment)
+    name = getattr(tz, "key", None) or moment.tzname() or "local"
+    offset = moment.strftime("%z")
+    if offset:
+        offset = f"UTC{offset[:3]}:{offset[3:]}"
+        return f"{name}, {offset}" if name != offset else offset
+    return name
 
 
 @dataclass(frozen=True)
-class ContextReadPolicy:
-    """Read-time policy for a request-local history projection.
+class SessionSnapshot:
+    """SELF and memory frozen at one explicit session lifecycle boundary."""
 
-    The default is deliberately identity-like.  ``history_limit`` is an
-    opt-in escape hatch for a future router/retriever; it counts messages from
-    the history *before* the current turn and always preserves the current
-    turn.  Trimming starts on a user boundary so assistant/tool pairs are not
-    split.  A request that cannot be trimmed safely is returned unchanged.
-    """
+    self_state: str = ""
+    memory_state: str = ""
+    captured_at: str = ""
+    origin: str = "fresh_session"
 
-    include_stable_core: bool = True
-    include_snapshot: bool = True
-    history_limit: Optional[int] = None
+    def render(self) -> str:
+        return _join_prompt_parts(self.self_state, self.memory_state)
 
-    def select_history(
-        self,
-        history: Sequence[Mapping[str, Any]],
-        *,
-        current_turn_user_index: Optional[int] = None,
-    ) -> list[Mapping[str, Any]]:
-        """Return a request-only history projection without mutating *history*."""
-        source = list(history)
-        if not source or self.history_limit is None:
-            return source
-        if not isinstance(self.history_limit, int) or isinstance(self.history_limit, bool):
-            return source
-        if self.history_limit < 0:
-            return source
 
-        current = current_turn_user_index
-        if not isinstance(current, int) or current < 0 or current > len(source):
-            current = len(source)
+@dataclass(frozen=True)
+class LiveDelta:
+    """Structured state evaluated for exactly one provider request."""
 
-        before_current = source[:current]
-        current_turn = source[current:]
-        if len(before_current) <= self.history_limit:
-            return source
+    exact_earth_time: str
+    timezone: str
+    source: str = "hermes_time"
+    earth_state: str = ""
+    ai_world_state: str = ""
 
-        cut = len(before_current) - self.history_limit
-        # A transcript can begin with a user row, but a provider/tool repair or
-        # a custom caller may hand us an incomplete prefix.  Move the cut back
-        # to a user boundary; if no safe boundary exists, fail open.
-        while cut < len(before_current) and _role(before_current[cut]) != "user":
-            cut += 1
-        if cut >= len(before_current):
-            return source
+    def render(self) -> str:
+        lines = [
+            "<kissne_live_delta>",
+            f"Exact Earth time: {self.exact_earth_time}",
+            f"Timezone: {self.timezone}",
+            f"Clock source: {self.source}",
+        ]
+        if self.earth_state.strip():
+            lines.extend(["Earth state:", self.earth_state.strip()])
+        if self.ai_world_state.strip():
+            lines.extend(["AI World state:", self.ai_world_state.strip()])
+        lines.append("</kissne_live_delta>")
+        return "\n".join(lines)
 
-        selected = before_current[cut:] + current_turn
-        if not selected or _role(selected[0]) not in {"user", "system"}:
-            return source
-        return selected
+
+def build_live_delta(
+    *,
+    moment: Optional[datetime] = None,
+    source: str = "hermes_time",
+    earth_state: str = "",
+    ai_world_state: str = "",
+) -> LiveDelta:
+    """Evaluate exact time and optional world state at API-call time."""
+    current = moment or _now()
+    return LiveDelta(
+        exact_earth_time=_iso_seconds(current),
+        timezone=_zone_label(current),
+        source=str(source or "hermes_time"),
+        earth_state=str(earth_state or ""),
+        ai_world_state=str(ai_world_state or ""),
+    )
 
 
 @dataclass(frozen=True)
 class ContextLayers:
-    """The five logical inputs used to construct one model request."""
+    """Semantic inputs for one request plus Hermes' compatibility prompt."""
 
     stable_core: str = ""
-    snapshot: str = ""
-    history: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
-    live_delta: str = ""
+    session_snapshot: SessionSnapshot = field(default_factory=SessionSnapshot)
+    unified_history: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    turn_recall: str = ""
+    live_delta: Optional[LiveDelta] = None
+    runtime_system_prompt: str = ""
 
-    def system_prompt(self, policy: Optional[ContextReadPolicy] = None) -> str:
-        """Render only the cached system-side layers.
+    @property
+    def snapshot(self) -> str:
+        return self.session_snapshot.render()
 
-        ``live_delta`` is intentionally excluded.  Callers inject it through
-        the existing API-time user-message sidecar path so the system prefix
-        stays byte-stable.
-        """
-        policy = policy or ContextReadPolicy()
-        return _join_prompt_parts(
-            self.stable_core if policy.include_stable_core else "",
-            self.snapshot if policy.include_snapshot else "",
+    @property
+    def history(self) -> tuple[Mapping[str, Any], ...]:
+        return self.unified_history
+
+    def system_prompt(self) -> str:
+        # During migration the complete Hermes prompt remains authoritative.
+        # Semantic layers are observability/lifecycle boundaries, not a license
+        # to drop Hermes guidance from the provider request.
+        return self.runtime_system_prompt or _join_prompt_parts(
+            self.stable_core, self.session_snapshot.render()
         )
 
     def read(
         self,
         *,
-        policy: Optional[ContextReadPolicy] = None,
-        current_turn_user_index: Optional[int] = None,
-        history: Optional[Iterable[Mapping[str, Any]]] = None,
-        live_delta: Optional[str] = None,
+        unified_history: Optional[Iterable[Mapping[str, Any]]] = None,
+        turn_recall: Optional[str] = None,
+        live_delta: Optional[LiveDelta] = None,
     ) -> "ContextRead":
-        """Create a request-local read view.
-
-        The returned history is a new list.  Neither the supplied history nor
-        the layer object is changed, which makes this safe at retry and
-        provider-fallback boundaries.
-        """
-        policy = policy or ContextReadPolicy()
-        source = tuple(history) if history is not None else self.history
-        selected = policy.select_history(
-            source, current_turn_user_index=current_turn_user_index
+        """Create a request-only view without mutating canonical history."""
+        source = (
+            tuple(unified_history)
+            if unified_history is not None
+            else self.unified_history
         )
         return ContextRead(
             stable_core=self.stable_core,
-            snapshot=self.snapshot,
-            history=tuple(selected),
-            live_delta=self.live_delta if live_delta is None else str(live_delta or ""),
-            policy=policy,
+            session_snapshot=self.session_snapshot,
+            unified_history=tuple(source),
+            turn_recall=(
+                self.turn_recall
+                if turn_recall is None
+                else str(turn_recall or "")
+            ),
+            live_delta=self.live_delta if live_delta is None else live_delta,
+            runtime_system_prompt=self.runtime_system_prompt,
         )
 
 
 @dataclass(frozen=True)
 class ContextRead:
-    """Immutable request-local view produced by :meth:`ContextLayers.read`."""
+    """Immutable request-local context view."""
 
     stable_core: str
-    snapshot: str
-    history: tuple[Mapping[str, Any], ...]
-    live_delta: str
-    policy: ContextReadPolicy
+    session_snapshot: SessionSnapshot
+    unified_history: tuple[Mapping[str, Any], ...]
+    turn_recall: str
+    live_delta: Optional[LiveDelta]
+    runtime_system_prompt: str
+
+    @property
+    def history(self) -> tuple[Mapping[str, Any], ...]:
+        return self.unified_history
 
     @property
     def system_prompt(self) -> str:
-        return _join_prompt_parts(
-            self.stable_core if self.policy.include_stable_core else "",
-            self.snapshot if self.policy.include_snapshot else "",
+        return self.runtime_system_prompt or _join_prompt_parts(
+            self.stable_core, self.session_snapshot.render()
         )
+
+    def with_request_history(
+        self, messages: Iterable[Mapping[str, Any]]
+    ) -> "ContextRead":
+        """Return a diagnostic view after ContextEngine read-time selection."""
+        return replace(self, unified_history=tuple(messages))
 
 
 def make_context_layers(
     *,
     stable_core: str = "",
-    snapshot: str = "",
-    history: Iterable[Mapping[str, Any]] = (),
-    live_delta: str = "",
+    self_state: str = "",
+    memory_state: str = "",
+    unified_history: Iterable[Mapping[str, Any]] = (),
+    runtime_system_prompt: str = "",
+    snapshot_origin: str = "fresh_session",
+    snapshot_captured_at: Optional[str] = None,
 ) -> ContextLayers:
-    """Normalize boundary inputs into an immutable layer object."""
+    """Create immutable semantic layers at a snapshot boundary."""
+    captured_at = snapshot_captured_at
+    if captured_at is None:
+        captured_at = _iso_seconds(_now())
     return ContextLayers(
         stable_core=str(stable_core or ""),
-        snapshot=str(snapshot or ""),
-        history=tuple(history or ()),
-        live_delta=str(live_delta or ""),
+        session_snapshot=SessionSnapshot(
+            self_state=str(self_state or ""),
+            memory_state=str(memory_state or ""),
+            captured_at=str(captured_at or ""),
+            origin=str(snapshot_origin or "fresh_session"),
+        ),
+        unified_history=tuple(unified_history or ()),
+        runtime_system_prompt=str(runtime_system_prompt or ""),
     )
 
 
 __all__ = [
     "ContextLayers",
     "ContextRead",
-    "ContextReadPolicy",
+    "LiveDelta",
+    "SessionSnapshot",
+    "build_live_delta",
     "make_context_layers",
 ]

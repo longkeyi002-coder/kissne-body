@@ -24,7 +24,6 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 
 from agent.context_compressor import ContextCompressor
 from agent.agent_runtime_helpers import _ra
-from agent.kissne_context import ContextReadPolicy
 from agent.iteration_budget import IterationBudget, normalize_budget_warning_ratio
 from agent.memory_manager import StreamingContextScrubber
 from agent.session_activity import ActivityProvenance
@@ -591,7 +590,7 @@ _SESSION_STATE: Dict[str, Any] = {
     # Kissne context substrate.  The legacy cached prompt remains the durable
     # compatibility representation; these fields are request-layer state only.
     "_kissne_context_layers": None,
-    "_kissne_context_read_policy": ContextReadPolicy,
+    "_kissne_snapshot_refresh_reason": "fresh_session",
     # ``(cwd, workspace_block)`` pinned on the first build: the git/workspace snapshot is
     # probed once per session and replayed on every rebuild, so a moving repo can't push the
     # prefix-cache divergence point ahead of the volatile band at a compaction boundary.
