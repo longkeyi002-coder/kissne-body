@@ -619,8 +619,8 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
-    ``volatile`` (skills index, memory, user profile, external memory block,
-    timestamp line, runtime environment hints), plus the Kissne semantic slots
+    ``volatile`` (SELF snapshot, memory snapshot, skills index, plugin sections,
+    session timestamp, runtime environment hints), plus the Kissne semantic slots
     (``kissne_stable_core`` / ``kissne_self`` / ``kissne_memory``) that
     :func:`build_system_prompt` turns into the layer adapter.  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
@@ -665,8 +665,8 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
         # worktree snapshot whose later position would improve their prefix.
         stable_parts.extend([*coding_trailing_parts, *post_workspace_parts])
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
-    # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
-    # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
+    # KISSNE-CTX-14 fixes the volatile head as SELF -> MEMORY -> Skills Index.
+    # These are frozen together for the Session Snapshot lifecycle.
     wants_identity_snapshot = agent.load_soul_identity or not agent.skip_context_files
     self_snapshot = (
         _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))

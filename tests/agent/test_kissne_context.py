@@ -1,6 +1,8 @@
 """Contract tests for the first Kissne context-substrate seam."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from agent.kissne_context import (
     KISSNE_LIVE_CONTEXT_CLOSE,
@@ -11,8 +13,10 @@ from agent.kissne_context import (
     make_context_layers,
 )
 from agent.prompt_builder import load_self_md
-from agent.system_prompt import _kissne_volatile_head
+from agent.system_prompt import _assemble_prompt_parts, _kissne_volatile_head
 from agent.turn_context import build_api_messages
+from hermes_cli.config import _ensure_default_self_md
+from hermes_cli.default_self import DEFAULT_SELF_MD
 
 
 def test_semantic_layers_keep_runtime_cache_tiers_separate():
@@ -62,6 +66,24 @@ def test_self_md_uses_the_canonical_home_root(tmp_path):
     assert "more patient" in rendered
 
 
+def test_missing_self_md_is_created_at_the_canonical_home_root(tmp_path):
+    _ensure_default_self_md(tmp_path)
+
+    self_path = tmp_path / "SELF.md"
+    assert self_path.is_file()
+    assert self_path.read_text(encoding="utf-8") == DEFAULT_SELF_MD
+    assert not (tmp_path / "memories" / "SELF.md").exists()
+
+
+def test_existing_self_md_is_never_overwritten(tmp_path):
+    self_path = tmp_path / "SELF.md"
+    self_path.write_text("my established current self", encoding="utf-8")
+
+    _ensure_default_self_md(tmp_path)
+
+    assert self_path.read_text(encoding="utf-8") == "my established current self"
+
+
 def test_self_md_rejects_the_old_memories_location(tmp_path):
     memories = tmp_path / "memories"
     memories.mkdir()
@@ -81,6 +103,39 @@ def test_volatile_snapshot_order_and_reverse_order_guard():
 
     assert ordered == ["SELF SNAPSHOT", "MEMORY SNAPSHOT", "SKILLS INDEX"]
     assert ordered != ["SKILLS INDEX", "SELF SNAPSHOT", "MEMORY SNAPSHOT"]
+
+
+def test_assembled_volatile_prompt_uses_ctx_14_physical_order():
+    agent = SimpleNamespace(
+        context_compressor=None,
+        valid_tool_names=set(),
+        load_soul_identity=True,
+        skip_context_files=False,
+    )
+    with (
+        patch("agent.system_prompt._identity_parts", return_value=(["SOUL"], True)),
+        patch("agent.system_prompt._guidance_parts", return_value=[]),
+        patch("agent.system_prompt._skills_prompt", return_value="SKILLS INDEX"),
+        patch("agent.system_prompt._alibaba_identity_part", return_value=[]),
+        patch("agent.system_prompt._coding_parts", return_value=([], [], [])),
+        patch("agent.system_prompt._post_workspace_parts", return_value=[]),
+        patch("agent.system_prompt._context_files_part", return_value=[]),
+        patch("agent.system_prompt._agent_home", return_value=None),
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompt_builder.load_self_md", return_value="SELF SNAPSHOT"),
+        patch("agent.system_prompt._memory_parts", return_value=["MEMORY SNAPSHOT"]),
+        patch("agent.system_prompt._frozen_plugin_prompt_sections", return_value={}),
+        patch("agent.system_prompt._plugin_section_blocks", return_value=[]),
+        patch("agent.system_prompt._timestamp_line", return_value="SESSION INFO"),
+    ):
+        volatile = _assemble_prompt_parts(agent)["volatile"]
+
+    expected = ["SELF SNAPSHOT", "MEMORY SNAPSHOT", "SKILLS INDEX", "SESSION INFO"]
+    assert [volatile.index(item) for item in expected] == sorted(
+        volatile.index(item) for item in expected
+    )
+    # Reverse-direction guard against the previous Skills-first assembly.
+    assert volatile.index("SKILLS INDEX") > volatile.index("MEMORY SNAPSHOT")
 
 
 class _WireAgent:

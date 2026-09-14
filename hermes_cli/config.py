@@ -26,6 +26,7 @@ import yaml
 from hermes_cli.cli_output import line_input
 from hermes_cli.colors import Colors, color
 from hermes_cli import managed_scope
+from hermes_cli.default_self import DEFAULT_SELF_MD
 from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 from hermes_cli.secret_prompt import masked_secret_prompt
 # Re-export from hermes_constants — canonical definition lives there.
@@ -621,6 +622,15 @@ def _ensure_default_soul_md(home: Path) -> None:
             return
     soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
     _secure_file(soul_path)
+
+
+def _ensure_default_self_md(home: Path) -> None:
+    """Seed the canonical SELF.md on first run without overwriting user state."""
+    self_path = home / "SELF.md"
+    if self_path.exists():
+        return
+    self_path.write_text(DEFAULT_SELF_MD, encoding="utf-8")
+    _secure_file(self_path)
 
 
 # Home paths whose directory skeleton was created this process. Only successful passes are
