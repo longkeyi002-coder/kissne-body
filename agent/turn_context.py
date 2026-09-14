@@ -24,7 +24,9 @@ from agent.memory_provider import is_trivial_prompt
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_request_tokens_rough
 from agent.image_token_cost import bind_image_token_cost
-from agent.kissne_context import build_live_delta, make_context_layers
+from agent.kissne_context import (
+    build_live_delta, compose_current_user_turn, make_context_layers,
+)
 from agent.usage_anchor import anchored_context_tokens, restore_usage_anchor
 from agent.turn_author import parse_turn_author
 
@@ -990,17 +992,9 @@ def build_turn_context(
     _bind_interrupt_scope(agent, ra)
     ext_prefetch_cache = _memory_turn_start_and_prefetch(agent, original_user_message, turn_author)
 
-    # Sidecar skipped for codex_app_server/MoA.
-    if (
-        not moa_active
-        and getattr(agent, "api_mode", None) != "codex_app_server"
-        and 0 <= current_turn_user_idx < len(messages)
-        and messages[current_turn_user_idx].get("role") == "user"
-    ):
-        _stamp_api_content_sidecar(
-            agent, messages, current_turn_user_idx, ext_prefetch_cache,
-            plugin_user_context, preflight_compressed=compaction.compressed,
-        )
+    # KISSNE-CTX-11A: recall/plugin context is request-local. Do not stamp it
+    # into api_content, because historical api_content is replayed on later turns.
+    # The provider projection is assembled in build_api_messages() instead.
 
     _persist_turn_start(agent, messages, conversation_history, pending_cli_message)
 
@@ -1090,28 +1084,25 @@ def build_api_messages(
         for key in ("display_kind", "display_metadata", "_row_id"):
             api_msg.pop(key, None)
 
-        # Inject ephemeral context (memory prefetch + pre_llm_call user hooks)
-        # at API time only; `messages` is untouched beyond the api_content stamp.
+        # KISSNE-CTX-06/11A: build a request-only current-user view.
+        # Live Delta, Turn Recall and runtime context precede the exact user text
+        # and are never copied back to messages or api_content.
         if msg is current_turn_message and msg.get("role") == "user":
             if isinstance(_api_content, str) and _api_content:
-                # Reuse the prologue's stamp so sidecar and wire cannot drift.
-                # The Live Delta suffix appended below is the one request-local
-                # exception to "every pass this turn sends identical bytes".
+                # Preserve an independently-produced provider/sanitization
+                # sidecar, but do not create one for Kissne ephemeral context.
                 api_msg["content"] = _api_content
-            else:
-                # Callers that bypass the prologue stamping: compose live.
-                _composed = compose_user_api_content(
-                    api_msg.get("content", ""), ext_prefetch_cache, plugin_user_context
-                )
-                if _composed is not None:
-                    api_msg["content"] = _composed
-            # api_content is the frozen per-turn sidecar. Live Delta is layered
-            # on the wire copy afterwards so exact time is refreshed per API call.
-            _with_live_delta = compose_user_api_content(
-                api_msg.get("content", ""), "", _call_live_delta.render()
+            _request_content = compose_current_user_turn(
+                api_msg.get("content", ""),
+                live_delta=_call_live_delta,
+                turn_recall=(
+                    build_memory_context_block(ext_prefetch_cache)
+                    if ext_prefetch_cache else ""
+                ),
+                runtime_context=plugin_user_context or "",
             )
-            if _with_live_delta is not None:
-                api_msg["content"] = _with_live_delta
+            if _request_content is not None:
+                api_msg["content"] = _request_content
         elif (
             isinstance(_api_content, str) and _api_content
             and msg.get("role") in ("user", "assistant")

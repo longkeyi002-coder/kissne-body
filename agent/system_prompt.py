@@ -606,6 +606,15 @@ def _join_tier(parts: List[Optional[str]]) -> str:
 _PROMPT_TIER_KEYS = ("stable", "context", "volatile")
 
 
+def _kissne_volatile_head(
+    self_snapshot: Optional[str],
+    memory_snapshot_parts: List[str],
+    skills_prompt: str,
+) -> List[Optional[str]]:
+    """KISSNE-CTX-14 order: SELF -> MEMORY -> Skills Index."""
+    return [self_snapshot, *memory_snapshot_parts, skills_prompt]
+
+
 def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
@@ -664,7 +673,9 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
         if wants_identity_snapshot else None
     )
     memory_snapshot_parts = _memory_parts(agent)
-    volatile_parts: List[str] = [skills_prompt, self_snapshot, *memory_snapshot_parts]
+    volatile_parts: List[Optional[str]] = _kissne_volatile_head(
+        self_snapshot, memory_snapshot_parts, skills_prompt
+    )
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))
