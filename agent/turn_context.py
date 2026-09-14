@@ -1157,6 +1157,10 @@ def build_api_messages(
             runtime_system_prompt=active_system_prompt or "",
             snapshot_origin="resume_persisted_prompt",
         )
+        # Freeze the reconstructed semantic marker for the resumed session too.
+        # It contains no reread SELF/MEMORY bytes, only the persisted prompt.
+        with suppress(Exception):
+            agent._kissne_context_layers = _layers
     _context_read = _layers.read(
         # Canonical messages are the Unified History truth. api_messages is
         # already a request projection with sidecars and must never be relabeled
