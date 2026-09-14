@@ -26,6 +26,7 @@ from agent.prompt_builder import (
 )
 from agent import prompt_builder as _pb
 from agent.runtime_cwd import resolve_context_cwd
+from agent.kissne_context import make_context_layers
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
 
@@ -669,6 +670,13 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
     parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
+    # Keep the logical context layers alongside the legacy cached string.  The
+    # legacy value remains the persisted/source-compatible representation; the
+    # layer object is the new read boundary used by request assembly.
+    agent._kissne_context_layers = make_context_layers(
+        stable_core=parts["stable"],
+        snapshot=_join_tier([parts["context"], parts["volatile"]]),
+    )
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_status(warning)
@@ -689,6 +697,7 @@ def invalidate_system_prompt(agent: Any) -> None:
     """
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
+    agent._kissne_context_layers = None
     if hasattr(agent, "_plugin_system_prompt_sections_snapshot"):
         agent._plugin_system_prompt_sections_previous = agent._plugin_system_prompt_sections_snapshot
         del agent._plugin_system_prompt_sections_snapshot

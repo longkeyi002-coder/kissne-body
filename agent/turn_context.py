@@ -24,6 +24,7 @@ from agent.memory_provider import is_trivial_prompt
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_request_tokens_rough
 from agent.image_token_cost import bind_image_token_cost
+from agent.kissne_context import ContextReadPolicy, make_context_layers
 from agent.usage_anchor import anchored_context_tokens, restore_usage_anchor
 from agent.turn_author import parse_turn_author
 
@@ -1134,7 +1135,47 @@ def build_api_messages(
     # Final system message = cached prompt + ephemeral additions (API-time only).
     # Plugin/recall context goes into the user message, never the system prompt: the
     # prompt is built ONCE per session and replayed verbatim (stable cache prefix).
-    effective_system = active_system_prompt or ""
+    # First-layer Kissne read boundary. The legacy path above still owns all
+    # provider-specific sanitization and sidecar replay. This projection is
+    # request-local: filtering can never rewrite persisted conversation history.
+    _layers = getattr(agent, "_kissne_context_layers", None)
+    if _layers is None:
+        # Resumed/older agents may only have the persisted full prompt. Treat
+        # it as the stable core until the next normal prompt build.
+        _layers = make_context_layers(stable_core=active_system_prompt or "")
+    _policy = getattr(agent, "_kissne_context_read_policy", None)
+    if not isinstance(_policy, ContextReadPolicy):
+        _policy = ContextReadPolicy()
+    _live_delta = "\n\n".join(
+        part for part in (
+            build_memory_context_block(ext_prefetch_cache) if ext_prefetch_cache else "",
+            plugin_user_context,
+        ) if part
+    )
+    _context_read = _layers.read(
+        policy=_policy,
+        current_turn_user_index=(
+            current_turn_user_idx if isinstance(current_turn_user_idx, int) else None
+        ),
+        history=api_messages,
+        live_delta=_live_delta,
+    )
+    api_messages = list(_context_read.history)
+    # Keep this last read visible for diagnostics/tests without making it part
+    # of the persisted transcript or provider payload.
+    with suppress(Exception):
+        agent._kissne_context_last_read = _context_read
+
+    # The persisted legacy prompt remains authoritative when the policy does
+    # not deliberately remove a system-side layer. This protects resumed
+    # sessions whose stored prompt predates the substrate (or whose layer
+    # snapshot could not be reconstructed). A policy that explicitly filters
+    # the stable core/snapshot is allowed to use the new projection.
+    _system_filtered = not (_policy.include_stable_core and _policy.include_snapshot)
+    effective_system = (
+        _context_read.system_prompt if _system_filtered or not active_system_prompt
+        else active_system_prompt
+    )
     if agent.ephemeral_system_prompt:
         effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
     if effective_system:
