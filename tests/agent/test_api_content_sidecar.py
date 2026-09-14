@@ -291,7 +291,7 @@ class TestFlushOverrideSidecar:
         db.create_session(session_id=sid, source="cli")
         try:
             agent = self._make_agent(db, sid)
-            live = "[gateway note] observed context\n\nactual question"
+            live = "[voice] actual question"
             messages = [{"role": "user", "content": live}]
             agent._persist_user_message_idx = 0
             agent._persist_user_message_override = "actual question"
@@ -306,9 +306,8 @@ class TestFlushOverrideSidecar:
         finally:
             db.close()
 
-    def test_stamped_sidecar_wins_over_override_derivation(self, tmp_path):
-        """When the prologue already stamped api_content (injections), the
-        flush must keep those bytes — they are what actually went out."""
+    def test_explicit_wire_sidecar_wins_over_override_derivation(self, tmp_path):
+        """An independently-produced wire sidecar remains authoritative."""
         db = SessionDB(db_path=tmp_path / "state.db")
         sid = "sess-ov2"
         db.create_session(session_id=sid, source="cli")
@@ -318,7 +317,7 @@ class TestFlushOverrideSidecar:
                 {
                     "role": "user",
                     "content": "live text",
-                    "api_content": "live text\n\nPLUGIN-CTX",
+                    "api_content": "[voice] live text",
                 }
             ]
             agent._persist_user_message_idx = 0
@@ -328,7 +327,7 @@ class TestFlushOverrideSidecar:
 
             msgs = db.get_messages_as_conversation(sid)
             assert msgs[0]["content"] == "clean text"
-            assert msgs[0]["api_content"] == "live text\n\nPLUGIN-CTX"
+            assert msgs[0]["api_content"] == "[voice] live text"
         finally:
             db.close()
 
@@ -831,7 +830,7 @@ class TestMaxIterationsSummaryReplay:
         )
 
         messages = [
-            {"role": "user", "content": "q1", "api_content": "q1\n\nPLUGIN-CTX"},
+            {"role": "user", "content": "q1", "api_content": "[voice] q1"},
             {"role": "assistant", "content": "a1"},
         ]
         with patch.object(
@@ -843,12 +842,12 @@ class TestMaxIterationsSummaryReplay:
         sent_users = [
             m for m in captured["messages"] if m.get("role") == "user"
         ]
-        assert sent_users[0]["content"] == "q1\n\nPLUGIN-CTX"
+        assert sent_users[0]["content"] == "[voice] q1"
         for m in captured["messages"]:
             assert "api_content" not in m
         # The live history dict is never mutated.
         assert messages[0]["content"] == "q1"
-        assert messages[0]["api_content"] == "q1\n\nPLUGIN-CTX"
+        assert messages[0]["api_content"] == "[voice] q1"
 
 
 class TestSessionRowExistsBeforePreflightCompaction:
@@ -985,7 +984,7 @@ class TestStaleConfirmationRedactionDropsSidecar:
             {
                 "role": "user",
                 "content": "confirm forced restart",
-                "api_content": "confirm forced restart\n\nPLUGIN-CTX",
+                "api_content": "[voice] confirm forced restart",
                 "timestamp": 1000.0,
             }
         ]
