@@ -89,7 +89,11 @@ class TestCompactionWiring(unittest.TestCase):
         from agent import conversation_compression as cc
 
         src = inspect.getsource(cc)
-        i_invalidate = src.find("agent._invalidate_system_prompt()")
+        # The call site tags the compression reason (it drives telemetry), so the
+        # pin includes the argument: a bare `()` match finds nothing and both
+        # index comparisons silently degrade to `-1 > -1`. Update this string
+        # deliberately if the reason tag ever changes.
+        i_invalidate = src.find('agent._invalidate_system_prompt(reason="compression")')
         i_refresh = src.find("_refresh_agent_tool_definitions(agent)",
                              i_invalidate)
         i_rebuild = src.find("rebuilt_system_prompt = agent._build_system_prompt(",
