@@ -33,7 +33,7 @@ class _Agent:
     def _emit_warning(self, _message):
         pass
 
-    def _invalidate_system_prompt(self):
+    def _invalidate_system_prompt(self, reason=None):
         self._cached_system_prompt = None
 
     def _build_system_prompt(self, system_message):

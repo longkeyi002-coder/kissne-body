@@ -20,6 +20,7 @@ import pytest
 from agent.codex_responses_adapter import _normalize_codex_response
 
 import run_agent
+from agent.kissne_context import KISSNE_USER_MESSAGE_OPEN
 from run_agent import AIAgent
 from agent.error_classifier import FailoverReason
 from agent.memory_manager import MemoryManager
@@ -3318,7 +3319,10 @@ class TestRunConversation:
         ]
         assert all("message_count" in c and isinstance(c.get("request_messages"), list) for c in pre_request_calls)
         assert all("request" in c and "messages" in c["request"]["body"] for c in pre_request_calls)
-        assert any(msg.get("role") == "user" and msg.get("content") == "search something" for msg in pre_request_calls[0]["request_messages"])
+        assert any(
+            msg.get("role") == "user" and "search something" in (msg.get("content") or "")
+            for msg in pre_request_calls[0]["request_messages"]
+        )
         assert all("usage" in c and "response" in c for c in post_request_calls)
         assert all("assistant_message" in c["response"] for c in post_request_calls)
 
@@ -5004,8 +5008,11 @@ class TestRunConversation:
         # prompt), not the original multi-message window. Without this, the
         # output-cap retry would call the compressor but re-transmit the same
         # oversized request forever.
+        # The live turn carries the fixed envelope (02 §Live Delta); the canonical
+        # words are what has to survive the compression round trip.
         second_messages = second_call.get("messages", [])
-        assert second_messages[-1].get("content") == "hello"
+        assert "hello" in second_messages[-1].get("content")
+        assert KISSNE_USER_MESSAGE_OPEN in second_messages[-1].get("content")
         assert len(second_messages) == 2
         assert second_messages[0]["role"] == "system"
         # context_length was NOT mutated by an output-cap error.

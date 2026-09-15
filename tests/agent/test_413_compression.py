@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from agent.context_compressor import SUMMARY_PREFIX, _DB_PERSISTED_MARKER
 from agent.conversation_compression import COMPACTION_DONE_STATUS, COMPACTION_STATUS
+from agent.kissne_context import KISSNE_USER_MESSAGE_CLOSE, KISSNE_USER_MESSAGE_OPEN
 from hermes_state import SessionDB
 from run_agent import AIAgent
 import run_agent
@@ -436,10 +437,15 @@ class TestHTTP413Compression:
             "role": "system",
             "content": "compressed prompt",
         }
-        assert request_payloads[1]["messages"][1] == {
-            "role": "user",
-            "content": "compressed summary",
-        }
+        # The live turn is wrapped in the fixed mechanical separators (02 §Live Delta):
+        #   <kissne_live_context>…</kissne_live_context>\n\n<user_message>\n…\n</user_message>
+        # The canonical words are unchanged; the envelope plus the live delta are what
+        # the send path adds for the current turn only.
+        retry_turn = request_payloads[1]["messages"][1]
+        assert retry_turn["role"] == "user"
+        assert "compressed summary" in retry_turn["content"]
+        assert KISSNE_USER_MESSAGE_OPEN in retry_turn["content"]
+        assert KISSNE_USER_MESSAGE_CLOSE in retry_turn["content"]
 
 
 
