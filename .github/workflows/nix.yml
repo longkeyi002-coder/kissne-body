@@ -49,7 +49,11 @@ jobs:
   flake-check:
     name: nix flake check
     needs: [detect]
-    if: needs.detect.outputs.nix == 'true'
+    # `ubuntu-latest-32-core` is a larger runner this fork cannot provision (same
+    # reason as the 96-core lane in tests.yml — see pr-tests.yml), so the job
+    # queued forever instead of reporting. Re-enable with the repo variable
+    # KISSNE_ENABLE_LARGER_RUNNERS=true once larger runners exist.
+    if: needs.detect.outputs.nix == 'true' && vars.KISSNE_ENABLE_LARGER_RUNNERS == 'true'
     # The build compiles the package and its whole dependency closure, so this
     # takes minutes and not seconds when the cache misses. `nix flake check`
     # builds 21 checks, and --max-jobs defaults to the core count. It uses the
