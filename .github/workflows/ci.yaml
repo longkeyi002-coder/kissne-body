@@ -177,6 +177,11 @@ jobs:
     needs: detect
     uses: ./.github/workflows/profile-artifact-check.yml
 
+  soul-boundary-check:
+    name: Soul boundary check
+    needs: detect
+    uses: ./.github/workflows/soul-boundary-check.yml
+
   case-collision-check:
     name: Check no case-colliding filenames
     needs: detect
@@ -248,6 +253,7 @@ jobs:
       - lockfile-diff
       - docker-lint
       - profile-artifact-check
+      - soul-boundary-check
       - supply-chain
       - review-labels
       - osv-scanner

@@ -1,0 +1,24 @@
+# Pre-commit landing point for the Soul boundary (KB0-SOUL-GIT-GUARD).
+#
+# A personal SOUL.md / memories/{SELF,MEMORY,USER}.md must never reach this
+# repository, a public branch or a PR.  `.gitignore` is only a convenience:
+# `git add -f` walks straight past it, and the file is already in the index by
+# the time anyone notices.  This hook checks the Git *index* instead of the
+# worktree, so a force-added personal file is stopped before it becomes a
+# commit.  The same script runs in CI
+# (.github/workflows/soul-boundary-check.yml) and before a release
+# (scripts/release.py); see scripts/ci/check_soul_boundary.py for the policy.
+#
+# Run `pre-commit install` once per clone to enable it.  The hook inherits
+# $HERMES_HOME: when that is set, the live instance's identity files are the
+# content signature the checkout is compared against.
+repos:
+  - repo: local
+    hooks:
+      - id: soul-boundary
+        name: soul boundary (personal identity never enters Git)
+        description: Reject personal SOUL.md / memories identity content in the Git index.
+        entry: python scripts/ci/check_soul_boundary.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true

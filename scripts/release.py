@@ -2538,6 +2538,41 @@ def generate_changelog(commits, tag_name, semver, repo_url="https://github.com/N
     return "\n".join(lines)
 
 
+def _enforce_soul_boundary(root: "Path | None" = None) -> bool:
+    """Release-time enactment of the Soul boundary (KB0-SOUL-GIT-GUARD).
+
+    A personal identity file (the real content of ``SOUL.md`` or
+    ``memories/{SELF,MEMORY,USER}.md``) must never be tagged, published, or
+    shipped inside a release artifact.  This runs the same checker as the
+    pre-commit hook and CI over the checkout *and* any build output at the
+    repository root, and returns False when publishing must not proceed.  It
+    never raises on a violation: an unreachable checker is itself a failure,
+    because publishing without the check is exactly the hole being closed.
+    """
+    repo_root = Path(root) if root is not None else REPO_ROOT
+    # The checker ships with this script (REPO_ROOT), while ``root`` is what it
+    # scans: a release is cut from a checkout that may not be the script's own.
+    checker = REPO_ROOT / "scripts" / "ci" / "check_soul_boundary.py"
+    if not checker.is_file():
+        print(f"  ✗ Soul boundary checker missing at {checker}; refusing to publish.")
+        return False
+
+    result = subprocess.run(
+        [sys.executable, str(checker), "--repo-root", str(repo_root), "--release"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(repo_root),
+    )
+    if result.returncode == 0:
+        print("  ✓ Soul boundary: no personal identity content in the checkout or build output")
+        return True
+
+    print("  ✗ Soul boundary violation — refusing to publish:")
+    for line in (result.stdout + result.stderr).splitlines():
+        if line.strip():
+            print(f"    {line}")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Hermes Agent Release Tool")
     parser.add_argument("--bump", choices=["major", "minor", "patch"],
@@ -2615,6 +2650,13 @@ def main():
         print(f"\n{'='*60}")
         print("  Publishing release...")
         print(f"{'='*60}")
+
+        # Soul boundary gate (KB0-SOUL-GIT-GUARD): the tag and the GitHub
+        # release are publication, so personal identity content has to be
+        # refused here too -- not only in the pre-commit hook and CI.
+        if not _enforce_soul_boundary():
+            print("  ✗ Release aborted: personal identity content must never reach a published artifact.")
+            return
 
         # Update version files
         if args.bump:
