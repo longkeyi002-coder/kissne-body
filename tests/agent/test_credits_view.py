@@ -15,6 +15,7 @@ import pytest
 
 import agent.account_usage as account_usage
 from agent.account_usage import CreditsView, build_credits_view
+from agent.i18n import t
 from hermes_cli.nous_account import NousPortalAccountInfo, NousPaidServiceAccessInfo
 
 
@@ -108,7 +109,11 @@ def test_gateway_topup_not_logged_in(monkeypatch):
     )
     stub = _make_gateway_stub()
     out = asyncio.run(stub._handle_topup_command(_FakeEvent()))
-    assert "Not logged into Nous Portal" in out
+    # Resolve the expected copy through the same catalog the handler uses
+    # (`gateway.credits.not_logged_in`): the message is localized, so a hard-coded
+    # English literal only passes on a machine whose display.language is still `en`.
+    assert t("gateway.credits.not_logged_in") in out
+    assert "Nous Portal" in out
 
 
 
