@@ -260,6 +260,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("reload_mcp",), desktop="advanced"),
     CommandDef("reload-skills", "Re-scan ~/.hermes/skills/ for newly installed or removed skills",
                "Tools & Skills", aliases=("reload_skills",), desktop="advanced"),
+    CommandDef("reread", "Re-read the SOUL/SELF/MEMORY/USER files into this session (no new session)",
+               "Tools & Skills", gateway_only=True, desktop="messaging"),
     CommandDef("browser", "Connect browser tools to your live Chromium-family browser via CDP, or switch to Browser Use mode", "Tools & Skills",
                cli_only=True, args_hint="[connect|disconnect|status|use]",
                subcommands=("connect", "disconnect", "status", "use")),

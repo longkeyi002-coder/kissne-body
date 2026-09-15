@@ -1100,6 +1100,67 @@ class GatewaySlashCommandsMixin(
             logger.warning("Skills reload failed: %s", e)
             return t("gateway.reload_skills.failed", error=e)
 
+    async def _handle_reread_command(self, event: MessageEvent) -> str:
+        """Handle /reread — re-read SOUL.md / SELF.md / MEMORY.md / USER.md from disk for THIS
+        session, without starting a new conversation.
+
+        Two layers hold this session's prompt snapshot and BOTH must be dropped, or the next turn
+        silently keeps the OLD bytes:
+
+          1. the live agent's frozen ``_cached_system_prompt`` — ``_invalidate_system_prompt``
+             (the same entry point compression and a model switch use) clears it, clears the
+             Kissne context layers, and reloads the memory store from disk;
+          2. the persisted ``sessions.system_prompt`` row — a fresh or evicted agent RESTORES
+             those bytes verbatim (``agent.conversation_loop._restore_or_build_system_prompt``
+             reuses a stored prompt that still matches the runtime identity) instead of
+             rebuilding, so an in-memory invalidation alone would be undone on the next turn.
+
+        With both cleared, the next turn rebuilds the prompt from the files currently on disk and
+        re-persists it. No new session, no history rewrite, no compression, no other behavior.
+        """
+        try:
+            source = event.source
+            session_key = self._session_key_for_source(source)
+            agent = self._resident_agent_for(session_key) if session_key else None
+            if agent is not None:
+                try:
+                    agent._invalidate_system_prompt(reason="reread")
+                except Exception as exc:
+                    logger.warning("Reread: cached prompt invalidation failed for %s: %s", session_key, exc)
+
+            # The row the next turn would read the stored prompt from: the live agent's own
+            # session_id, plus the routing entry's (they only diverge on a stale cached agent —
+            # clearing both keeps the command effective in that case too).
+            session_ids: list = []
+            agent_sid = getattr(agent, "session_id", None)
+            if isinstance(agent_sid, str) and agent_sid:
+                session_ids.append(agent_sid)
+            session_store = getattr(self, "session_store", None)
+            if session_key and session_store is not None:
+                try:
+                    route_sid = await asyncio.to_thread(
+                        self._lookup_session_id_under_store_lock, session_store, session_key)
+                except Exception:
+                    route_sid = None
+                if isinstance(route_sid, str) and route_sid and route_sid not in session_ids:
+                    session_ids.append(route_sid)
+
+            session_db = getattr(self, "_session_db", None)
+            for session_id in session_ids:
+                update = getattr(session_db, "update_system_prompt", None)
+                if not callable(update):
+                    break
+                try:
+                    result = update(session_id, None)  # NULL → next turn rebuilds instead of restoring
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    logger.warning("Reread: dropping the stored prompt for %s failed: %s", session_id, exc)
+        except Exception as exc:
+            logger.warning("Reread failed: %s", exc)
+            return t("gateway.reread.failed", error=exc)
+        return t("gateway.reread.done")
+
     async def _handle_bundles_command(self, event: MessageEvent) -> str:
         """Handle /bundles — list installed skill bundles (mirrors the CLI handler). Bundles are
         loaded by invoking their own ``/<slug>`` command, not by this one."""
