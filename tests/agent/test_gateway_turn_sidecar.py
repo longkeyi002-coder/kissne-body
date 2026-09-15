@@ -1,12 +1,8 @@
-"""Gateway must-deliver notes on the current user message.
+"""Gateway must-deliver notes on the current user request.
 
-The gateway relocates per-turn volatile facts OUT of the ephemeral system
-prompt — auto-reset notes, the first-contact intro, voice-channel changes —
-and stages them on ``agent._gateway_turn_context_notes``.
-``build_turn_context`` consumes them once and delivers them through the same
-api_content sidecar channel as plugin context (string content), or as an
-appended text part on multimodal (list) content, where the string sidecar
-cannot apply and the fact would otherwise silently drop.
+String notes join request-local runtime context and are not persisted or
+replayed through api_content. Multimodal content keeps the existing
+durable text-part fallback because the string projection cannot represent it.
 """
 
 from __future__ import annotations
@@ -19,7 +15,6 @@ import pytest
 from agent.turn_context import (
     append_notes_to_multimodal_content,
     build_turn_context,
-    compose_user_api_content,
     consume_gateway_turn_context_notes,
 )
 
@@ -144,26 +139,21 @@ class TestConsumeIsOneShot:
         assert consume_gateway_turn_context_notes(agent) == ""
 
 
-class TestStringContentSidecarDelivery:
-    def test_notes_ride_the_api_content_sidecar(self):
-        """String user message: the note lands in the API copy only — the
-        stored content stays clean and the sidecar persists the exact sent
-        bytes (replay keeps them byte-stable in history)."""
+
+class TestStringContentRequestLocalDelivery:
+    def test_notes_join_request_local_context(self):
         agent = _FakeAgent()
         agent._gateway_turn_context_notes = RESET_NOTE
         with patch("hermes_cli.plugins.invoke_hook", return_value=[]):
             ctx = _build(agent)
+
         msg = ctx.messages[ctx.current_turn_user_idx]
         assert msg["content"] == "hello"
-        assert msg["api_content"] == "hello\n\n" + RESET_NOTE
-        # The composed bytes match what conversation_loop would send.
-        assert msg["api_content"] == compose_user_api_content(
-            "hello", ctx.ext_prefetch_cache, ctx.plugin_user_context
-        )
-        # Consumed: a later turn on the same cached agent replays nothing.
+        assert "api_content" not in msg
+        assert ctx.plugin_user_context == RESET_NOTE
         assert agent._gateway_turn_context_notes == ""
 
-    def test_notes_append_after_plugin_context(self):
+    def test_notes_follow_plugin_context(self):
         agent = _FakeAgent()
         agent._gateway_turn_context_notes = VC_NOTE
         with patch(
@@ -171,21 +161,23 @@ class TestStringContentSidecarDelivery:
             return_value=[{"context": "PLUGIN-CTX"}],
         ):
             ctx = _build(agent)
-        msg = ctx.messages[ctx.current_turn_user_idx]
-        assert msg["api_content"] == "hello\n\nPLUGIN-CTX\n\n" + VC_NOTE
 
-    def test_no_notes_means_no_stamp(self):
+        msg = ctx.messages[ctx.current_turn_user_idx]
+        assert "api_content" not in msg
+        assert ctx.plugin_user_context == "PLUGIN-CTX\n\n" + VC_NOTE
+
+    def test_no_notes_means_no_request_local_context(self):
         agent = _FakeAgent()
         with patch("hermes_cli.plugins.invoke_hook", return_value=[]):
             ctx = _build(agent)
         assert "api_content" not in ctx.messages[ctx.current_turn_user_idx]
+        assert ctx.plugin_user_context == ""
 
 
 class TestMultimodalFallback:
     def test_notes_appended_as_text_part_on_list_content(self):
-        """Multimodal turns can't take the string sidecar
-        (compose_user_api_content returns None for lists) — the must-deliver
-        fact is appended as a durable text part instead of dropping."""
+        """Multimodal turns cannot use the string request projection, so the
+        must-deliver fact is appended as a durable text part instead."""
         agent = _FakeAgent()
         agent._gateway_turn_context_notes = RESET_NOTE
         content = [

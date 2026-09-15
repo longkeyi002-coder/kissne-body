@@ -114,6 +114,58 @@ def build_live_delta(
     )
 
 
+KISSNE_LIVE_CONTEXT_OPEN = "<kissne_live_context>"
+KISSNE_LIVE_CONTEXT_CLOSE = "</kissne_live_context>"
+KISSNE_USER_MESSAGE_OPEN = "<user_message>"
+KISSNE_USER_MESSAGE_CLOSE = "</user_message>"
+
+
+def compose_current_user_turn(
+    content: Any,
+    *,
+    live_delta: Optional[LiveDelta],
+    turn_recall: str = "",
+    runtime_context: str = "",
+) -> Optional[str]:
+    """Place all request-local context before the user's exact words.
+
+    The returned string is a provider-request projection only. Callers must
+    never assign it to canonical message content or api_content.
+    """
+    if not isinstance(content, str):
+        return None
+    context_parts = []
+    if live_delta is not None:
+        context_parts.append(live_delta.render())
+    if isinstance(turn_recall, str) and turn_recall.strip():
+        context_parts.append(
+            "<turn_recall>\n"
+            + turn_recall.strip()
+            + "\n</turn_recall>"
+        )
+    if isinstance(runtime_context, str) and runtime_context.strip():
+        context_parts.append(
+            "<runtime_context>\n"
+            + runtime_context.strip()
+            + "\n</runtime_context>"
+        )
+    if not context_parts:
+        return None
+    return (
+        KISSNE_LIVE_CONTEXT_OPEN
+        + "\n"
+        + "\n\n".join(context_parts)
+        + "\n"
+        + KISSNE_LIVE_CONTEXT_CLOSE
+        + "\n\n"
+        + KISSNE_USER_MESSAGE_OPEN
+        + "\n"
+        + content
+        + "\n"
+        + KISSNE_USER_MESSAGE_CLOSE
+    )
+
+
 @dataclass(frozen=True)
 class ContextLayers:
     """Semantic inputs for one request plus Hermes' compatibility prompt."""
@@ -222,6 +274,11 @@ __all__ = [
     "ContextRead",
     "LiveDelta",
     "SessionSnapshot",
+    "KISSNE_LIVE_CONTEXT_CLOSE",
+    "KISSNE_LIVE_CONTEXT_OPEN",
+    "KISSNE_USER_MESSAGE_CLOSE",
+    "KISSNE_USER_MESSAGE_OPEN",
     "build_live_delta",
+    "compose_current_user_turn",
     "make_context_layers",
 ]

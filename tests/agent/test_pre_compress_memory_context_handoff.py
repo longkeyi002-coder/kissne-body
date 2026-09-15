@@ -24,7 +24,10 @@ def _make_agent(memory_manager, compressor):
     agent._memory_manager = memory_manager
     agent.context_compressor = compressor
     agent._compression_feasibility_checked = True
-    agent._invalidate_system_prompt = lambda: None
+    # The production call site passes the invalidation reason
+    # (agent/conversation_compression.py: `_invalidate_system_prompt(reason="compression")`);
+    # this stub has to accept it, or pre-compress handoff blows up with a TypeError.
+    agent._invalidate_system_prompt = lambda reason=None: None
     agent._build_system_prompt = lambda _message: "new-system-prompt"
     return agent
 

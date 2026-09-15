@@ -41,7 +41,11 @@ def _ensure_directory(path: Path, *, create: bool, secure: bool) -> None:
 
 
 def initialize_home(home: Path, subdirs: tuple[str, ...], ensured: set[str]) -> None:
-    from hermes_cli.config import _ensure_default_soul_md, is_managed
+    from hermes_cli.config import (
+        _ensure_default_self_md,
+        _ensure_default_soul_md,
+        is_managed,
+    )
 
     managed = is_managed()
     old_umask = os.umask(0o007) if managed else None
@@ -54,6 +58,7 @@ def initialize_home(home: Path, subdirs: tuple[str, ...], ensured: set[str]) -> 
             _ensure_directory(home / "logs" / "curator", create=True, secure=False)
         try:
             _ensure_default_soul_md(home)
+            _ensure_default_self_md(home)
         except OSError as exc:
             raise HomeInitializationError(
                 f"Cannot initialize Hermes home {home}: {exc}. "
