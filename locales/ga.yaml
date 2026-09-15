@@ -249,6 +249,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Theip ar athlódáil scileanna: {error}"
+  reread:
+    done:                  "🔄 **Comhaid anama athléite**\n\nLéifear SOUL.md / SELF.md / MEMORY.md / USER.md arís roimh do chéad teachtaireacht eile sa chomhrá seo — an seisiún céanna, an stair chéanna, gan chomhbhrú."
+    failed:                "❌ Theip ar an athléamh: {error}"
 
   reset:
     header_default:        "✨ Seisiún athshocraithe! Ag tosú as an nua."

@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Falló la recarga de skills: {error}"
+  reread:
+    done:                  "🔄 **Archivos del alma releídos**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md se releerán antes de tu próximo mensaje en esta conversación — la misma sesión, el mismo historial, sin compresión."
+    failed:                "❌ Error al releer: {error}"
 
   reset:
     header_default:        "✨ ¡Sesión reiniciada! Empezando de nuevo."

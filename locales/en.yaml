@@ -261,6 +261,10 @@ gateway:
     item_no_desc:          "    - {name}"
     failed:                "❌ Skills reload failed: {error}"
 
+  reread:
+    done:                  "🔄 **Soul files re-read**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md will be re-read on your next message in this conversation — same session, same history, no compression."
+    failed:                "❌ Re-read failed: {error}"
+
   reset:
     header_default:        "✨ Session reset! Starting fresh."
     header_new:            "✨ New session started!"

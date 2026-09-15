@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Vaardigheids-herlaai het misluk: {error}"
+  reread:
+    done:                  "🔄 **Sielsrelêers herlees**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md sal voor jou volgende boodskap in hierdie gesprek herlees en die system prompt herbou word — dieselfde sessie, dieselfde geskiedenis, geen kompressie."
+    failed:                "❌ Herlees het misluk: {error}"
 
   reset:
     header_default:        "✨ Sessie herstel! Begin van voor."

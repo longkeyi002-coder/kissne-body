@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}：{desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ 技能重新載入失敗：{error}"
+  reread:
+    done:                  "🔄 **魂文件已重新讀取**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md 會在本會話的下一條訊息前重新讀取並重建 system prompt —— 同一個對話、同樣的歷史、不做壓縮。"
+    failed:                "❌ 重讀失敗：{error}"
 
   reset:
     header_default:        "✨ 工作階段已重設！重新開始。"

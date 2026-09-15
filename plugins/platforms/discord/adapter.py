@@ -135,6 +135,7 @@ _NATIVE_SLASH_COMMANDS: tuple = (
      "/insights {days}", None),
     ("reload-mcp", "Reload MCP servers from config", (), "/reload-mcp", None),
     ("reload-skills", "Re-scan ~/.hermes/skills/ for new or removed skills", (), "/reload-skills", None),
+    ("reread", "Re-read the SOUL/SELF/MEMORY/USER files into this session", (), "/reread", None),
     ("voice", "Toggle voice reply mode",
      (("mode", str, "", "Voice mode: join, channel, leave, on, tts, off, or status",
        # `join` and `channel` both hit _handle_voice_channel_join; expose both to match docs.

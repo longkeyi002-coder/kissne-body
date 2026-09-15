@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ スキルの再読み込みに失敗しました: {error}"
+  reread:
+    done:                  "🔄 **魂ファイルを再読み込みしました**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md は次のメッセージの前にこの会話で再読み込みされ、system prompt が再構築されます —— 同じセッション、同じ履歴、圧縮なし。"
+    failed:                "❌ 再読み込みに失敗しました：{error}"
 
   reset:
     header_default:        "✨ セッションをリセットしました。新たに開始します。"

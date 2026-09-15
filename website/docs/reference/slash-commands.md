@@ -287,6 +287,7 @@ The messaging gateway supports the following built-in commands inside Telegram, 
 | `/plan [task]` | Write a markdown implementation plan to `.hermes/plans/`; no execution. |
 | `/bundles` | List configured skill bundles (`/<name>` aliases that preload several skills). |
 | `/reload-skills` (alias: `/reload_skills`) | Re-scan `~/.hermes/skills/` for newly installed or removed skills. |
+| `/reread` | Re-read `SOUL.md`, `SELF.md`, `MEMORY.md` and `USER.md` from disk into the **current** conversation (messaging only): your next message rebuilds the session's system prompt from the files as they are now. No new session, no history rewrite, no compression — the fix for "I edited my soul files and my companion still sounds like before". |
 | `/footer [on\|off\|status]` | Toggle the runtime-metadata footer on final replies (shows model, context %, and cwd). |
 | `/curator [status\|run\|pin\|archive]` | Background skill maintenance controls. |
 | `/suggestions [accept\|dismiss N\|catalog\|clear]` | Review suggested automations right in chat. `/suggestions` lists pending suggestions, `catalog` adds curated starter automations, and `clear` prunes resolved suggestion records. Accepted suggestions keep this chat/thread as the job delivery origin. |

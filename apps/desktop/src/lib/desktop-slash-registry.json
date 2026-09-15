@@ -29,6 +29,7 @@
   "/reload-skills": "advanced",
   "/reload_mcp": "advanced",
   "/reload_skills": "advanced",
+  "/reread": "messaging",
   "/restart": "terminal",
   "/sb": "terminal",
   "/set-home": "terminal",

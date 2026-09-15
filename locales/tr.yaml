@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Beceri yeniden yükleme başarısız: {error}"
+  reread:
+    done:                  "🔄 **Ruh dosyaları yeniden okundu**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md bir sonraki mesajından önce bu sohbette yeniden okunacak ve system prompt yeniden oluşturulacak — aynı oturum, aynı geçmiş, sıkıştırma yok."
+    failed:                "❌ Yeniden okuma başarısız: {error}"
 
   reset:
     header_default:        "✨ Oturum sıfırlandı! Yeniden başlıyoruz."
