@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Ricaricamento delle skill non riuscito: {error}"
+  reread:
+    done:                  "🔄 **File dell'anima riletti**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md verranno riletti prima del tuo prossimo messaggio in questa conversazione — stessa sessione, stessa cronologia, nessuna compressione."
+    failed:                "❌ Rilettura non riuscita: {error}"
 
   reset:
     header_default:        "✨ Sessione reimpostata! Si ricomincia da zero."

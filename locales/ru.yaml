@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Ошибка перезагрузки навыков: {error}"
+  reread:
+    done:                  "🔄 **Файлы души перечитаны**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md будут перечитаны перед твоим следующим сообщением в этом диалоге — та же сессия, та же история, без сжатия."
+    failed:                "❌ Не удалось перечитать: {error}"
 
   reset:
     header_default:        "✨ Сеанс сброшен! Начинаем с чистого листа."

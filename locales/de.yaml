@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ Skill-Neuladen fehlgeschlagen: {error}"
+  reread:
+    done:                  "🔄 **Seelen-Dateien neu eingelesen**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md werden vor deiner nächsten Nachricht in dieser Unterhaltung neu eingelesen und der System-Prompt neu aufgebaut — gleiche Sitzung, gleicher Verlauf, keine Komprimierung."
+    failed:                "❌ Erneutes Einlesen fehlgeschlagen: {error}"
 
   reset:
     header_default:        "✨ Sitzung zurückgesetzt! Neuanfang."

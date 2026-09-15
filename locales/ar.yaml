@@ -268,6 +268,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ فشلت إعادة تحميل المهارات: {error}"
+  reread:
+    done:                  "🔄 **أُعيدت قراءة ملفات الروح**\n\nسيُعاد قراءة SOUL.md / SELF.md / MEMORY.md / USER.md قبل رسالتك التالية في هذه المحادثة — الجلسة نفسها، السجل نفسه، دون ضغط."
+    failed:                "❌ فشلت إعادة القراءة: {error}"
 
   reset:
     header_default:        "✨ أُعيد ضبط الجلسة! بداية جديدة."

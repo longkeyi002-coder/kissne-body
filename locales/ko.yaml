@@ -245,6 +245,9 @@ gateway:
     item_with_desc:        "    - {name}: {desc}"
     item_no_desc:          "    - {name}"
     failed:                "❌ 스킬 재로드 실패: {error}"
+  reread:
+    done:                  "🔄 **영혼 파일을 다시 읽었습니다**\n\nSOUL.md / SELF.md / MEMORY.md / USER.md는 이 대화의 다음 메시지 전에 다시 읽혀 system prompt가 재구성됩니다 — 같은 세션, 같은 기록, 압축 없음."
+    failed:                "❌ 다시 읽기 실패: {error}"
 
   reset:
     header_default:        "✨ 세션이 초기화되었습니다! 새로 시작합니다."
