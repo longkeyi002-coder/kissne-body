@@ -34,10 +34,12 @@ def repo(tmp_path):
 
 def _run(command, config, monkeypatch, repo_root, session_cwds=None,
          guard_on=True, **kwargs):
+    """guard_on=None leaves the real ``guard_active()`` untouched."""
     from tools.terminal_tool import terminal_tool
 
     monkeypatch.setattr(self_repo_guard, "get_running_source_root", lambda: repo_root)
-    monkeypatch.setattr(self_repo_guard, "guard_active", lambda: guard_on)
+    if guard_on is not None:
+        monkeypatch.setattr(self_repo_guard, "guard_active", lambda: guard_on)
     mock_env = MagicMock()
     mock_env.execute.return_value = {"output": "ok", "returncode": 0}
     mock_env.cwd = config["cwd"]
@@ -120,7 +122,7 @@ class TestSelfRepoGuardWiring:
         env.execute.assert_called_once()
 
     def test_guard_inactive_passes_through(self, repo, monkeypatch):
-        """POSIX (guard_active() False): mutations in the source repo run."""
+        """Guard explicitly switched off (simulated): mutations in the source repo run."""
         config = _make_env_config(cwd=str(repo))
         result, env = _run(
             "git reset --hard origin/main", config, monkeypatch, repo,
@@ -129,8 +131,16 @@ class TestSelfRepoGuardWiring:
         assert result.get("status") != "blocked"
         env.execute.assert_called_once()
 
-    def test_guard_active_matches_platform(self):
-        """guard_active() is True exactly on Windows."""
-        import os
-
-        assert self_repo_guard.guard_active() == (os.name == "nt")
+    def test_mutation_is_blocked_with_real_guard_without_override(
+        self, repo, monkeypatch
+    ):
+        """With the real ``guard_active()`` in place (no test-side override), rewriting the
+        live source checkout must be blocked on every platform — POSIX included."""
+        assert self_repo_guard.guard_active() is True
+        config = _make_env_config(cwd=str(repo))
+        result, env = _run(
+            "git reset --hard origin/main", config, monkeypatch, repo, guard_on=None
+        )
+        assert result["status"] == "blocked"
+        assert "mix module versions" in result["error"]
+        env.execute.assert_not_called()

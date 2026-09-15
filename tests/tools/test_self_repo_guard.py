@@ -1,5 +1,6 @@
 """Tests for tools/self_repo_guard.py — the running-source-checkout git guard."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from tools.self_repo_guard import (
     detect_self_repo_git_mutation,
     get_running_source_root,
+    guard_active,
 )
 
 
@@ -22,6 +24,22 @@ def repo(tmp_path):
 
 def _detect(command, cwd, root):
     return detect_self_repo_git_mutation(command, str(cwd), source_root=root)
+
+
+class TestGuardIsPlatformIndependent:
+    """Core Patch discipline is a product boundary, not a Windows-only filesystem workaround.
+
+    POSIX keeps already-open inodes alive, but a rewritten checkout still mixes module
+    versions on later lazy imports — so the guard must not switch itself off there.
+    """
+
+    def test_guard_active_is_true_on_posix(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        assert guard_active() is True
+
+    def test_guard_active_is_true_on_windows(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "nt")
+        assert guard_active() is True
 
 
 class TestBlocksMutationsInSourceRepo:
