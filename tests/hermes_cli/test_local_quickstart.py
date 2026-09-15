@@ -118,10 +118,34 @@ def test_quickstart_refuses_when_nothing_fits(client, monkeypatch):
     assert "Local Models" in r.json()["detail"]
 
 
+def _pin_budget(monkeypatch, *, vram_gib: int = 24, ram_gib: int = 64) -> None:
+    """Pin the hardware budget the quickstart preflight sees.
+
+    The route calls `hardware.probe_budget(planning=True)` on the REAL machine,
+    so on a host with no GPU — CI runners and small boxes included — no catalog
+    entry runs resident, `catalog.recommended_entry` returns None and the
+    automatic POST 409s before any of the stubs below matter. 24 GB discrete is
+    the smallest budget where an entry stays resident, which is what the
+    "automatic recommendation" path requires.
+    """
+    from hermes_cli.local_runtime.estimator import HardwareBudget
+    import hermes_cli.web_routers.local_models as lm
+
+    gib = 1 << 30
+    monkeypatch.setattr(
+        lm.hardware, "probe_budget",
+        lambda **kw: HardwareBudget(
+            usable_vram_bytes=vram_gib * gib, total_device_bytes=vram_gib * gib,
+            ram_available_bytes=ram_gib * gib, uma=False,
+        ),
+    )
+
+
 def test_quickstart_runs_all_three_legs(client, monkeypatch, tmp_path):
     """Fresh machine: install runtime -> download recommended -> activate.
     Each leg is asserted by its observable call, in order."""
     calls: list[str] = []
+    _pin_budget(monkeypatch)
 
     # Supply the same supported backend to preflight and the stubbed install;
     # host auto-detection may select CUDA without a published Linux archive.
@@ -183,6 +207,7 @@ def test_quickstart_skips_satisfied_legs(client, monkeypatch):
     """Runtime present and model already staged: the response says so and
     the job goes straight to activation."""
     calls: list[str] = []
+    _pin_budget(monkeypatch)
 
     monkeypatch.setattr(
         "hermes_cli.local_runtime.binaries.installed_tags", lambda: ["b10362"])

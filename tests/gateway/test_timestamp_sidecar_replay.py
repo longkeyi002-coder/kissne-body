@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from agent.kissne_context import KISSNE_LIVE_CONTEXT_OPEN, KISSNE_USER_MESSAGE_OPEN
 from gateway.message_timestamps import render_user_content_with_timestamp
 from gateway.run import _build_gateway_agent_history, _select_cached_agent_history
 
@@ -92,9 +93,15 @@ def responses_agent(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("timestamps", [False, True])
 @pytest.mark.parametrize("resume", ["cached", "db"])
-def test_full_builder_to_responses_keeps_cross_turn_prefix(responses_agent, tmp_path, timestamps, resume):
+def test_full_builder_to_responses_keeps_cross_turn_prefix(responses_agent, tmp_path, timestamps, resume, monkeypatch):
     make_agent, captured, responses, db, sid = responses_agent
     agent = make_agent()
+    # The live-context envelope embeds the wall clock ("Exact Earth time"), so a
+    # turn whose two API calls straddle a second tick rebuilds a DIFFERENT
+    # envelope and the wire-prefix assertion below fails for a reason that has
+    # nothing to do with the contract under test. Freeze what the envelope reads.
+    frozen = datetime(2026, 9, 15, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    monkeypatch.setattr("agent.kissne_context._now", lambda: frozen)
     tool_file = tmp_path / "sanitized-tool.txt"
     tool_file.write_text("fixture result", encoding="utf-8")
     responses.extend([
@@ -133,7 +140,28 @@ def test_full_builder_to_responses_keeps_cross_turn_prefix(responses_agent, tmp_
     assert result["completed"]
     assert len(captured) == 3
     next_input = captured[2]["input"]
-    assert next_input[:len(continuation)] == continuation
+    # Cross-turn: only the CANONICAL turn-1 message is replayed. The live-context
+    # envelope is per-turn tail decoration that deliberately never enters Unified
+    # History, so the old "next wire starts with the whole previous wire" prefix
+    # property cannot hold — turn 1's wire carries turn 1's own envelope.
+    canonical_first = _render("first question") if timestamps else "first question"
+    assert any(
+        item.get("role") == "user" and item.get("content") == canonical_first
+        for item in next_input
+    ), "canonical turn-1 user message must be replayed"
+    assert not any(
+        isinstance(item.get("content"), str)
+        and KISSNE_LIVE_CONTEXT_OPEN in item["content"]
+        and "first question" in item["content"]
+        for item in next_input
+    ), "turn-1 live envelope must not be replayed into the next turn"
+    assert any(
+        isinstance(item.get("content"), str)
+        and KISSNE_LIVE_CONTEXT_OPEN in item["content"]
+        and KISSNE_USER_MESSAGE_OPEN in item["content"]
+        and "second question" in item["content"]
+        for item in next_input
+    ), "current turn must carry a fresh envelope"
     assert not any("api_content" in item or "timestamp" in item for item in next_input)
     assert any(item.get("encrypted_content") == "synthetic-reasoning" for item in next_input)
     assert any(item.get("phase") == "final_answer" for item in next_input)
