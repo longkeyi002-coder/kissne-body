@@ -25,6 +25,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
+from agent import identity_state
 from agent.runtime_cwd import resolve_context_cwd
 from agent.kissne_context import make_context_layers
 from hermes_constants import get_default_hermes_root, get_hermes_home
@@ -489,9 +490,21 @@ def _memory_parts(agent: Any) -> List[str]:
 def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[str], bool]:
     """SOUL.md (primary identity; cron keeps the persona while skipping cwd
     instructions, scoped to the agent's OWN home) or the default identity.
-    Returns ``(parts, soul_loaded)``."""
+    Returns ``(parts, soul_loaded)``.
+
+    KB1-IDENTITY-DEGRADED: when the slot is absent, an untouched placeholder or
+    a legacy template, ``load_soul_md`` returns None *and* records the degraded
+    classification. The generic default is still in force (the model needs a
+    behavior spec), but the slot now carries an explicit notice naming the
+    degraded file and forbidding that default from passing as a personal
+    identity. A patched-out reader records nothing and stays a no-op here.
+    """
     wants_soul = agent.load_soul_identity or not agent.skip_context_files
     _soul_content = _pb.load_soul_md(ctx_len, home_override=_agent_home(agent)) if wants_soul else None
+    soul_slot = _pb.consume_identity_slot(identity_state.SOUL) if wants_soul else None
+    agent._identity_soul_slot = soul_slot
+    if soul_slot is not None and soul_slot.degraded:
+        return ([soul_slot.notice, DEFAULT_AGENT_IDENTITY], False)
     return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
 
 
@@ -628,6 +641,12 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+    # Drop identity-slot classifications leaked by a reader called before this
+    # build (a test's direct load_soul_md/load_self_md call, a /reread): the
+    # identity state must describe THIS build only.
+    _pb.drain_identity_slots()
+    agent._identity_soul_slot = None
+    agent._identity_self_slot = None
     # ── Stable tier ────────────────────────────────────────────────
     stable_identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
     # Hermes' whole stable cache tier is not Kissne Stable Core. Only the
@@ -671,6 +690,15 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
     self_snapshot = (
         _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))
         if wants_identity_snapshot else None
+    )
+    # KB1-IDENTITY-DEGRADED: an absent or untouched-placeholder SELF.md must not
+    # read as recorded self-state; the explicit degraded notice takes its place.
+    self_slot = _pb.consume_identity_slot(identity_state.SELF) if wants_identity_snapshot else None
+    agent._identity_self_slot = self_slot
+    if self_slot is not None and self_slot.degraded:
+        self_snapshot = self_slot.notice
+    agent._identity_state = identity_state.merge_slots(
+        getattr(agent, "_identity_soul_slot", None), self_slot
     )
     memory_snapshot_parts = _memory_parts(agent)
     volatile_parts: List[Optional[str]] = _kissne_volatile_head(
@@ -732,7 +760,32 @@ def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_status(warning)
+    _announce_identity_degraded(agent)
     return full_prompt
+
+
+def _announce_identity_degraded(agent: Any) -> None:
+    """Emit the one-line identity-degraded warning (deduped on the reason set).
+
+    KB1-IDENTITY-DEGRADED: the prompt now *says* the identity is degraded, but a
+    running instance must also tell its human — the whole failure mode was a
+    clone/restore silently carrying a generic persona. Deduped per reason set so
+    a rebuild (compression, model switch) does not repeat itself until the state
+    actually changes. Never raises: status plumbing must not break a prompt build.
+    """
+    try:
+        state = getattr(agent, "_identity_state", None)
+        if state is None or not state.degraded:
+            return
+        if getattr(agent, "_identity_degraded_announced", None) == state.reasons:
+            return
+        agent._identity_degraded_announced = state.reasons
+        logger.warning("identity degraded: %s", ", ".join(state.reasons))
+        emit = getattr(agent, "_emit_warning", None) or getattr(agent, "_emit_status", None)
+        if emit is not None:
+            emit(state.warning)
+    except Exception:
+        logger.debug("identity-degraded announcement failed", exc_info=True)
 
 
 def invalidate_system_prompt(agent: Any, reason: Optional[str] = None) -> None:

@@ -401,15 +401,17 @@ class TestBuildSkillsSystemPrompt:
 
 
 class TestBuildContextFilesPrompt:
-    def test_empty_dir_loads_seeded_global_soul(self, tmp_path):
-        from unittest.mock import patch
-
+    def test_empty_dir_loads_global_soul(self, tmp_path):
+        # A *user-authored* SOUL.md is what still belongs in project context;
+        # the untouched seeded default is identity-degraded instead and is
+        # deliberately not injected (KB1-IDENTITY-DEGRADED, see
+        # tests/agent/test_identity_degraded.py).
         fake_home = tmp_path / "fake_home"
         fake_home.mkdir()
-        with patch("pathlib.Path.home", return_value=fake_home):
-            result = build_context_files_prompt(cwd=str(tmp_path))
+        (fake_home / "SOUL.md").write_text("You are Pippa, a lighthouse keeper.", encoding="utf-8")
+        result = build_context_files_prompt(cwd=str(tmp_path), home_override=fake_home)
         assert "Project Context" in result
-        assert "Hermes Agent" in result
+        assert "lighthouse keeper" in result
 
     def test_loads_agents_md(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Use Ruff for linting.")
