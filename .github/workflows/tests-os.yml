@@ -61,7 +61,10 @@ jobs:
             runner: macos-latest
             marker: macos_only
           - name: Windows-only tests
-            runner: windows-latest-32-core
+            # Was `windows-latest-32-core`: a larger runner this fork cannot
+            # provision, so the job queued forever and never reported. The
+            # standard runner is slower but actually runs.
+            runner: windows-latest
             marker: windows_only
     steps:
       - name: Checkout code

@@ -21,6 +21,13 @@ jobs:
     # 96 cores clear the floor that the slowest single test file sets (about
     # 82s). A second slice divides work that is already at that floor, and
     # adds a second setup.
+    # `ubuntu-latest-96-core` is a *larger runner*: this fork's plan cannot
+    # provision it, so the job sat in `queued` forever on every PR (observed
+    # 2026-09-15). The same suite runs on a standard runner via
+    # `.github/workflows/pr-tests.yml` (`Python tests (ubuntu-latest)`), which is
+    # what actually gates PRs here. Provision larger runners, then set the repo
+    # variable KISSNE_ENABLE_LARGER_RUNNERS=true to bring this lane back.
+    if: vars.KISSNE_ENABLE_LARGER_RUNNERS == 'true'
     runs-on: ubuntu-latest-96-core
     timeout-minutes: 30
     steps:
