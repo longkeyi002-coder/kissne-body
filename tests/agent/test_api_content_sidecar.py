@@ -486,7 +486,7 @@ class TestRequestLocalWireProjection:
             sent = _user_messages(request)[0]["content"]
             assert "<kissne_live_context>" in sent
             assert "PLUGIN-CTX" in sent
-            assert "<user_message>hello please</user_message>" in sent
+            assert "<user_message>\nhello please\n</user_message>" in sent
             for message in request.get("messages", []):
                 assert "api_content" not in message
 
@@ -519,7 +519,7 @@ class TestRequestLocalWireProjection:
         assert replayed["content"] == "hello please"
         assert replayed != turn_n_user
         assert "PLUGIN-CTX" not in replayed["content"]
-        assert "<user_message>second question</user_message>" in current["content"]
+        assert "<user_message>\nsecond question\n</user_message>" in current["content"]
         assert "PLUGIN-CTX" in current["content"]
 
 
