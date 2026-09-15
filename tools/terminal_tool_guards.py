@@ -250,13 +250,14 @@ def self_repo_block(
     workdir: Optional[str],
     session_key: str,
 ) -> Optional[str]:
-    """Windows-only guard against git-mutating the checkout backing this interpreter.
+    """Guard against git-mutating the checkout backing this interpreter.
 
-    NTFS locks loaded module files, so rewriting the live checkout can corrupt
-    the running process; POSIX keeps old inodes alive for open handles, so the
-    guard is off there (``guard_active``). Local backend only — remote
-    backends cannot reach that checkout. Returns the JSON error string when
-    blocked, else None.
+    Rewriting the live checkout corrupts the running process on NTFS (loaded
+    module files are locked) and mixes module versions on POSIX once a later
+    lazy import resolves against the rewritten tree; the guard is therefore on
+    for every platform (``guard_active``). Local backend only — remote backends
+    cannot reach that checkout. Returns the JSON error string when blocked,
+    else None.
     """
     from tools.self_repo_guard import detect_self_repo_git_mutation, guard_active
     from tools.terminal_tool import _resolve_command_cwd

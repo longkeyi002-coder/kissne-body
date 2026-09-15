@@ -436,10 +436,15 @@ def _find_mutation(command: str, cwd: Path, root: Path, depth: int = 0) -> str |
 
 
 def guard_active() -> bool:
-    """Windows-only: NTFS locks loaded .py/.pyd files, so overwriting the live checkout can
-    corrupt the running process. On POSIX open handles keep the old inode alive; the mixed-module
-    hazard is limited to later lazy imports — not worth blocking every git workflow for."""
-    return os.name == "nt"
+    """Whether the live-source checkout guard applies on this platform.
+
+    Always on. Rewriting the checkout behind the running interpreter is a promotion-boundary
+    question, not a Windows filesystem quirk: NTFS locks loaded ``.py``/``.pyd`` files outright,
+    and on POSIX a rewritten tree still mixes module versions as soon as a later lazy import
+    resolves against it. Candidate/test/promotion discipline is therefore required on every
+    platform, not only where the filesystem complains.
+    """
+    return True
 
 
 def detect_self_repo_git_mutation(
