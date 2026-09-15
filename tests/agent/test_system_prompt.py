@@ -433,6 +433,10 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
 
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
+        # No identity slot in this fixture: an unsuppressed SELF.md would add the
+        # degraded-state notice and this test asserts the whole prompt verbatim
+        # (identity behavior is covered by tests/agent/test_identity_degraded.py).
+        patch("agent.prompt_builder.load_self_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
         patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
         patch(

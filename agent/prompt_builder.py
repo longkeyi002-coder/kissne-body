@@ -20,6 +20,7 @@ from hermes_constants import (
 )
 
 from agent.model_metadata import CHARS_PER_TOKEN
+from agent import identity_state
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, ORG_ACTIVE_MARKER, ORG_MIRROR_DIR_NAME, ORG_PROVENANCE_FILE, SKILL_SUPPORT_DIRS,
@@ -1062,6 +1063,41 @@ def drain_truncation_warnings() -> list:
     return drained
 
 
+# Identity-slot classifications recorded while reading SOUL.md / SELF.md.
+# A ContextVar for the same reason as the truncation warnings above: concurrent
+# gateway prompt builds over one thread must not drain each other's.  The
+# readers record; the prompt assembler consumes and turns the degraded subset
+# into an explicit notice + user-visible warning (KB1-IDENTITY-DEGRADED).
+_identity_slots: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
+    "identity_slot_classifications", default=()
+)
+
+
+def _record_identity_slot(slot: "identity_state.IdentitySlot") -> None:
+    _identity_slots.set(_identity_slots.get() + (slot,))
+
+
+def consume_identity_slot(name: str) -> "Optional[identity_state.IdentitySlot]":
+    """Take (and clear) the classification last recorded for slot *name*.
+
+    ``None`` when nothing was recorded — including when a caller patched
+    :func:`load_soul_md` / :func:`load_self_md` out, which must stay a no-op
+    for the identity policy rather than a surprise degradation.
+    """
+    recorded = _identity_slots.get()
+    consumed = next((s for s in recorded if s.name == name), None)
+    if consumed is not None:
+        _identity_slots.set(tuple(s for s in recorded if s is not consumed))
+    return consumed
+
+
+def drain_identity_slots() -> tuple:
+    """Return and clear every recorded identity-slot classification (build boundary hygiene)."""
+    recorded = _identity_slots.get()
+    _identity_slots.set(())
+    return recorded
+
+
 # Skills index (two-layer cache: in-process LRU, then disk snapshot).
 # One entry per profile × platform (key carries skills_dir); a multiplexing gateway needs more than a handful.
 # Sized for multi-profile processes: since #86313 the cache key carries a per-profile skills_dir (one entry
@@ -1452,6 +1488,12 @@ def _truncate_content(
 def load_soul_md(context_length: Optional[int] = None, home_override: "Path | None" = None) -> Optional[str]:
     """SOUL.md from HERMES_HOME (identity slot #1), or None.
 
+    ``None`` covers *three* distinct cases, each of which is recorded as an
+    explicit degraded identity slot for the prompt assembler to surface:
+    the file is absent, it is an untouched auto-seeded default, or it is a
+    legacy installer template (KB1-IDENTITY-DEGRADED). Only user-authored text
+    is ever returned as the persona.
+
     Callers must pass ``skip_soul=True`` to ``build_context_files_prompt`` so it isn't injected twice.
     ``home_override`` pins the profile home (a thread that lost the HERMES_HOME ContextVar reads the wrong one).
 
@@ -1467,6 +1509,7 @@ def load_soul_md(context_length: Optional[int] = None, home_override: "Path | No
         logger.debug("Could not ensure HERMES_HOME before loading SOUL.md: %s", e)
     soul_path = (Path(home_override) if home_override is not None else get_hermes_home()) / "SOUL.md"
     if not soul_path.exists():
+        _record_identity_slot(identity_state.soul_slot(None, str(soul_path)))
         return None
     try:
         content = (_read_text_with_timeout(soul_path) or "").strip()
@@ -1475,7 +1518,13 @@ def load_soul_md(context_length: Optional[int] = None, home_override: "Path | No
             # now injects the live section in Bot Chat only, so the copy is dead weight everywhere.
             from tools.bot_mode_probe import strip_legacy_protocol
             content = strip_legacy_protocol(content).strip()
-        if not content:
+        # KB1-IDENTITY-DEGRADED: classify BEFORE returning, and never hand back an
+        # absent / untouched-placeholder / legacy-template SOUL as if it were this
+        # instance's persona. The caller sees the same ``None`` it always did for an
+        # absent file, plus a recorded degraded slot it must surface explicitly.
+        slot = identity_state.soul_slot(content, str(soul_path))
+        _record_identity_slot(slot)
+        if slot.degraded:
             return None
         return _truncate_content(_scan_context_content(content, "SOUL.md"), "SOUL.md", context_length=context_length,
                                  read_path=str(soul_path))
@@ -1521,6 +1570,11 @@ def load_self_md(
         else home / "memories" / "SELF.md"
     )
     content = _read_context_file(self_path)
+    # KB1-IDENTITY-DEGRADED: record the classification here (missing /
+    # placeholder / ok) so the prompt assembler can replace an untouched
+    # template with an explicit degraded notice instead of injecting it as
+    # this instance's self-state. The reader itself stays a faithful reader.
+    _record_identity_slot(identity_state.self_slot(content, str(self_path)))
     if not content:
         return None
     return _context_section(

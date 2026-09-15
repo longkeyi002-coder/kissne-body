@@ -369,6 +369,18 @@ def test_degraded_identity_is_announced_to_the_user_once_per_state(tmp_path):
     assert "no personalized identity" in emitted[0].lower()
 
 
+def test_untouched_placeholder_soul_is_not_injected_as_project_context(tmp_path):
+    """The other SOUL injection path (build_context_files_prompt) must not smuggle
+    the untouched default in as project context either."""
+    from agent.prompt_builder import build_context_files_prompt
+
+    home = tmp_path / "seeded"
+    home.mkdir()
+    _write(home / "SOUL.md", DEFAULT_SOUL_MD)
+
+    assert build_context_files_prompt(cwd=str(tmp_path), home_override=home) == ""
+
+
 def test_a_personal_identity_emits_no_warning(tmp_path):
     home = tmp_path / "personal"
     home.mkdir()
