@@ -20,6 +20,11 @@ The old product names (``user_memory`` …) survive only as boundary translation
 memory, in storage, in the serialized form — carries ``subject`` and never a
 duplicate ``category``.
 
+The axes, the pointer vocabulary and the shared consistency rules all come from
+:mod:`agent.memory_vocabulary` — the single definition, shared with the
+Biography contract.  Nothing here imports that contract, and it imports nothing
+from here.
+
 Four rules this contract refuses to soften:
 
 * **Traceability.**  ``source_refs`` is mandatory and non-empty: every claim is
@@ -41,96 +46,77 @@ reentry, any storage or embedding (KB2-D, KB4).
 
 Field sets are exported as frozen tuples so that widening the schema has to be a
 test-visible change.
-
-Note on layering: this module imports the pointer vocabulary (``SourceRef`` /
-``Evidence``) from :mod:`agent.biography` rather than defining a second one, so
-the dependency runs one way only.  ``agent.biography`` keeps its own literal
-axis values; ``tests/agent/test_biography.py`` locks them to this module's.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
-from agent.biography import (
+from agent.memory_vocabulary import (
+    EPISTEMIC_AGENT_EXPERIENCED,
+    EPISTEMIC_HYPOTHETICAL,
+    EPISTEMIC_INFERRED,
+    EPISTEMIC_OBSERVED,
+    EPISTEMIC_USER_DECLARED,
+    EPISTEMICS,
     EVIDENCE_AI_WORLD_EXPERIENCE,
+    EVIDENCE_EXECUTION,
+    EVIDENCE_FIELDS,
     EVIDENCE_TOOL_RECEIPT,
     EVIDENCE_WORLD_EVENT,
-    EVIDENCE_EXECUTION,
+    KIND_EPISODE,
+    KIND_EVENT,
+    KIND_FACT,
+    KIND_IMPRESSION,
+    KIND_INTENTION,
+    KIND_PREFERENCE,
+    KIND_STATE,
+    KINDS,
+    LEGACY_SUBJECT_ALIASES,
+    REALM_AI_WORLD,
+    REALM_CONVERSATION,
+    REALM_EARTH,
+    REALM_SYSTEM,
+    REALMS,
     SELF_EVIDENCE_KINDS,
+    SOURCE_CONVERSATION_TURN,
+    SOURCE_EARTH_OBSERVATION,
+    SOURCE_EVENT,
     SOURCE_KINDS,
+    SOURCE_REF_FIELDS,
+    SOURCE_TOOL_RECEIPT,
+    SUBJECT_PROJECT,
+    SUBJECT_SHARED,
+    SUBJECT_USER,
+    SUBJECT_YEQINGXU,
+    SUBJECTS,
     Evidence,
+    HypotheticalNotAnEventError,
+    InvalidEpistemicError,
     InvalidEvidenceKindError,
+    InvalidKindError,
+    InvalidProvenanceError,
+    InvalidRealmError,
+    InvalidSourceRefError,
+    InvalidSubjectError,
+    MissingEvidenceError,
+    MissingSourceRefError,
+    MemoryVocabularyError,
+    Provenance,
     SourceRef,
+    SubjectConflictError,
+    UnsupportedEvidenceKindError,
+    check_consistency,
+    is_hypothetical_event,
+    requires_real_evidence,
+    resolve_subject,
 )
 
 # ── schema identity ─────────────────────────────────────────────────────────
 
 SCHEMA_ID = "kissne.memory_claim/1"
-
-# ── 1. subject: whose fact / experience / state this is ─────────────────────
-
-SUBJECT_USER = "user"
-SUBJECT_YEQINGXU = "yeqingxu"
-SUBJECT_SHARED = "shared"
-SUBJECT_PROJECT = "project"
-
-SUBJECTS = (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED, SUBJECT_PROJECT)
-
-# Product-language names are aliases only.  They are never a canonical value.
-LEGACY_SUBJECT_ALIASES = {
-    "user_memory": SUBJECT_USER,
-    "self_memory": SUBJECT_YEQINGXU,
-    "shared_memory": SUBJECT_SHARED,
-    "project_memory": SUBJECT_PROJECT,
-}
-
-# ── 2. kind: a second axis, fully independent of subject ────────────────────
-
-KIND_FACT = "fact"
-KIND_EVENT = "event"
-KIND_STATE = "state"
-KIND_PREFERENCE = "preference"
-KIND_INTENTION = "intention"
-KIND_IMPRESSION = "impression"
-KIND_EPISODE = "episode"
-
-KINDS = (
-    KIND_FACT,
-    KIND_EVENT,
-    KIND_STATE,
-    KIND_PREFERENCE,
-    KIND_INTENTION,
-    KIND_IMPRESSION,
-    KIND_EPISODE,
-)
-
-# ── 3. realm: which world the claim belongs to ──────────────────────────────
-
-REALM_EARTH = "EARTH"
-REALM_AI_WORLD = "AI_WORLD"
-REALM_CONVERSATION = "CONVERSATION"
-REALM_SYSTEM = "SYSTEM"
-
-REALMS = (REALM_EARTH, REALM_AI_WORLD, REALM_CONVERSATION, REALM_SYSTEM)
-
-# ── 4. epistemic: how the claim is known ────────────────────────────────────
-
-EPISTEMIC_OBSERVED = "OBSERVED"
-EPISTEMIC_USER_DECLARED = "USER_DECLARED"
-EPISTEMIC_AGENT_EXPERIENCED = "AGENT_EXPERIENCED"
-EPISTEMIC_INFERRED = "INFERRED"
-EPISTEMIC_HYPOTHETICAL = "HYPOTHETICAL"
-
-EPISTEMICS = (
-    EPISTEMIC_OBSERVED,
-    EPISTEMIC_USER_DECLARED,
-    EPISTEMIC_AGENT_EXPERIENCED,
-    EPISTEMIC_INFERRED,
-    EPISTEMIC_HYPOTHETICAL,
-)
 
 # ── frozen field sets ───────────────────────────────────────────────────────
 
@@ -155,30 +141,10 @@ CLAIM_TIME_FIELDS = ("occurred_at", "recorded_at")
 CLAIM_VALIDITY_FIELDS = ("valid_from", "valid_to")
 
 
-# ── errors ──────────────────────────────────────────────────────────────────
+# ── claim-shape errors (the axes' errors live in the vocabulary) ────────────
 
 class ClaimError(ValueError):
     """Base class for every claim-contract violation."""
-
-
-class InvalidSubjectError(ClaimError):
-    """Subject is missing, or is not one of the canonical subjects."""
-
-
-class SubjectConflictError(ClaimError):
-    """A legacy ``category`` travelled next to a canonical ``subject``."""
-
-
-class InvalidKindError(ClaimError):
-    """Kind is not one of the frozen memory kinds."""
-
-
-class InvalidRealmError(ClaimError):
-    """Realm is missing or unknown; claims never guess which world they are in."""
-
-
-class InvalidEpistemicError(ClaimError):
-    """Epistemic is missing or unknown, so 'how it is known' would be lost."""
 
 
 class InvalidTimeError(ClaimError):
@@ -187,18 +153,6 @@ class InvalidTimeError(ClaimError):
 
 class InvalidValidityWindowError(ClaimError):
     """The validity window is malformed, or runs backwards."""
-
-
-class MissingClaimSourceRefError(ClaimError):
-    """A claim arrived with nothing to walk back to — the case this ticket exists for."""
-
-
-class MissingEvidenceError(ClaimError):
-    """A first-person claim with nothing behind it."""
-
-
-class HypotheticalNotAnEventError(ClaimError):
-    """A hypothetical is not an event that happened; it never becomes one here."""
 
 
 class InvalidClaimError(ClaimError):
@@ -220,24 +174,6 @@ def _iso_timestamp(value: Any) -> bool:
     except ValueError:
         return False
     return True
-
-
-def resolve_subject(value: Any) -> str:
-    """Boundary translation only: accept a canonical subject, or an old product name.
-
-    Returns the canonical subject so callers can hand it to :class:`Claim`; an
-    unknown value is refused rather than guessed.
-    """
-    if isinstance(value, str):
-        if value in SUBJECTS:
-            return value
-        alias = LEGACY_SUBJECT_ALIASES.get(value)
-        if alias is not None:
-            return alias
-    raise InvalidSubjectError(
-        f"subject {value!r} is not a canonical subject {SUBJECTS}; "
-        f"legacy product names may be translated ({sorted(LEGACY_SUBJECT_ALIASES)}) but are never stored"
-    )
 
 
 # ── the contract ────────────────────────────────────────────────────────────
@@ -312,18 +248,10 @@ class Claim:
                     "valid_from is after valid_to; a claim that stops being true before it starts is not valid"
                 )
 
-        # A hypothetical is a thought about a possible world, not a record that
-        # something happened.
-        if self.epistemic == EPISTEMIC_HYPOTHETICAL and self.kind == KIND_EVENT:
-            raise HypotheticalNotAnEventError(
-                "a HYPOTHETICAL claim cannot be an event that happened; "
-                "saying it in conversation does not make it history"
-            )
-
         # traceability: pointers at canonical records, never a copy of them.
         refs = tuple(self.source_refs or ())
         if not refs:
-            raise MissingClaimSourceRefError(
+            raise MissingSourceRefError(
                 "source_refs must carry at least one pointer at a canonical record"
             )
         for ref in refs:
@@ -335,12 +263,10 @@ class Claim:
         for item in items:
             if not isinstance(item, Evidence):
                 raise InvalidClaimError("evidence must contain only Evidence values")
-        if self.epistemic == EPISTEMIC_AGENT_EXPERIENCED and self.subject == SUBJECT_YEQINGXU and not items:
-            raise MissingEvidenceError(
-                "subject=yeqingxu with AGENT_EXPERIENCED requires execution / tool receipt / "
-                "world event evidence; without it there is no first-person experience to record"
-            )
         object.__setattr__(self, "evidence", items)
+
+        # shared rules, one implementation (agent.memory_vocabulary)
+        check_consistency(subject=self.subject, kind=self.kind, epistemic=self.epistemic, evidence=items)
 
         if self.policy is None:
             object.__setattr__(self, "policy", {})
@@ -388,7 +314,7 @@ def serialize_claim(claim: Claim) -> dict:
 def _load_source_ref(data: Any) -> SourceRef:
     if not isinstance(data, Mapping):
         raise InvalidClaimError("source_ref must be a mapping")
-    unknown = set(data) - {"kind", "ref", "locator"}
+    unknown = set(data) - set(SOURCE_REF_FIELDS)
     if unknown:
         raise InvalidClaimError(f"unknown source_ref fields: {sorted(unknown)}")
     try:
@@ -400,7 +326,7 @@ def _load_source_ref(data: Any) -> SourceRef:
 def _load_evidence(data: Any) -> Evidence:
     if not isinstance(data, Mapping):
         raise InvalidClaimError("evidence item must be a mapping")
-    unknown = set(data) - {"kind", "sourceRef", "detail"}
+    unknown = set(data) - set(EVIDENCE_FIELDS)
     if unknown:
         raise InvalidClaimError(f"unknown evidence fields: {sorted(unknown)}")
     try:

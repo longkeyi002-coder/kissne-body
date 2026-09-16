@@ -47,6 +47,8 @@ from agent.biography import (
     ENTRY_FIELDS,
     SCHEMA_ID,
     BiographyEntry,
+    deserialize_entry,
+    serialize_entry,
 )
 from agent.memory_vocabulary import (
     EPISTEMIC_AGENT_EXPERIENCED,
@@ -81,8 +83,6 @@ from agent.memory_vocabulary import (
     Provenance,
     SourceRef,
     UnsupportedEvidenceKindError,
-    deserialize_entry,
-    serialize_entry,
 )
 
 
@@ -128,7 +128,7 @@ def _entry(
     return BiographyEntry(**kwargs)
 
 
-# ── 2. the three categories exist and are distinct ──────────────────────────
+# ── 2. the three biography subjects exist and are distinct ──────────────────────────
 
 def test_schema_id_is_declared():
     assert SCHEMA_ID == "kissne.biography/1"

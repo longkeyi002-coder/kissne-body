@@ -217,17 +217,16 @@ def test_axis_tuples_are_the_same_object_everywhere_they_appear():
     assert memory_claim.Evidence is vocabulary.Evidence
 
 
-def test_axis_literals_appear_in_exactly_one_module():
-    """四条轴的取值只许在 vocabulary 里逐字出现一次 —— 重复定义就是第二真相。"""
-    literals = {
-        "KINDS": '"fact", "event", "state", "preference", "intention", "impression", "episode"',
-        "REALMS": '"EARTH", "AI_WORLD", "CONVERSATION", "SYSTEM"',
-        "EPISTEMICS": '"OBSERVED", "USER_DECLARED", "AGENT_EXPERIENCED", "INFERRED", "HYPOTHETICAL"',
-    }
-    for name, literal in literals.items():
-        hits = [
-            path.name
-            for path in sorted(AGENT_DIR.glob("*.py"))
-            if literal in re.sub(r"\s+", " ", path.read_text(encoding="utf-8"))
-        ]
-        assert hits == ["memory_vocabulary.py"], f"{name} literal also appears in {hits}"
+def test_axis_value_spellings_live_only_in_the_vocabulary():
+    """四个轴的取值拼写只允许出现在词表里：别的模块想用就 import，不许再抄一遍。"""
+    contracts = ("memory_vocabulary.py", "memory_claim.py", "biography.py")
+    literals = set(SUBJECTS) | set(KINDS) | set(REALMS) | set(EPISTEMICS)
+    offenders = set()
+    for name in contracts:
+        if name == "memory_vocabulary.py":
+            continue
+        text = (AGENT_DIR / name).read_text(encoding="utf-8")
+        copied = sorted(value for value in literals if f'"{value}"' in text)
+        if copied:
+            offenders.add((name, tuple(copied)))
+    assert not offenders, f"这些合同模块自己抄了轴取值: {sorted(offenders)}"

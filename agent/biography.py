@@ -36,77 +36,72 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
+
+from agent.memory_vocabulary import (
+    EPISTEMIC_AGENT_EXPERIENCED,
+    EPISTEMICS,
+    EVIDENCE_AI_WORLD_EXPERIENCE,
+    EVIDENCE_EXECUTION,
+    EVIDENCE_FIELDS,
+    EVIDENCE_TOOL_RECEIPT,
+    EVIDENCE_WORLD_EVENT,
+    KIND_EVENT,
+    KINDS,
+    PROVENANCE_FIELDS,
+    REALMS,
+    SELF_EVIDENCE_KINDS,
+    SOURCE_CONVERSATION_TURN,
+    SOURCE_EARTH_OBSERVATION,
+    SOURCE_EVENT,
+    SOURCE_KINDS,
+    SOURCE_REF_FIELDS,
+    SOURCE_TOOL_RECEIPT,
+    SUBJECT_SHARED,
+    SUBJECT_USER,
+    SUBJECT_YEQINGXU,
+    Evidence,
+    HypotheticalNotAnEventError,
+    InvalidEpistemicError,
+    InvalidEvidenceKindError,
+    InvalidKindError,
+    InvalidProvenanceError,
+    InvalidRealmError,
+    InvalidSourceRefError,
+    InvalidSubjectError,
+    MissingEvidenceError,
+    MissingSourceRefError,
+    Provenance,
+    SourceRef,
+    UnsupportedEvidenceKindError,
+    check_consistency,
+)
 
 # ── schema identity ─────────────────────────────────────────────────────────
 
 SCHEMA_ID = "kissne.biography/1"
 
-# ── subject (KB2-A: one axis, canonical values only) ────────────────────────
-# Biography's three subjects are a subset of the memory subject axis
-# (``user`` / ``yeqingxu`` / ``shared`` / ``project``).  The old product names
-# (``user_memory`` …) are boundary aliases in agent/memory_claim.py, never a
-# stored field: keeping both in one record is how the two start disagreeing.
+# ── vocabulary (one definition, in agent/memory_vocabulary) ────────────────
+# The axes, the pointer vocabulary and the shared consistency rules come from
+# the single vocabulary module.  Biography narrows the subject axis to its three
+# subjects; it does not define a second copy of any value.  Nothing here imports
+# the claim contract, and the claim contract imports nothing from here.
 
-SUBJECT_USER = "user"
-SUBJECT_SHARED = "shared"
-SUBJECT_YEQINGXU = "yeqingxu"
-
-SUBJECTS = (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
-
-# ── kind (KB2-A: a second axis, independent of subject) ─────────────────────
-# Locked to agent/memory_claim.KINDS by tests; kept literal here so this module
-# needs no import from the claim contract (the dependency runs one way).
-
-KIND_FACT = "fact"
-KIND_EVENT = "event"
-KIND_STATE = "state"
-KIND_PREFERENCE = "preference"
-KIND_INTENTION = "intention"
-KIND_IMPRESSION = "impression"
-KIND_EPISODE = "episode"
-
-BIOGRAPHY_KINDS = (
-    KIND_FACT,
-    KIND_EVENT,
-    KIND_STATE,
-    KIND_PREFERENCE,
-    KIND_INTENTION,
-    KIND_IMPRESSION,
-    KIND_EPISODE,
-)
-
-# ── canonical record kinds a SourceRef may point at ─────────────────────────
-# These are the authoritative records; a Biography entry references them and
-# never duplicates them.
-
-SOURCE_CONVERSATION_TURN = "conversation_turn"
-SOURCE_TOOL_RECEIPT = "tool_receipt"
-SOURCE_EARTH_OBSERVATION = "earth_observation"
-SOURCE_EVENT = "event"
-
-SOURCE_KINDS = (
-    SOURCE_CONVERSATION_TURN,
-    SOURCE_TOOL_RECEIPT,
-    SOURCE_EARTH_OBSERVATION,
-    SOURCE_EVENT,
-)
-
-# ── evidence kinds that can back a first-person experience ──────────────────
-
-EVIDENCE_EXECUTION = "execution"
-EVIDENCE_TOOL_RECEIPT = "tool_receipt"
-EVIDENCE_WORLD_EVENT = "world_event"
-
-SELF_EVIDENCE_KINDS = (EVIDENCE_EXECUTION, EVIDENCE_TOOL_RECEIPT, EVIDENCE_WORLD_EVENT)
-
-# KB4 territory. Listed so the refusal is explicit and greppable: until AI World
-# exists, there is nothing that could be its evidence.
-EVIDENCE_AI_WORLD_EXPERIENCE = "ai_world_experience"
+BIOGRAPHY_SUBJECTS = (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
 
 # ── frozen field sets ───────────────────────────────────────────────────────
 
-ENTRY_FIELDS = ("entry_id", "subject", "kind", "statement", "provenance", "evidence", "policy")
+ENTRY_FIELDS = (
+    "entry_id",
+    "subject",
+    "kind",
+    "realm",
+    "epistemic",
+    "statement",
+    "provenance",
+    "evidence",
+    "policy",
+)
 PROVENANCE_FIELDS = ("origin", "recorded_by", "recorded_at", "sourceRefs")
 SOURCE_REF_FIELDS = ("kind", "ref", "locator")
 EVIDENCE_FIELDS = ("kind", "sourceRef", "detail")
@@ -116,38 +111,6 @@ EVIDENCE_FIELDS = ("kind", "sourceRef", "detail")
 
 class BiographyError(ValueError):
     """Base class for every contract violation."""
-
-
-class InvalidSourceRefError(BiographyError):
-    """A SourceRef is not a usable pointer at a canonical record."""
-
-
-class InvalidProvenanceError(BiographyError):
-    """Provenance is missing a required, well-formed field."""
-
-
-class MissingSourceRefError(InvalidProvenanceError):
-    """An entry arrived without any traceable source — the case the ticket exists for."""
-
-
-class InvalidEvidenceKindError(BiographyError):
-    """Evidence is not backed by a canonical record, or its kind is unknown."""
-
-
-class UnsupportedEvidenceKindError(InvalidEvidenceKindError):
-    """A real-sounding kind that this milestone cannot support yet (AI World = KB4)."""
-
-
-class MissingEvidenceError(BiographyError):
-    """A first-person claim with nothing behind it."""
-
-
-class InvalidSubjectError(BiographyError):
-    """Subject is not one of the three Biography subjects."""
-
-
-class InvalidKindError(BiographyError):
-    """Kind is not one of the frozen memory kinds."""
 
 
 class InvalidBiographyEntryError(BiographyError):
@@ -173,100 +136,35 @@ def _iso_timestamp(value: Any) -> bool:
 # ── the contract ────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
-class SourceRef:
-    """A stable pointer at one canonical record.  Never a copy of it."""
-
-    kind: str
-    ref: str
-    locator: str = ""
-
-    def __post_init__(self) -> None:
-        if self.kind not in SOURCE_KINDS:
-            raise InvalidSourceRefError(
-                f"source kind {self.kind!r} is not a canonical record kind; expected one of {SOURCE_KINDS}"
-            )
-        if not _text(self.ref):
-            raise InvalidSourceRefError("source ref must be the canonical record's own non-empty id")
-        if self.locator is None:
-            object.__setattr__(self, "locator", "")
-        elif not isinstance(self.locator, str):
-            raise InvalidSourceRefError("locator must be a string when present")
-
-
-@dataclass(frozen=True)
-class Provenance:
-    """Where an entry came from, when, and the records that support it."""
-
-    origin: str
-    recorded_by: str
-    recorded_at: str
-    sourceRefs: Tuple[SourceRef, ...]
-
-    def __post_init__(self) -> None:
-        if not _text(self.origin):
-            raise InvalidProvenanceError("origin must name where the entry came from")
-        if not _text(self.recorded_by):
-            raise InvalidProvenanceError("recorded_by must name who recorded the entry")
-        if not _iso_timestamp(self.recorded_at):
-            raise InvalidProvenanceError("recorded_at must be an ISO-8601 timestamp")
-        refs = tuple(self.sourceRefs or ())
-        if not refs:
-            raise MissingSourceRefError(
-                "provenance must carry at least one sourceRef; a summary with no way back is not a Biography entry"
-            )
-        for ref in refs:
-            if not isinstance(ref, SourceRef):
-                raise InvalidProvenanceError("sourceRefs must contain only SourceRef values")
-        object.__setattr__(self, "sourceRefs", refs)
-
-
-@dataclass(frozen=True)
-class Evidence:
-    """One piece of real backing for a first-person claim, itself traceable."""
-
-    kind: str
-    sourceRef: SourceRef
-    detail: str = ""
-
-    def __post_init__(self) -> None:
-        if self.kind == EVIDENCE_AI_WORLD_EXPERIENCE:
-            raise UnsupportedEvidenceKindError(
-                "ai_world_experience is KB4: no AI World experience exists yet, so it cannot back a claim"
-            )
-        if self.kind not in SELF_EVIDENCE_KINDS:
-            raise InvalidEvidenceKindError(
-                f"evidence kind {self.kind!r} is not backed by a canonical record; expected one of {SELF_EVIDENCE_KINDS}"
-            )
-        if not isinstance(self.sourceRef, SourceRef):
-            raise InvalidEvidenceKindError("evidence must point at a canonical record via SourceRef")
-        if self.detail is None:
-            object.__setattr__(self, "detail", "")
-        elif not isinstance(self.detail, str):
-            raise InvalidEvidenceKindError("evidence detail must be a string when present")
-
-
-@dataclass(frozen=True)
 class BiographyEntry:
     """One distilled, traceable statement: its subject says whose, its kind says which type."""
 
     entry_id: str
-    subject: str
-    kind: str
-    statement: str
-    provenance: Provenance
+    subject: Optional[str] = None
+    kind: Optional[str] = None
+    realm: Optional[str] = None
+    epistemic: Optional[str] = None
+    statement: Optional[str] = None
+    provenance: Optional[Provenance] = None
     evidence: Tuple[Evidence, ...] = ()
     policy: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not _text(self.entry_id):
             raise InvalidBiographyEntryError("entry_id must be a stable, non-empty id")
-        if self.subject not in SUBJECTS:
+        if self.subject not in BIOGRAPHY_SUBJECTS:
             raise InvalidSubjectError(
-                f"subject {self.subject!r} is not a Biography subject; expected one of {SUBJECTS}"
+                f"subject {self.subject!r} is not a Biography subject; expected one of {BIOGRAPHY_SUBJECTS}"
             )
-        if self.kind not in BIOGRAPHY_KINDS:
-            raise InvalidKindError(
-                f"kind {self.kind!r} is not a memory kind; expected one of {BIOGRAPHY_KINDS}"
+        if self.kind not in KINDS:
+            raise InvalidKindError(f"kind {self.kind!r} is not a memory kind; expected one of {KINDS}")
+        if self.realm not in REALMS:
+            raise InvalidRealmError(
+                f"realm {self.realm!r} is not a known realm; expected one of {REALMS}"
+            )
+        if self.epistemic not in EPISTEMICS:
+            raise InvalidEpistemicError(
+                f"epistemic {self.epistemic!r} is not a known epistemic value; expected one of {EPISTEMICS}"
             )
         if not _text(self.statement):
             raise InvalidBiographyEntryError("statement must be the entry's distilled claim")
@@ -282,6 +180,7 @@ class BiographyEntry:
                 "subject=yeqingxu requires execution / tool receipt / world event evidence; "
                 "without it there is no first-person experience to record"
             )
+        check_consistency(subject=self.subject, kind=self.kind, epistemic=self.epistemic, evidence=items)
         object.__setattr__(self, "evidence", items)
 
         if self.policy is None:
@@ -308,17 +207,24 @@ def serialize_entry(entry: BiographyEntry) -> dict:
     """Entry → JSON-ready dict.  Pointers stay pointers; nothing is copied from canon."""
     if not isinstance(entry, BiographyEntry):
         raise InvalidBiographyEntryError("serialize_entry expects a BiographyEntry")
+    provenance = entry.provenance
+    if not isinstance(provenance, Provenance):
+        raise InvalidBiographyEntryError(
+            "an entry without provenance has no way back and cannot be serialized"
+        )
     return {
         "schema": SCHEMA_ID,
         "entry_id": entry.entry_id,
         "subject": entry.subject,
         "kind": entry.kind,
+        "realm": entry.realm,
+        "epistemic": entry.epistemic,
         "statement": entry.statement,
         "provenance": {
-            "origin": entry.provenance.origin,
-            "recorded_by": entry.provenance.recorded_by,
-            "recorded_at": entry.provenance.recorded_at,
-            "sourceRefs": [_dump_source_ref(ref) for ref in entry.provenance.sourceRefs],
+            "origin": provenance.origin,
+            "recorded_by": provenance.recorded_by,
+            "recorded_at": provenance.recorded_at,
+            "sourceRefs": [_dump_source_ref(ref) for ref in provenance.sourceRefs],
         },
         "evidence": [_dump_evidence(item) for item in entry.evidence],
         "policy": dict(entry.policy),
@@ -386,7 +292,11 @@ def deserialize_entry(data: Any) -> BiographyEntry:
     schema = data.get("schema")
     if schema is not None and schema != SCHEMA_ID:
         raise InvalidBiographyEntryError(f"unsupported schema {schema!r}; this contract is {SCHEMA_ID}")
-    missing = [name for name in ("entry_id", "subject", "kind", "statement", "provenance") if name not in data]
+    missing = [
+        name
+        for name in ("entry_id", "subject", "kind", "realm", "epistemic", "statement", "provenance")
+        if name not in data
+    ]
     if missing:
         raise InvalidBiographyEntryError(f"serialized entry is missing required fields: {missing}")
 
@@ -397,6 +307,8 @@ def deserialize_entry(data: Any) -> BiographyEntry:
         entry_id=data["entry_id"],
         subject=data["subject"],
         kind=data["kind"],
+        realm=data["realm"],
+        epistemic=data["epistemic"],
         statement=data["statement"],
         provenance=_load_provenance(data["provenance"]),
         evidence=tuple(_load_evidence(item) for item in evidence),
