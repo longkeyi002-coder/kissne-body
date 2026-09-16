@@ -750,6 +750,11 @@ class AsyncSessionStore:
         return _offloaded
 
 
+class RouteBindingError(ValueError):
+    """A routing alias could not be added. Fail-closed signal for
+    :meth:`SessionStore.bind_source_to_existing_session`: the refusal never half-applies."""
+
+
 class SessionStore(
     SessionPersistenceMixin, SessionRecoveryMixin, SessionLifecycleMixin, SessionTranscriptMixin,
 ):
@@ -1152,6 +1157,71 @@ class SessionStore(
                 display_name=new_entry.display_name, include_compression_ancestors=True,
             )
         return new_entry
+
+    def bind_source_to_existing_session(
+        self, source: SessionSource, target_session_id: str,
+    ) -> SessionEntry:
+        """Point a NEW routing key at an already-existing, active session — alias only.
+
+        Platform-agnostic counterpart of :meth:`switch_session` for "several entry points, one
+        Conversation truth" (Android/Termux/Stealth Chat/…): ``switch_session`` re-points a key that
+        already exists and ends the row it departs, whereas this adds a routing alias for a source
+        that has no routing yet. Only ``gateway_routing`` changes: no session row is created, ended or
+        reopened, and the joined row's identity (``source`` / ``user_id`` / ``session_key`` /
+        ``ended_at`` / ``end_reason``) is left byte-identical.
+
+        Fail closed with :class:`RouteBindingError` when the source is already bound to a different
+        conversation, when the target does not exist in this routing scope, or when the target is
+        already ended. Re-binding the same target is idempotent and returns the existing entry.
+        """
+        if not target_session_id:
+            raise RouteBindingError("bind_source_to_existing_session: target_session_id is required")
+        session_key = self._generate_session_key(source)
+        if not session_key:
+            raise RouteBindingError(
+                "bind_source_to_existing_session: cannot derive a routing key for this source")
+
+        # Target truth is the row itself, in the scope this key routes to: a missing row (another
+        # profile/scope, a typo, a pruned conversation) or an ended one must never receive an alias.
+        db = self._db_for_key(session_key)
+        get_row = getattr(db, "get_session", None)
+        raw = get_row(target_session_id) if callable(get_row) else None
+        row: Optional[Dict[str, Any]] = dict(raw) if isinstance(raw, dict) else None
+        if row is None:
+            raise RouteBindingError(
+                f"bind_source_to_existing_session: session {target_session_id} does not exist in the "
+                f"routing scope of {session_key!r}; refusing to add an alias")
+
+        if row.get("ended_at") is not None or row.get("end_reason"):
+            raise RouteBindingError(
+                f"bind_source_to_existing_session: session {target_session_id} is already ended "
+                f"({row.get('end_reason')!r}); refusing to alias a finished conversation")
+
+        with self._lock:
+            self._ensure_loaded_locked()
+            current = self._entries.get(session_key)
+            if current is not None and current.session_id == target_session_id:
+                return current  # idempotent: same source, same target — nothing to write
+            if current is not None and current.session_id:
+                raise RouteBindingError(
+                    f"bind_source_to_existing_session: routing key {session_key!r} is already bound to "
+                    f"{current.session_id}; refusing to re-point it at {target_session_id} "
+                    "(/resume-style re-pointing is switch_session's contract, not an alias)"
+                )
+            now = _now()
+            # Alias entry: carries the NEW source's origin so inbound replies resolve here, while the
+            # joined row keeps its own identity untouched.
+            alias = SessionEntry(
+                session_key=session_key, session_id=target_session_id,
+                created_at=now, updated_at=now,
+                origin=source, display_name=source.chat_name,
+                platform=source.platform, chat_type=source.chat_type,
+            )
+            self._entries[session_key] = alias
+            # Single-row routing UPSERT (state.db gateway_routing is the primary index); the mirror is
+            # refreshed by the next full rewrite. No session row is touched.
+            self._save_entry(session_key, lock_held=True)
+        return alias
 
     def list_sessions(self, active_minutes: Optional[int] = None) -> List[SessionEntry]:
         """List all sessions, optionally filtered by activity."""
