@@ -1,11 +1,11 @@
-"""KB2-A-CLAIM-CONTRACT — the minimum contract for a Kissne Memory Claim.
+"""KB2-A + KB2-B — canonical Kissne Memory Claim contract.
 
 A Memory Claim is the smallest unit of long-term memory: one fact, experience,
 state, preference, intention, impression or episode, belonging to exactly one
 subject, known in exactly one way, living in exactly one world, and pinned to
 real time — with a way back to the canonical record it came from.
 
-This module freezes only the six groups the ticket named:
+KB2-A freezes the base claim fields:
 
 * ``subject``   — whose fact / experience / state this is
 * ``kind``      — what type of memory it is (a second, independent axis)
@@ -13,6 +13,16 @@ This module freezes only the six groups the ticket named:
 * ``epistemic`` — how it is known
 * time triple   — ``occurred_at`` / ``recorded_at`` / ``timezone``
 * valid time    — ``valid_from`` / ``valid_to``
+
+KB2-B layers mutation semantics on top without changing A's frozen
+``CLAIM_FIELDS`` tuple:
+
+* ``status``      — CURRENT / SUPERSEDED / CONTRADICTED / ARCHIVED
+* ``supersedes``  — older claim ids this claim replaces
+* ``contradicts`` — older claim ids this claim disputes/corrects
+
+B only represents these relations.  It never decides that a mutation should
+happen and never rewrites another claim; those are KB2-C responsibilities.
 
 Two axes, never one: ``subject`` answers *whose*, ``kind`` answers *what type*.
 The old product names (``user_memory`` …) survive only as boundary translations
@@ -22,10 +32,10 @@ duplicate ``category``.
 
 The axes, the pointer vocabulary and the shared consistency rules all come from
 :mod:`agent.memory_vocabulary` — the single definition, shared with the
-Biography contract.  Nothing here imports that contract, and it imports nothing
-from here.
+Biography contract.  Mutation-state vocabulary lives separately in
+:mod:`agent.memory_mutation_semantics`.  Neither layer imports Biography.
 
-Four rules this contract refuses to soften:
+Hard rules this contract refuses to soften:
 
 * **Traceability.**  ``source_refs`` is mandatory and non-empty: every claim is
   walkable back to a canonical record (Unified History stays the evidence
@@ -36,16 +46,14 @@ Four rules this contract refuses to soften:
 * **No fabricated past.**  ``subject=yeqingxu`` + ``AGENT_EXPERIENCED`` needs
   real execution / tool-receipt / world-event evidence, otherwise it is refused
   rather than invented.
+* **Old facts are not overwritten.**  B represents replacement/correction with
+  ids and status while retaining the old record's own content and provenance.
 * **Undecided stays undecided.**  Sensitivity handling and Shared Event
   granularity are the future policy layer's call: ``policy`` is opaque and
   round-trips untouched.
 
-Deliberately absent (their own tickets): ``status`` / ``supersedes`` /
-``contradicts`` (KB2-B), the Mutation Gate and write decisions (KB2-C), Recall,
-reentry, any storage or embedding (KB2-D, KB4).
-
-Field sets are exported as frozen tuples so that widening the schema has to be a
-test-visible change.
+Still deliberately absent: the Mutation Gate and write decisions (KB2-C),
+Recall/reentry/storage/embedding (KB2-D and later).
 """
 
 from __future__ import annotations
@@ -54,6 +62,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Optional, Tuple
 
+from agent.memory_mutation_semantics import (
+    MUTATION_FIELDS,
+    STATUS_CURRENT,
+    InvalidClaimRelationError,
+    InvalidClaimStatusError,
+    MutationSemanticsError,
+    decode_mutation_fields,
+    encode_mutation_fields,
+    normalize_relations,
+    validate_status,
+)
 from agent.memory_vocabulary import (
     EPISTEMIC_AGENT_EXPERIENCED,
     EPISTEMIC_HYPOTHETICAL,
@@ -114,12 +133,9 @@ from agent.memory_vocabulary import (
     resolve_subject,
 )
 
-# ── schema identity ─────────────────────────────────────────────────────────
-
 SCHEMA_ID = "kissne.memory_claim/1"
 
-# ── frozen field sets ───────────────────────────────────────────────────────
-
+# KB2-A field freeze.  KB2-B adds MUTATION_FIELDS as a separate extension.
 CLAIM_FIELDS = (
     "claim_id",
     "subject",
@@ -141,10 +157,8 @@ CLAIM_TIME_FIELDS = ("occurred_at", "recorded_at")
 CLAIM_VALIDITY_FIELDS = ("valid_from", "valid_to")
 
 
-# ── claim-shape errors (the axes' errors live in the vocabulary) ────────────
-
 class ClaimError(ValueError):
-    """Base class for every claim-contract violation."""
+    """Base class for every claim-shape / wire violation."""
 
 
 class InvalidTimeError(ClaimError):
@@ -158,8 +172,6 @@ class InvalidValidityWindowError(ClaimError):
 class InvalidClaimError(ClaimError):
     """The claim, or its serialized form, is not well formed."""
 
-
-# ── helpers ─────────────────────────────────────────────────────────────────
 
 def _text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
@@ -176,11 +188,9 @@ def _iso_timestamp(value: Any) -> bool:
     return True
 
 
-# ── the contract ────────────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class Claim:
-    """One minimum memory claim: subject + kind + realm + epistemic + time + evidence pointer."""
+    """One memory claim plus KB2-B state/relation metadata."""
 
     claim_id: str
     subject: Optional[str] = None
@@ -196,36 +206,29 @@ class Claim:
     source_refs: Tuple[SourceRef, ...] = ()
     evidence: Tuple[Evidence, ...] = ()
     policy: Mapping[str, Any] = field(default_factory=dict)
+    status: str = STATUS_CURRENT
+    supersedes: Tuple[str, ...] = ()
+    contradicts: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _text(self.claim_id):
             raise InvalidClaimError("claim_id must be a stable, non-empty id")
 
-        # 1. subject — whose memory this is.  No default: it is never guessed.
         if self.subject not in SUBJECTS:
             raise InvalidSubjectError(
                 f"subject {self.subject!r} is not a canonical subject; expected one of {SUBJECTS}"
             )
-
-        # 2. kind — what type of memory it is, on its own axis.
         if self.kind not in KINDS:
             raise InvalidKindError(f"kind {self.kind!r} is not a memory kind; expected one of {KINDS}")
-
-        # 3. realm — which world it belongs to.  No default, so Earth facts and
-        #    AI World events can never be silently swapped.
         if self.realm not in REALMS:
             raise InvalidRealmError(f"realm {self.realm!r} is not a known realm; expected one of {REALMS}")
-
-        # 4. epistemic — how it is known, stored as given.
         if self.epistemic not in EPISTEMICS:
             raise InvalidEpistemicError(
                 f"epistemic {self.epistemic!r} is not a known epistemic value; expected one of {EPISTEMICS}"
             )
-
         if not _text(self.statement):
             raise InvalidClaimError("statement must be the claim's own content")
 
-        # 5. time triple — when it happened vs when it was recorded, plus zone.
         for name in CLAIM_TIME_FIELDS:
             if not _iso_timestamp(getattr(self, name)):
                 raise InvalidTimeError(
@@ -235,7 +238,6 @@ class Claim:
         if not _text(self.timezone):
             raise InvalidTimeError("timezone must record the zone the event happened in")
 
-        # 6. valid time — an interval that may be open, but never backwards.
         for name in CLAIM_VALIDITY_FIELDS:
             value = getattr(self, name)
             if value is None:
@@ -248,12 +250,9 @@ class Claim:
                     "valid_from is after valid_to; a claim that stops being true before it starts is not valid"
                 )
 
-        # traceability: pointers at canonical records, never a copy of them.
         refs = tuple(self.source_refs or ())
         if not refs:
-            raise MissingSourceRefError(
-                "source_refs must carry at least one pointer at a canonical record"
-            )
+            raise MissingSourceRefError("source_refs must carry at least one pointer at a canonical record")
         for ref in refs:
             if not isinstance(ref, SourceRef):
                 raise InvalidClaimError("source_refs must contain only SourceRef values")
@@ -264,21 +263,25 @@ class Claim:
             if not isinstance(item, Evidence):
                 raise InvalidClaimError("evidence must contain only Evidence values")
         object.__setattr__(self, "evidence", items)
-
-        # shared rules, one implementation (agent.memory_vocabulary)
         check_consistency(subject=self.subject, kind=self.kind, epistemic=self.epistemic, evidence=items)
 
         if self.policy is None:
             object.__setattr__(self, "policy", {})
         elif isinstance(self.policy, Mapping):
-            # Opaque by design: sensitivity handling and Shared Event granularity
-            # are the policy layer's decision, not this schema's.
             object.__setattr__(self, "policy", dict(self.policy))
         else:
             raise InvalidClaimError("policy must be a mapping (it is left to the policy layer)")
 
+        # KB2-B: representation only.  No transition decision happens here.
+        validate_status(self.status)
+        supersedes, contradicts = normalize_relations(
+            claim_id=self.claim_id,
+            supersedes=self.supersedes,
+            contradicts=self.contradicts,
+        )
+        object.__setattr__(self, "supersedes", supersedes)
+        object.__setattr__(self, "contradicts", contradicts)
 
-# ── serialization ───────────────────────────────────────────────────────────
 
 def _dump_source_ref(ref: SourceRef) -> dict:
     return {"kind": ref.kind, "ref": ref.ref, "locator": ref.locator}
@@ -289,10 +292,10 @@ def _dump_evidence(item: Evidence) -> dict:
 
 
 def serialize_claim(claim: Claim) -> dict:
-    """Claim → JSON-ready dict.  Canonical field names only; pointers stay pointers."""
+    """Claim → JSON-ready dict.  CURRENT/empty relations use canonical elision."""
     if not isinstance(claim, Claim):
         raise InvalidClaimError("serialize_claim expects a Claim")
-    return {
+    payload = {
         "schema": SCHEMA_ID,
         "claim_id": claim.claim_id,
         "subject": claim.subject,
@@ -309,6 +312,14 @@ def serialize_claim(claim: Claim) -> dict:
         "evidence": [_dump_evidence(item) for item in claim.evidence],
         "policy": dict(claim.policy),
     }
+    payload.update(
+        encode_mutation_fields(
+            status=claim.status,
+            supersedes=claim.supersedes,
+            contradicts=claim.contradicts,
+        )
+    )
+    return payload
 
 
 def _load_source_ref(data: Any) -> SourceRef:
@@ -348,14 +359,14 @@ def _load_sequence(data: Any, loader, name: str) -> Tuple[Any, ...]:
 
 
 def deserialize_claim(data: Any) -> Claim:
-    """JSON-ready dict → Claim.  Canonical form only: a legacy ``category`` is refused."""
+    """JSON-ready dict → Claim.  Canonical form refuses duplicate category."""
     if not isinstance(data, Mapping):
         raise InvalidClaimError("a serialized claim must be a mapping")
     if "category" in data:
         raise SubjectConflictError(
             "category is not a canonical field: claims carry subject, and storing both would let the two disagree"
         )
-    unknown = set(data) - ({"schema"} | set(CLAIM_FIELDS))
+    unknown = set(data) - ({"schema"} | set(CLAIM_FIELDS) | set(MUTATION_FIELDS))
     if unknown:
         raise InvalidClaimError(f"unknown claim fields: {sorted(unknown)}")
     schema = data.get("schema")
@@ -366,6 +377,12 @@ def deserialize_claim(data: Any) -> Claim:
     missing = [name for name in ("claim_id", "kind", "realm", "epistemic", "statement") if name not in data]
     if missing:
         raise InvalidClaimError(f"serialized claim is missing required fields: {missing}")
+
+    try:
+        status, supersedes, contradicts = decode_mutation_fields(data, claim_id=data["claim_id"])
+    except MutationSemanticsError as exc:
+        # Deserialization errors are wire/claim errors to callers of this API.
+        raise InvalidClaimError(str(exc)) from exc
 
     return Claim(
         claim_id=data["claim_id"],
@@ -382,26 +399,22 @@ def deserialize_claim(data: Any) -> Claim:
         source_refs=_load_sequence(data.get("source_refs"), _load_source_ref, "source_refs"),
         evidence=_load_sequence(data.get("evidence"), _load_evidence, "evidence"),
         policy=data.get("policy") or {},
+        status=status,
+        supersedes=supersedes,
+        contradicts=contradicts,
     )
 
 
 def claim_from_legacy_payload(data: Mapping[str, Any]) -> Claim:
-    """Translate an old-shaped payload (``category``) at the boundary, once.
-
-    Nothing inside the system reads ``category``; this exists so that a caller
-    holding pre-KB2A data can hand it over without the old name leaking into the
-    canonical object.
-    """
+    """Translate an old-shaped payload (``category``) at the boundary, once."""
     if not isinstance(data, Mapping):
         raise InvalidClaimError("a legacy payload must be a mapping")
     payload = dict(data)
     if "category" in payload:
         if "subject" in payload:
-            raise SubjectConflictError(
-                "both category and subject are present; refusing to guess which one is true"
-            )
+            raise SubjectConflictError("both category and subject are present; refusing to guess which one is true")
         payload["subject"] = resolve_subject(payload.pop("category"))
-    unknown = set(payload) - ({"schema"} | set(CLAIM_FIELDS))
+    unknown = set(payload) - ({"schema"} | set(CLAIM_FIELDS) | set(MUTATION_FIELDS))
     if unknown:
         raise InvalidClaimError(f"unknown claim fields: {sorted(unknown)}")
     return deserialize_claim(payload)
