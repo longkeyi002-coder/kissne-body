@@ -24,7 +24,7 @@ What the contract has to guarantee (numbers = ticket requirements):
   untouched (8);
 * serialize → deserialize is stable: fields, types and ``sourceRefs`` survive
   (9);
-* invalid category, missing provenance / ``sourceRefs`` and unsourced
+* invalid subject, missing provenance / ``sourceRefs`` and unsourced
   ``self_memory`` all fail loudly (10).
 
 The field sets below are asserted as frozen on purpose: adding a ``raw_text``
@@ -41,10 +41,11 @@ import pytest
 
 import agent.biography as biography
 from agent.biography import (
-    CATEGORIES,
-    CATEGORY_SELF,
-    CATEGORY_SHARED,
-    CATEGORY_USER,
+    KIND_PREFERENCE,
+    SUBJECTS,
+    SUBJECT_YEQINGXU,
+    SUBJECT_SHARED,
+    SUBJECT_USER,
     ENTRY_FIELDS,
     EVIDENCE_AI_WORLD_EXPERIENCE,
     EVIDENCE_EXECUTION,
@@ -58,7 +59,7 @@ from agent.biography import (
     SOURCE_TOOL_RECEIPT,
     BiographyEntry,
     Evidence,
-    InvalidCategoryError,
+    InvalidSubjectError,
     InvalidEvidenceKindError,
     InvalidSourceRefError,
     MissingEvidenceError,
@@ -91,10 +92,11 @@ def _evidence(kind: str = EVIDENCE_TOOL_RECEIPT) -> Evidence:
     return Evidence(kind=kind, sourceRef=_ref(SOURCE_TOOL_RECEIPT, "receipt-7"), detail="")
 
 
-def _entry(category: str = CATEGORY_USER, **overrides):
+def _entry(subject: str = SUBJECT_USER, kind: str = KIND_PREFERENCE, **overrides):
     kwargs = dict(
         entry_id="bio-0001",
-        category=category,
+        subject=subject,
+        kind=kind,
         statement="Holds a green sheep as her own image; the fox is mine.",
         provenance=_provenance(),
         evidence=(),
@@ -111,26 +113,35 @@ def test_schema_id_is_declared():
 
 
 def test_exactly_three_categories_are_biography_categories():
-    assert CATEGORIES == (CATEGORY_USER, CATEGORY_SHARED, CATEGORY_SELF)
-    assert CATEGORIES == ("user_memory", "shared_memory", "self_memory")
+    assert SUBJECTS == (SUBJECT_USER, SUBJECT_SHARED, SUBJECT_YEQINGXU)
+    assert SUBJECTS == ("user", "yeqingxu", "shared")
 
 
-@pytest.mark.parametrize("category", [CATEGORY_USER, CATEGORY_SHARED, CATEGORY_SELF])
-def test_each_category_builds_and_round_trips(category):
-    entry = _entry(category=category, evidence=(_evidence(),) if category == CATEGORY_SELF else ())
+@pytest.mark.parametrize("subject", [SUBJECT_USER, SUBJECT_SHARED, SUBJECT_YEQINGXU])
+def test_each_subject_builds_and_round_trips(subject):
+    entry = _entry(subject=subject, evidence=(_evidence(),) if subject == SUBJECT_YEQINGXU else ())
     assert deserialize_entry(serialize_entry(entry)) == entry
 
 
-def test_category_is_validated_by_value_not_by_trust():
+def test_subject_is_validated_by_value_not_by_trust():
     for bad in ("biography", "memory", "", None, 123, ["user_memory"]):
-        with pytest.raises(InvalidCategoryError):
-            _entry(category=bad)
+        with pytest.raises(InvalidSubjectError):
+            _entry(subject=bad)
 
 
 # ── 3 / 6. pointers, never a copied canonical record ────────────────────────
 
 def test_entry_field_set_is_frozen_against_a_canonical_text_field():
-    assert ENTRY_FIELDS == ("entry_id", "category", "statement", "provenance", "evidence", "policy")
+    assert ENTRY_FIELDS == (
+        "entry_id",
+        "subject",
+        "kind",
+        "statement",
+        "provenance",
+        "evidence",
+        "policy",
+    )
+    assert "category" not in ENTRY_FIELDS
     for forbidden in ("raw", "text", "transcript", "canonical", "conversation", "messages"):
         assert forbidden not in ENTRY_FIELDS
 
@@ -195,13 +206,13 @@ def test_entry_id_must_be_stable_and_non_empty():
 
 def test_self_memory_without_evidence_is_rejected():
     with pytest.raises(MissingEvidenceError):
-        _entry(category=CATEGORY_SELF, evidence=())
+        _entry(subject=SUBJECT_YEQINGXU, evidence=())
 
 
 @pytest.mark.parametrize("kind", [EVIDENCE_EXECUTION, EVIDENCE_TOOL_RECEIPT, EVIDENCE_WORLD_EVENT])
 def test_self_memory_accepts_evidence_backed_experience(kind):
-    entry = _entry(category=CATEGORY_SELF, evidence=(_evidence(kind),))
-    assert entry.category == CATEGORY_SELF
+    entry = _entry(subject=SUBJECT_YEQINGXU, evidence=(_evidence(kind),))
+    assert entry.subject == SUBJECT_YEQINGXU
     assert deserialize_entry(serialize_entry(entry)) == entry
 
 
@@ -223,15 +234,15 @@ def test_evidence_itself_must_point_at_a_canonical_record():
 
 
 def test_user_and_shared_entries_do_not_require_self_evidence():
-    assert _entry(category=CATEGORY_USER, evidence=()).category == CATEGORY_USER
-    assert _entry(category=CATEGORY_SHARED, evidence=()).category == CATEGORY_SHARED
+    assert _entry(subject=SUBJECT_USER, evidence=()).subject == SUBJECT_USER
+    assert _entry(subject=SUBJECT_SHARED, evidence=()).subject == SUBJECT_SHARED
 
 
 # ── 8. undecided policy stays undecided ─────────────────────────────────────
 
 def test_policy_layer_is_opaque_and_preserved_exactly():
     policy = {"granularity": "topic", "sensitivity": "private", "future_flag": {"a": [1, 2]}}
-    entry = _entry(category=CATEGORY_SHARED, policy=policy)
+    entry = _entry(subject=SUBJECT_SHARED, policy=policy)
     restored = deserialize_entry(serialize_entry(entry))
     assert restored.policy == policy
 
@@ -247,7 +258,7 @@ def test_schema_does_not_hardcode_the_undecided_policy_decisions():
 
 def test_round_trip_preserves_types_and_source_ref_order():
     entry = _entry(
-        category=CATEGORY_SELF,
+        subject=SUBJECT_YEQINGXU,
         evidence=(_evidence(EVIDENCE_EXECUTION), _evidence(EVIDENCE_WORLD_EVENT)),
         provenance=_provenance(
             _ref(SOURCE_CONVERSATION_TURN, "turn-0001"),
@@ -269,7 +280,7 @@ def test_round_trip_preserves_types_and_source_ref_order():
 
 
 def test_serialized_form_is_json_stable():
-    entry = _entry(category=CATEGORY_SELF, evidence=(_evidence(),))
+    entry = _entry(subject=SUBJECT_YEQINGXU, evidence=(_evidence(),))
     once = json.dumps(serialize_entry(entry), sort_keys=True)
     twice = json.dumps(serialize_entry(deserialize_entry(serialize_entry(entry))), sort_keys=True)
     assert once == twice
@@ -313,3 +324,33 @@ def test_module_does_not_drag_in_a_provider_or_a_second_history():
         "Kimi",
     ):
         assert forbidden not in source, f"{forbidden} must not appear in the contract module"
+
+
+# ── 迁移（KB2-A）：category 不再是 canonical 字段 ──────────────────────────
+
+def test_legacy_category_is_no_longer_a_canonical_field():
+    payload = json.loads(json.dumps(biography.serialize_entry(_entry())))
+    payload["category"] = "user_memory"
+    with pytest.raises(biography.BiographyError):
+        biography.deserialize_entry(payload)
+
+
+def test_serialized_entry_uses_subject_and_carries_kind():
+    payload = biography.serialize_entry(_entry(subject=SUBJECT_SHARED, kind=KIND_PREFERENCE))
+    assert payload["subject"] == "shared"
+    assert payload["kind"] == "preference"
+    assert "category" not in payload
+
+
+def test_biography_subject_axis_matches_the_claim_axis():
+    """三条 Biography subject 是记忆 subject 轴的子集，且 kind 轴与 Claim 完全一致。"""
+    import agent.memory_claim as memory_claim
+
+    assert SUBJECTS == ("user", "yeqingxu", "shared")
+    assert set(SUBJECTS) < set(memory_claim.SUBJECTS)
+    assert biography.BIOGRAPHY_KINDS == memory_claim.KINDS
+
+
+def test_biography_rejects_a_kind_outside_the_frozen_axis():
+    with pytest.raises(biography.InvalidKindError):
+        _entry(kind="episode_memory")
