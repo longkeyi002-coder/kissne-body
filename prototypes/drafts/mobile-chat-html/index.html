@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#eef7f2">
+  <title>Kissne · Chat UI Draft</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%232f6f52' d='M32 6 47 19v24L32 58 17 43V19z'/%3E%3Cpath fill='%23fff' d='m32 16 8 8-8 24-8-24z'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #16332a;
+      --muted: #678078;
+      --line: rgba(32, 78, 62, .12);
+      --paper: rgba(255, 255, 255, .88);
+      --green: #2f6f52;
+      --green-deep: #1f513c;
+      --green-soft: #ddefe5;
+      --mint: #eef7f2;
+      --danger: #a64141;
+      --danger-soft: #fff0ef;
+      --shadow: 0 24px 80px rgba(26, 68, 51, .16);
+      font-family: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(160, 219, 188, .42), transparent 28rem),
+        radial-gradient(circle at 86% 78%, rgba(166, 210, 221, .34), transparent 26rem),
+        #dfece7;
+    }
+
+    button, textarea { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .phone {
+      position: relative;
+      width: min(100%, 430px);
+      height: min(860px, calc(100vh - 48px));
+      min-height: 620px;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      overflow: hidden;
+      background: rgba(247, 251, 249, .92);
+      border: 1px solid rgba(255, 255, 255, .8);
+      border-radius: 34px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 44px 1fr 44px;
+      align-items: center;
+      gap: 8px;
+      padding: max(16px, env(safe-area-inset-top)) 16px 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,.84), rgba(255,255,255,.54));
+      border-bottom: 1px solid var(--line);
+    }
+
+    .icon-button {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 15px;
+      color: var(--ink);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .icon-button:hover { background: rgba(47, 111, 82, .08); }
+    .icon-button:focus-visible, .send:focus-visible, .state-button:focus-visible,
+    .action:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(47, 111, 82, .25);
+      outline-offset: 2px;
+    }
+
+    .identity {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      color: var(--green-deep);
+      background: linear-gradient(145deg, #fff, #d9eee3);
+      border: 1px solid rgba(47, 111, 82, .16);
+      font-weight: 750;
+      box-shadow: 0 6px 18px rgba(47, 111, 82, .12);
+    }
+
+    .identity-copy { min-width: 0; }
+    .identity-name { font-size: 1rem; font-weight: 750; line-height: 1.25; }
+    .identity-state {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: .78rem;
+      white-space: nowrap;
+    }
+
+    .identity-state::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: #55a979;
+      vertical-align: 1px;
+    }
+
+    .prototype-note {
+      margin: 10px 16px 0;
+      padding: 9px 12px;
+      border: 1px solid rgba(47, 111, 82, .14);
+      border-radius: 14px;
+      color: #43675a;
+      background: rgba(221, 239, 229, .74);
+      font-size: .78rem;
+      line-height: 1.45;
+      text-align: center;
+    }
+
+    .messages {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 22px 16px 20px;
+      scroll-behavior: smooth;
+    }
+
+    .day {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: .75rem;
+      text-align: center;
+    }
+
+    .row {
+      display: flex;
+      align-items: flex-end;
+      gap: 9px;
+      margin: 0 0 16px;
+    }
+
+    .row.me { justify-content: flex-end; }
+
+    .message-avatar {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      color: var(--green-deep);
+      background: #fff;
+      border: 1px solid var(--line);
+      font-size: .72rem;
+      font-weight: 750;
+    }
+
+    .bubble-wrap { max-width: min(78%, 310px); }
+
+    .bubble {
+      padding: 12px 14px;
+      border-radius: 18px 18px 18px 6px;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 8px 22px rgba(32, 78, 62, .06);
+      font-size: 1rem;
+      line-height: 1.58;
+      overflow-wrap: anywhere;
+    }
+
+    .me .bubble {
+      color: #fff;
+      background: linear-gradient(145deg, #367b5b, #285f47);
+      border-color: transparent;
+      border-radius: 18px 18px 6px 18px;
+    }
+
+    .meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: .72rem;
+    }
+
+    .me .meta { text-align: right; }
+
+    .pending-card, .error-card, .offline-card {
+      margin: 6px 0 18px 39px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.78);
+      border: 1px solid var(--line);
+    }
+
+    .pending-line {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #42685a;
+      font-size: .9rem;
+    }
+
+    .dots { display: inline-flex; gap: 4px; }
+    .dots i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.1s infinite ease-in-out;
+    }
+    .dots i:nth-child(2) { animation-delay: .14s; }
+    .dots i:nth-child(3) { animation-delay: .28s; }
+
+    @keyframes pulse {
+      0%, 70%, 100% { opacity: .3; transform: translateY(0); }
+      35% { opacity: 1; transform: translateY(-3px); }
+    }
+
+    .action {
+      margin-top: 10px;
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--green-deep);
+      background: var(--green-soft);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .error-card {
+      color: #743636;
+      background: var(--danger-soft);
+      border-color: rgba(166, 65, 65, .18);
+    }
+
+    .error-card .action {
+      color: #853939;
+      background: #ffdeda;
+    }
+
+    .offline-card {
+      margin-left: 0;
+      color: #625b44;
+      background: #fff9df;
+      border-color: rgba(132, 112, 47, .2);
+      text-align: center;
+    }
+
+    .hidden { display: none !important; }
+
+    .composer {
+      padding: 10px 12px max(12px, env(safe-area-inset-bottom));
+      background: rgba(255,255,255,.84);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+    }
+
+    .composer-box {
+      display: grid;
+      grid-template-columns: 42px 1fr 46px;
+      align-items: end;
+      gap: 6px;
+      padding: 6px;
+      border: 1px solid rgba(47, 111, 82, .14);
+      border-radius: 20px;
+      background: #f5faf7;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 42px;
+      max-height: 112px;
+      resize: none;
+      border: 0;
+      padding: 10px 7px 8px;
+      color: var(--ink);
+      background: transparent;
+      font-size: 1rem;
+      line-height: 1.45;
+    }
+    textarea::placeholder { color: #84968f; }
+    textarea:focus { outline: 0; }
+
+    .send {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 15px;
+      color: #fff;
+      background: var(--green);
+      cursor: pointer;
+      box-shadow: 0 6px 16px rgba(47, 111, 82, .2);
+    }
+    .send:disabled { opacity: .42; box-shadow: none; cursor: default; }
+
+    .scrim {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      background: rgba(12, 35, 28, .26);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s ease;
+    }
+    .scrim.open { opacity: 1; pointer-events: auto; }
+
+    .sheet {
+      position: absolute;
+      z-index: 6;
+      right: 10px;
+      top: 74px;
+      width: min(310px, calc(100% - 20px));
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,.8);
+      border-radius: 22px;
+      background: rgba(251, 253, 252, .97);
+      box-shadow: 0 20px 54px rgba(25, 61, 48, .22);
+      transform: translateY(-10px) scale(.98);
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s ease;
+    }
+    .sheet.open { transform: none; opacity: 1; pointer-events: auto; }
+    .sheet h2 { margin: 2px 2px 6px; font-size: 1rem; }
+    .sheet p { margin: 0 2px 12px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .state-button {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      color: var(--ink);
+      background: #fff;
+      cursor: pointer;
+    }
+    .state-button:hover { background: var(--mint); }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 520px) {
+      .stage { padding: 0; }
+      .phone {
+        width: 100%;
+        height: 100dvh;
+        min-height: 560px;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="phone" aria-label="Kissne 手机聊天界面原型">
+      <header class="topbar">
+        <button class="icon-button" type="button" aria-label="打开页面导航" id="navButton">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7h14M5 12h14M5 17h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="identity">
+          <div class="avatar" aria-label="叶青栩头像临时文字占位">栩</div>
+          <div class="identity-copy">
+            <div class="identity-name">叶青栩</div>
+            <div class="identity-state" id="connectionLabel">原型在线状态</div>
+          </div>
+        </div>
+        <button class="icon-button" type="button" aria-label="打开原型状态控制" id="labButton">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.7" fill="currentColor"/>
+            <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+            <circle cx="19" cy="12" r="1.7" fill="currentColor"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="prototype-note">原型数据 · 未连接真实 Runtime，也不会写入聊天历史</div>
+
+      <div class="messages" id="messages" aria-live="polite">
+        <p class="day">界面演示</p>
+
+        <div class="row">
+          <div class="message-avatar" aria-hidden="true">栩</div>
+          <div class="bubble-wrap">
+            <div class="bubble">早上好。我们先看看聊天界面，你觉得哪里不顺眼就直接告诉我。</div>
+            <div class="meta">原型消息 · 08:16</div>
+          </div>
+        </div>
+
+        <div class="row me">
+          <div class="bubble-wrap">
+            <div class="bubble">好呀，先看看发送和等待的感觉。</div>
+            <div class="meta">原型消息 · 08:17</div>
+          </div>
+        </div>
+
+        <div class="pending-card hidden" id="pendingCard">
+          <div class="pending-line">
+            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>叶青栩正在回复</span>
+          </div>
+          <button class="action" type="button" id="cancelButton">取消本次回复</button>
+        </div>
+
+        <div class="error-card hidden" id="errorCard" role="alert">
+          <strong>这条消息没有送达</strong>
+          <div style="margin-top:4px;font-size:.86rem;line-height:1.5">连接中断了。原消息会保留，你可以重试。</div>
+          <button class="action" type="button" id="retryButton">重新发送</button>
+        </div>
+
+        <div class="offline-card hidden" id="offlineCard" role="status">
+          当前离线，消息会留在这台设备上，重连后再发送。
+          <br><button class="action" type="button" id="reconnectButton">重新连接</button>
+        </div>
+      </div>
+
+      <form class="composer" id="composer">
+        <div class="composer-box">
+          <button class="icon-button" type="button" aria-label="附件功能尚未接入" title="附件功能尚未接入">
+            <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.5 12.8 14.8 6.5a3.2 3.2 0 0 1 4.5 4.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8-8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <label class="sr-only" for="messageInput">输入消息</label>
+          <textarea id="messageInput" rows="1" placeholder="发消息给叶青栩…" autocomplete="off"></textarea>
+          <button class="send" type="submit" id="sendButton" aria-label="发送消息" disabled>
+            <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m5 12 13-7-3.5 14-3-5.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </form>
+
+      <div class="scrim" id="scrim"></div>
+      <aside class="sheet" id="sheet" aria-hidden="true">
+        <h2 id="sheetTitle">原型状态</h2>
+        <p id="sheetCopy">这些按钮只切换界面表现，不会连接真实服务。</p>
+        <div class="state-grid" id="stateGrid">
+          <button class="state-button" type="button" data-state="pending">等待回复</button>
+          <button class="state-button" type="button" data-state="error">发送失败</button>
+          <button class="state-button" type="button" data-state="offline">离线</button>
+          <button class="state-button" type="button" data-state="clear">恢复正常</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const messages = document.querySelector('#messages');
+    const input = document.querySelector('#messageInput');
+    const sendButton = document.querySelector('#sendButton');
+    const composer = document.querySelector('#composer');
+    const pendingCard = document.querySelector('#pendingCard');
+    const errorCard = document.querySelector('#errorCard');
+    const offlineCard = document.querySelector('#offlineCard');
+    const connectionLabel = document.querySelector('#connectionLabel');
+    const sheet = document.querySelector('#sheet');
+    const scrim = document.querySelector('#scrim');
+    let lastMessage = '';
+    let mode = 'normal';
+
+    function escapeText(text) {
+      const span = document.createElement('span');
+      span.textContent = text;
+      return span.innerHTML;
+    }
+
+    function scrollToLatest() {
+      requestAnimationFrame(() => messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' }));
+    }
+
+    function setState(next) {
+      mode = next === 'clear' ? 'normal' : next;
+      pendingCard.classList.toggle('hidden', mode !== 'pending');
+      errorCard.classList.toggle('hidden', mode !== 'error');
+      offlineCard.classList.toggle('hidden', mode !== 'offline');
+      connectionLabel.textContent = mode === 'offline' ? '原型离线状态' : '原型在线状态';
+      sendButton.disabled = !input.value.trim() || mode === 'pending';
+      scrollToLatest();
+    }
+
+    function addOwnMessage(text) {
+      const row = document.createElement('div');
+      row.className = 'row me';
+      row.innerHTML = '<div class="bubble-wrap"><div class="bubble">' +
+        escapeText(text) +
+        '</div><div class="meta">原型消息 · 刚刚</div></div>';
+      messages.insertBefore(row, pendingCard);
+      scrollToLatest();
+    }
+
+    function submitMessage() {
+      const value = input.value.trim();
+      if (!value || mode === 'pending') return;
+      lastMessage = value;
+      addOwnMessage(value);
+      input.value = '';
+      input.style.height = 'auto';
+      if (mode === 'offline') {
+        sendButton.disabled = true;
+        return;
+      }
+      setState('pending');
+    }
+
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 112) + 'px';
+      sendButton.disabled = !input.value.trim() || mode === 'pending';
+    });
+
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        submitMessage();
+      }
+    });
+
+    composer.addEventListener('submit', event => {
+      event.preventDefault();
+      submitMessage();
+    });
+
+    document.querySelector('#cancelButton').addEventListener('click', () => setState('clear'));
+    document.querySelector('#retryButton').addEventListener('click', () => {
+      setState('pending');
+      if (!lastMessage) lastMessage = '上一条原型消息';
+    });
+    document.querySelector('#reconnectButton').addEventListener('click', () => setState('clear'));
+
+    function openSheet(title, copy, navMode = false) {
+      document.querySelector('#sheetTitle').textContent = title;
+      document.querySelector('#sheetCopy').textContent = copy;
+      const grid = document.querySelector('#stateGrid');
+      if (navMode) {
+        grid.innerHTML = ['Home · 家', 'Chat · 对话', 'Life · 生活', 'Us · 我们', 'Settings · 设置']
+          .map((label, index) => '<button class="state-button" type="button" ' +
+            (index ? 'disabled title="本轮只制作 Chat"' : '') + '>' + label + '</button>').join('');
+      } else {
+        grid.innerHTML = [
+          ['pending', '等待回复'],
+          ['error', '发送失败'],
+          ['offline', '离线'],
+          ['clear', '恢复正常']
+        ].map(([state, label]) => '<button class="state-button" type="button" data-state="' +
+          state + '">' + label + '</button>').join('');
+      }
+      sheet.classList.add('open');
+      scrim.classList.add('open');
+      sheet.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeSheet() {
+      sheet.classList.remove('open');
+      scrim.classList.remove('open');
+      sheet.setAttribute('aria-hidden', 'true');
+    }
+
+    document.querySelector('#labButton').addEventListener('click', () =>
+      openSheet('原型状态', '这些按钮只切换界面表现，不会连接真实服务。')
+    );
+    document.querySelector('#navButton').addEventListener('click', () =>
+      openSheet('页面入口', '这一轮只制作 Chat；其他入口先保留结构，不伪造内容。', true)
+    );
+    document.querySelector('#stateGrid').addEventListener('click', event => {
+      const target = event.target.closest('[data-state]');
+      if (!target) return;
+      setState(target.dataset.state);
+      closeSheet();
+    });
+    scrim.addEventListener('click', closeSheet);
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeSheet();
+    });
+  </script>
+</body>
+</html>
