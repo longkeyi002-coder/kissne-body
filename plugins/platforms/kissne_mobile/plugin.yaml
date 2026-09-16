@@ -1,0 +1,16 @@
+name: kissne-mobile-platform
+label: Kissne Mobile
+kind: platform
+version: 0.1.0
+description: >
+  Kissne Mobile (Android) gateway adapter for Hermes Agent.
+  Hosts a loopback HTTP endpoint that lets one paired Android installation talk
+  to the SAME Hermes Runtime and the SAME Runtime Conversation as every other
+  channel: an installation exchanges a short-lived, single-use pairing code for
+  a device-scoped token (the endpoint being reachable never registers anything),
+  then posts plain text and drains replies. Conversation truth stays in the
+  existing SessionStore — the adapter only points the Mobile routing source at an
+  already existing conversation, and never holds Agent / Memory / Provider truth.
+  The device is never given a Runtime management key.
+author: kissne-agent
+emoji: "📱"
