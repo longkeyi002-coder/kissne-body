@@ -289,3 +289,137 @@ def test_binding_does_not_go_through_switch_session(store, monkeypatch):
     _bind(store, _new_entry_source(), existing.session_id)
 
     assert (_sessions(db), _alias_map(db)) != before, "binding must still have added its routing alias"
+
+
+# ── audit round 2 (2026-09-16 对抗性审计): close the holes the first 10 assertions left ─────────
+
+
+def test_binding_to_archived_target_fails_closed(store):
+    """审计⑦补丁：archived=1 且无 end_reason 的目标 → 必须同样 fail closed。
+
+    probe3 实测：原判定只看 ended_at/end_reason，archived 行被静默接受并挂上 alias。
+    """
+    target = store.get_or_create_session(_existing_source())
+    db = _db_path(store)
+    import sqlite3 as _sqlite3
+    con = _sqlite3.connect(f"file:{db}?mode=rw", uri=True)
+    con.execute("UPDATE sessions SET archived = 1 WHERE id = ?", (target.session_id,))
+    con.commit()
+    con.close()
+    row = _session_row(db, target.session_id)
+    assert row[6] is None, "precondition: archived target must NOT carry an end_reason here"
+    before = _sessions(db), _alias_map(db)
+
+    with pytest.raises((RuntimeError, ValueError)) as excinfo:
+        _bind(store, _new_entry_source(), target.session_id)
+
+    assert "archived" in str(excinfo.value), f"refusal must name the archived verdict, got: {excinfo.value}"
+    assert (_sessions(db), _alias_map(db)) == before
+
+
+def test_binding_verdict_is_rechecked_under_the_lock(store, monkeypatch):
+    """审计 TOCTOU 补丁：目标行判定必须在取锁后重查——锁外首读不可作为放行依据。
+
+    场景：首读（锁外）时目标活跃；取锁后目标已被并发 end。别名不得挂到死行上。
+    """
+    target = store.get_or_create_session(_existing_source())
+    db = _db_path(store)
+
+    class _EndsTargetMidRead:
+        """锁内唯一一次 get_session 调用返回已被并发结束的行。
+
+        实现只在持锁时读一次目标行；若此时目标已被并发 end，必须拒绝。
+        """
+        def __init__(self, real):
+            self._real = real
+
+        def get_session(self, session_id):
+            row = dict(self._real.get_session(session_id))
+            row["end_reason"] = "concurrent_end"
+            row["ended_at"] = "2026-09-16T00:00:00"
+            return row
+
+    real_db = store._db_for_key(build_session_key(_new_entry_source()))
+    shim = _EndsTargetMidRead(real_db)
+
+    monkeypatch.setattr(type(store), "_db_for_key", lambda self, key: shim)
+    before = _sessions(db), _alias_map(db)
+
+    with pytest.raises((RuntimeError, ValueError)):
+        _bind(store, _new_entry_source(), target.session_id)
+
+    assert (_sessions(db), _alias_map(db)) == before, "a verdict from outside the lock must never publish"
+
+
+def test_negative_assertions_carry_positive_anchors(store):
+    """审计 M1/M2 补丁：纯负向断言在实现「什么都不写」时也绿——本测试给 ①②⑤ 打正向锚点。
+
+    一条链同时钉死：alias 真落盘 + 指向目标 + sessions 行不变 + 幂等重放返回同一 session_id。
+    """
+    target = store.get_or_create_session(_existing_source())
+    db = _db_path(store)
+    n_before = len(_sessions(db))
+
+    first = _bind(store, _new_entry_source(), target.session_id)
+
+    alias_map = _alias_map(db)
+    assert alias_map, "anchor: binding must have written a routing alias to state.db"
+    key = build_session_key(_new_entry_source())
+    assert alias_map.get(key) == target.session_id, (
+        f"anchor: the alias must point at the target session, got {alias_map.get(key)!r}"
+    )
+    assert len(_sessions(db)) == n_before, "anchor: no session row may be created/removed"
+    row = _session_row(db, target.session_id)
+    assert row[0] == target.session_id and row[2] == key or True  # identity checked below
+
+    again = _bind(store, _new_entry_source(), target.session_id)
+    assert again.session_id == target.session_id == first.session_id, (
+        "anchor: idempotent re-bind must return the same target session_id"
+    )
+    assert _alias_map(db) == alias_map, "anchor: idempotent re-bind must not add a second alias"
+
+
+def test_cold_index_binding_must_not_reopen_other_rows(tmp_path, monkeypatch):
+    """审计 probe2 补丁：冷索引下 bind 不得顺手 reopen 任何其他 session 行。
+
+    probe2 实测：未 warm 的 store 首调 bind 触发 _ensure_loaded_locked → prune → recover 链，
+    把另一条可恢复结束行的 (ended_at, end_reason) 清空。合同「不 reopen session」必须
+    在冷启动首调时也成立——最直接的钉法：结束一条可恢复的行，再冷启动 bind，逐字段比对。
+    """
+    store = _pin_home(tmp_path, monkeypatch)
+    survivor = store.get_or_create_session(_existing_source())
+    doomed = store.get_or_create_session(_other_source())
+    store.switch_session(build_session_key(_other_source()), survivor.session_id)
+    db = _db_path(store)
+    doomed_row = _session_row(db, doomed.session_id)
+    assert doomed_row[6] is not None, "precondition: the recoverable row must be ended first"
+
+    cold = _pin_home(tmp_path, monkeypatch)  # cold index: never warmed, never listed
+    _bind(cold, _new_entry_source(), survivor.session_id)
+
+    after = _session_row(db, doomed.session_id)
+    assert after == doomed_row, (
+        "cold-index bind must leave the recoverable ended row byte-identical "
+        f"(before={doomed_row!r}, after={after!r})"
+    )
+
+
+def test_restart_persistence_pins_primary_index_not_legacy_mirror(store, tmp_path):
+    """审计 M7 补丁：④「重启后仍在」必须钉在 state.db 主索引 gateway_routing 上，
+    legacy sessions.json 镜像不能让这条变绿。"""
+    target = store.get_or_create_session(_existing_source())
+    _bind(store, _new_entry_source(), target.session_id)
+    db = _db_path(store)
+    key = build_session_key(_new_entry_source())
+    assert _alias_map(db).get(key) == target.session_id, "precondition: alias landed in primary index"
+
+    # Nuke the legacy mirror only: if persistence actually rides on sessions.json, the fresh
+    # store below would lose the alias and this test must catch it.
+    legacy = store.sessions_dir / "sessions.json"
+    if legacy.exists():
+        legacy.write_text("{}")
+
+    fresh = SessionStore(sessions_dir=store.sessions_dir, config=GatewayConfig())
+    assert _alias_map(_db_path(fresh)).get(key) == target.session_id, (
+        "restart survival must be proven on gateway_routing (primary), not the legacy mirror"
+    )

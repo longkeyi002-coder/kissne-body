@@ -1183,21 +1183,30 @@ class SessionStore(
 
         # Target truth is the row itself, in the scope this key routes to: a missing row (another
         # profile/scope, a typo, a pruned conversation) or an ended one must never receive an alias.
-        db = self._db_for_key(session_key)
-        get_row = getattr(db, "get_session", None)
-        raw = get_row(target_session_id) if callable(get_row) else None
-        row: Optional[Dict[str, Any]] = dict(raw) if isinstance(raw, dict) else None
-        if row is None:
-            raise RouteBindingError(
-                f"bind_source_to_existing_session: session {target_session_id} does not exist in the "
-                f"routing scope of {session_key!r}; refusing to add an alias")
-
-        if row.get("ended_at") is not None or row.get("end_reason"):
-            raise RouteBindingError(
-                f"bind_source_to_existing_session: session {target_session_id} is already ended "
-                f"({row.get('end_reason')!r}); refusing to alias a finished conversation")
-
+        # Re-check inside the lock before publishing: the row can be ended/archived concurrently
+        # between this first read and the alias write (audit: TOCTOU on the target verdict).
         with self._lock:
+            db = self._db_for_key(session_key)
+            get_row = getattr(db, "get_session", None)
+            raw = get_row(target_session_id) if callable(get_row) else None
+            row: Optional[Dict[str, Any]] = dict(raw) if isinstance(raw, dict) else None
+            if row is None:
+                raise RouteBindingError(
+                    f"bind_source_to_existing_session: session {target_session_id} does not exist in the "
+                    f"routing scope of {session_key!r}; refusing to add an alias")
+
+            if row.get("ended_at") is not None or row.get("end_reason"):
+                raise RouteBindingError(
+                    f"bind_source_to_existing_session: session {target_session_id} is already ended "
+                    f"({row.get('end_reason')!r}); refusing to alias a finished conversation")
+            if row.get("archived"):
+                # Archived conversations are hidden from every active listing (find_latest_gateway_
+                # session_for_peer filters s.archived = 0); an alias pointing at one would be a silent
+                # dead route, so this must fail closed exactly like an ended target.
+                raise RouteBindingError(
+                    f"bind_source_to_existing_session: session {target_session_id} is archived; "
+                    "refusing to alias an archived conversation")
+
             self._ensure_loaded_locked()
             current = self._entries.get(session_key)
             if current is not None and current.session_id == target_session_id:
