@@ -99,7 +99,7 @@ def test_current_is_canonical_default_and_is_elided_on_wire():
 def test_explicit_current_on_wire_is_rejected_as_duplicate_encoding():
     payload = serialize_claim(_claim())
     payload["status"] = STATUS_CURRENT
-    with pytest.raises(InvalidClaimStatusError):
+    with pytest.raises(memory_claim.InvalidClaimError):
         deserialize_claim(payload)
 
 
