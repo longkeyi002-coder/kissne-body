@@ -1,9 +1,8 @@
 """KB2-B-MUTATION-SEMANTICS — status and inter-claim relation contract.
 
-This ticket is deliberately narrower than the Mutation Gate.  It freezes how a
-claim can *express* current/superseded/contradicted/archived state and how a new
-claim can point at older claims it supersedes or contradicts.  It does not decide
-when to perform those mutations and never rewrites another claim automatically.
+B extends a Claim with mutation state, but it does not rewrite KB2-A's frozen
+``CLAIM_FIELDS`` tuple.  The B vocabulary lives beside it as ``MUTATION_FIELDS``.
+This ticket only represents state/relations; KB2-C decides and applies changes.
 """
 
 from __future__ import annotations
@@ -13,18 +12,17 @@ from pathlib import Path
 import pytest
 
 import agent.memory_claim as memory_claim
-from agent.memory_claim import (
-    CLAIM_FIELDS,
+import agent.memory_mutation_semantics as mutation
+from agent.memory_claim import Claim, deserialize_claim, serialize_claim
+from agent.memory_mutation_semantics import (
+    MUTATION_FIELDS,
     STATUS_ARCHIVED,
     STATUS_CONTRADICTED,
     STATUS_CURRENT,
     STATUS_SUPERSEDED,
     STATUSES,
-    Claim,
     InvalidClaimRelationError,
     InvalidClaimStatusError,
-    deserialize_claim,
-    serialize_claim,
 )
 from agent.memory_vocabulary import (
     EPISTEMIC_USER_DECLARED,
@@ -32,6 +30,7 @@ from agent.memory_vocabulary import (
     REALM_EARTH,
     SOURCE_CONVERSATION_TURN,
     SUBJECT_USER,
+    MissingSourceRefError,
     SourceRef,
 )
 
@@ -63,6 +62,12 @@ def test_status_axis_is_exactly_the_four_frozen_values():
     assert STATUSES == ("CURRENT", "SUPERSEDED", "CONTRADICTED", "ARCHIVED")
 
 
+def test_mutation_fields_are_separate_from_the_kb2_a_field_freeze():
+    assert MUTATION_FIELDS == ("status", "supersedes", "contradicts")
+    assert all(field not in memory_claim.CLAIM_FIELDS for field in MUTATION_FIELDS)
+    assert "category" not in MUTATION_FIELDS
+
+
 def test_new_claim_defaults_to_current_without_relations():
     claim = _claim()
     assert claim.status == STATUS_CURRENT
@@ -81,6 +86,21 @@ def test_every_status_round_trips_without_changing_meaning(status):
 def test_unknown_status_is_rejected(bad):
     with pytest.raises(InvalidClaimStatusError):
         _claim(status=bad)
+
+
+def test_current_is_canonical_default_and_is_elided_on_wire():
+    payload = serialize_claim(_claim())
+    assert "status" not in payload
+    assert "supersedes" not in payload
+    assert "contradicts" not in payload
+    assert deserialize_claim(payload).status == STATUS_CURRENT
+
+
+def test_explicit_current_on_wire_is_rejected_as_duplicate_encoding():
+    payload = serialize_claim(_claim())
+    payload["status"] = STATUS_CURRENT
+    with pytest.raises(InvalidClaimStatusError):
+        deserialize_claim(payload)
 
 
 def test_new_current_claim_can_point_back_to_claim_it_supersedes():
@@ -167,15 +187,8 @@ def test_relation_fields_are_ids_only_not_embedded_claim_copies():
 
 def test_source_refs_stay_mandatory_for_status_and_relation_records():
     """B adds no provenance bypass: historical state must remain traceable."""
-    with pytest.raises(Exception):
+    with pytest.raises(MissingSourceRefError):
         _claim(status=STATUS_SUPERSEDED, source_refs=())
-
-
-def test_status_and_relations_are_now_canonical_claim_fields():
-    assert "status" in CLAIM_FIELDS
-    assert "supersedes" in CLAIM_FIELDS
-    assert "contradicts" in CLAIM_FIELDS
-    assert "category" not in CLAIM_FIELDS
 
 
 def test_validity_time_does_not_silently_choose_status():
@@ -187,16 +200,17 @@ def test_validity_time_does_not_silently_choose_status():
 
 
 def test_kb2_b_exposes_no_mutation_gate_or_write_decision_api():
-    for forbidden in (
-        "MutationGate",
-        "mutate",
-        "apply_mutation",
-        "supersede",
-        "contradict",
-        "archive_claim",
-        "decide_mutation",
-    ):
-        assert not hasattr(memory_claim, forbidden), f"{forbidden} belongs to KB2-C, not KB2-B"
+    for module in (memory_claim, mutation):
+        for forbidden in (
+            "MutationGate",
+            "mutate",
+            "apply_mutation",
+            "supersede",
+            "contradict",
+            "archive_claim",
+            "decide_mutation",
+        ):
+            assert not hasattr(module, forbidden), f"{forbidden} belongs to KB2-C, not KB2-B"
 
     source = Path(memory_claim.__file__).read_text(encoding="utf-8")
     assert "class MutationGate" not in source
