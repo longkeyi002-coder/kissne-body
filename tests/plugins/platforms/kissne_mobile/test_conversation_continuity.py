@@ -138,3 +138,88 @@ def _release(store):
         closer()
 
 
+def _persisted_sessions(_home=None):
+    """Persisted Conversation truth: the ``sessions`` rows of the isolated ``state.db``.
+
+    The path is resolved exactly the way ``SessionStore`` resolves it
+    (``hermes_state._default_db_path()``), so this reads the same file the store writes.
+    """
+    import sqlite3
+
+    from hermes_state import _default_db_path
+
+    db = Path(_default_db_path())
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return con.execute(
+            "SELECT id, source, user_id, ended_at, end_reason, session_key FROM sessions"
+        ).fetchall()
+    finally:
+        con.close()
+
+
+def test_binding_creates_no_temporary_mobile_only_conversation(tmp_path):
+    """Regression: joining an existing Conversation must not manufacture (and then end) a throwaway
+    mobile-only Conversation, and must not rewrite the identity of the Conversation it joins.
+
+    Why this assertion exists: ``get_or_create_session`` first materialises a session row for the
+    mobile routing key, and ``switch_session`` ends that row (``end_reason='session_switch'``)
+    before reopening the target. The routing index then *looks* correct while the persisted truth
+    still shows a second, mobile-only Conversation that existed and was discarded — the exact thing
+    ticket §0.3.14 forbids. Counting current routing entries cannot see it; the DB rows must be read.
+    """
+    adapter, _module, error = _adapter()
+    assert adapter is not None, f"kb1-mobile-adapter: {error}"
+
+    store = _build_session_store(str(tmp_path / "sessions"))
+    existing = _pre_existing_conversation(store)
+    adapter.set_session_store(store)
+
+    before = _persisted_sessions()
+    assert len(before) == 1, f"expected exactly one pre-existing conversation row, got {before}"
+
+    assert adapter.bind_conversation("inst-1", existing.session_key) is True, (
+        "bind_conversation() refused to bind the mobile installation to the existing conversation")
+
+    after = _persisted_sessions()
+    before_ids = {row[0] for row in before}
+
+    created = [row for row in after if row[0] not in before_ids]
+    assert created == [], (
+        "binding created a NEW persisted conversation row; §0.3.14 forbids a second (mobile-only) "
+        f"Conversation, even a temporary one: {created}")
+
+    ended = [row for row in after if row[3] is not None or row[4] is not None]
+    assert ended == [], f"binding ended a persisted conversation row: {ended}"
+
+    _release(store)
+
+
+def test_binding_does_not_rewrite_the_joined_conversation_identity(tmp_path):
+    """Regression: joining must leave the existing Conversation's persisted identity untouched.
+
+    A binding that rewrites ``source``/``user_id``/``session_key`` on an existing row is not a join,
+    it is a mutation of someone else's Conversation truth (§0.3.14).
+    """
+    adapter, _module, error = _adapter()
+    assert adapter is not None, f"kb1-mobile-adapter: {error}"
+
+    store = _build_session_store(str(tmp_path / "sessions"))
+    existing = _pre_existing_conversation(store)
+    adapter.set_session_store(store)
+
+    assert adapter.bind_conversation("inst-1", existing.session_key) is True, (
+        "bind_conversation() refused to bind the mobile installation to the existing conversation")
+
+    joined = [row for row in _persisted_sessions() if row[0] == existing.session_id]
+    assert len(joined) == 1, f"the joined conversation row is gone: {after}"
+    source, user_id, session_key = joined[0][1], joined[0][2], joined[0][5]
+    assert (source, user_id, session_key) == ("telegram", "user-existing", existing.session_key), (
+        "binding rewrote the identity of the existing Conversation row (source/user_id/session_key): "
+        f"{joined[0]}")
+
+    _release(store)
+
+
