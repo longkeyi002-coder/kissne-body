@@ -24,7 +24,8 @@ other channel. The adapter owns a loopback HTTP listener so the plugin needs no 
 
 Conversation truth is NOT owned here. The Mobile routing source is derived from ``installation_id``
 and pointed at an **already existing** Runtime Conversation through the public ``SessionStore`` API
-(``get_or_create_session`` + ``switch_session``, both persisted by the store itself); this module
+(``bind_source_to_existing_session`` — an alias-only routing write that creates no session row, ends
+nothing and reopens nothing, both persisted by the store itself); this module
 keeps no installation→conversation table of its own, and the adapter holds no Agent / Memory /
 Provider truth. Mobile inbound that is not bound to an existing conversation is refused instead of
 silently opening a second, mobile-only Conversation.
@@ -191,9 +192,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def bind_conversation(self, installation_id: str, session_key: str) -> bool:
         """Point this installation's routing key at an ALREADY EXISTING Runtime Conversation.
 
-        Uses only public ``SessionStore`` API — ``get_or_create_session`` (materialise the routing
-        key) followed by ``switch_session`` (repoint it) — so the resolution itself is the store's
-        truth and survives a restart. Returns ``False`` when the target conversation does not exist
+        Uses only public ``SessionStore`` API — ``bind_source_to_existing_session`` writes the
+        routing alias and nothing else: no session row is created, ended or reopened and the joined
+        row's identity is left untouched — so the resolution itself is the store's truth and
+        survives a restart. Returns ``False`` when the target conversation does not exist
         or the store cannot do it; the plugin never invents a conversation of its own.
         """
         store = getattr(self, "_session_store", None)
@@ -211,12 +213,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                            _fingerprint(installation), target_key)
             return False
         try:
-            current = store.get_or_create_session(self.source_for_installation(installation))
-            if current.session_id == target.session_id:
-                logger.debug("[kissne_mobile] installation %s already routed to the target conversation",
-                             _fingerprint(installation))
-                return True
-            entry = store.switch_session(current.session_key, target.session_id)
+            entry = store.bind_source_to_existing_session(
+                self.source_for_installation(installation), target.session_id,
+            )
         except Exception:
             logger.warning("[kissne_mobile] failed to bind installation %s to %s",
                            _fingerprint(installation), target_key, exc_info=True)
