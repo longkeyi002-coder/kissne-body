@@ -6,8 +6,8 @@ about the two of them together, and about the agent's own first-person
 experience — each one walkable back to the canonical record it came from.
 
 This module is deliberately **only** the contract.  It defines what a
-Biography entry *is* — its categories, its provenance, its evidence and their
-field shapes — plus a stable ``serialize`` / ``deserialize`` pair so a later
+Biography entry *is* — its subject and kind, its provenance, its evidence and
+their field shapes — plus a stable ``serialize`` / ``deserialize`` pair so a later
 provider can be swapped in without the schema moving.  It stores nothing, reads
 nothing, recalls nothing and embeds nothing; there is no writer API here on
 purpose, and no second long-term history is created: canonical records
@@ -19,8 +19,8 @@ Four boundaries the tests enforce and this module refuses to soften:
 
 * **Traceability over summarisation.**  ``provenance.sourceRefs`` is mandatory
   and non-empty; an entry that cannot be walked back to evidence is invalid.
-* **No fabricated past.**  ``self_memory`` requires at least one evidence item
-  backed by a real execution, tool receipt or world event.  With no evidence,
+* **No fabricated past.**  ``subject=yeqingxu`` requires at least one evidence
+  item backed by a real execution, tool receipt or world event.  With no evidence,
   the entry is rejected rather than invented.
 * **AI World is KB4.**  ``ai_world_experience`` is named here exactly so it can
   be refused by name instead of silently accepted before KB4 exists.
@@ -42,13 +42,39 @@ from typing import Any, Iterable, Mapping, Optional, Tuple
 
 SCHEMA_ID = "kissne.biography/1"
 
-# ── categories (KB2 §2.5: three, and only three) ────────────────────────────
+# ── subject (KB2-A: one axis, canonical values only) ────────────────────────
+# Biography's three subjects are a subset of the memory subject axis
+# (``user`` / ``yeqingxu`` / ``shared`` / ``project``).  The old product names
+# (``user_memory`` …) are boundary aliases in agent/memory_claim.py, never a
+# stored field: keeping both in one record is how the two start disagreeing.
 
-CATEGORY_USER = "user_memory"
-CATEGORY_SHARED = "shared_memory"
-CATEGORY_SELF = "self_memory"
+SUBJECT_USER = "user"
+SUBJECT_SHARED = "shared"
+SUBJECT_YEQINGXU = "yeqingxu"
 
-CATEGORIES = (CATEGORY_USER, CATEGORY_SHARED, CATEGORY_SELF)
+SUBJECTS = (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
+
+# ── kind (KB2-A: a second axis, independent of subject) ─────────────────────
+# Locked to agent/memory_claim.KINDS by tests; kept literal here so this module
+# needs no import from the claim contract (the dependency runs one way).
+
+KIND_FACT = "fact"
+KIND_EVENT = "event"
+KIND_STATE = "state"
+KIND_PREFERENCE = "preference"
+KIND_INTENTION = "intention"
+KIND_IMPRESSION = "impression"
+KIND_EPISODE = "episode"
+
+BIOGRAPHY_KINDS = (
+    KIND_FACT,
+    KIND_EVENT,
+    KIND_STATE,
+    KIND_PREFERENCE,
+    KIND_INTENTION,
+    KIND_IMPRESSION,
+    KIND_EPISODE,
+)
 
 # ── canonical record kinds a SourceRef may point at ─────────────────────────
 # These are the authoritative records; a Biography entry references them and
@@ -80,7 +106,7 @@ EVIDENCE_AI_WORLD_EXPERIENCE = "ai_world_experience"
 
 # ── frozen field sets ───────────────────────────────────────────────────────
 
-ENTRY_FIELDS = ("entry_id", "category", "statement", "provenance", "evidence", "policy")
+ENTRY_FIELDS = ("entry_id", "subject", "kind", "statement", "provenance", "evidence", "policy")
 PROVENANCE_FIELDS = ("origin", "recorded_by", "recorded_at", "sourceRefs")
 SOURCE_REF_FIELDS = ("kind", "ref", "locator")
 EVIDENCE_FIELDS = ("kind", "sourceRef", "detail")
@@ -116,8 +142,12 @@ class MissingEvidenceError(BiographyError):
     """A first-person claim with nothing behind it."""
 
 
-class InvalidCategoryError(BiographyError):
-    """Category is not one of the three Biography categories."""
+class InvalidSubjectError(BiographyError):
+    """Subject is not one of the three Biography subjects."""
+
+
+class InvalidKindError(BiographyError):
+    """Kind is not one of the frozen memory kinds."""
 
 
 class InvalidBiographyEntryError(BiographyError):
@@ -217,10 +247,11 @@ class Evidence:
 
 @dataclass(frozen=True)
 class BiographyEntry:
-    """One distilled, traceable statement in one of the three categories."""
+    """One distilled, traceable statement: its subject says whose, its kind says which type."""
 
     entry_id: str
-    category: str
+    subject: str
+    kind: str
     statement: str
     provenance: Provenance
     evidence: Tuple[Evidence, ...] = ()
@@ -229,9 +260,13 @@ class BiographyEntry:
     def __post_init__(self) -> None:
         if not _text(self.entry_id):
             raise InvalidBiographyEntryError("entry_id must be a stable, non-empty id")
-        if self.category not in CATEGORIES:
-            raise InvalidCategoryError(
-                f"category {self.category!r} is not a Biography category; expected one of {CATEGORIES}"
+        if self.subject not in SUBJECTS:
+            raise InvalidSubjectError(
+                f"subject {self.subject!r} is not a Biography subject; expected one of {SUBJECTS}"
+            )
+        if self.kind not in BIOGRAPHY_KINDS:
+            raise InvalidKindError(
+                f"kind {self.kind!r} is not a memory kind; expected one of {BIOGRAPHY_KINDS}"
             )
         if not _text(self.statement):
             raise InvalidBiographyEntryError("statement must be the entry's distilled claim")
@@ -242,9 +277,9 @@ class BiographyEntry:
         for item in items:
             if not isinstance(item, Evidence):
                 raise InvalidBiographyEntryError("evidence must contain only Evidence values")
-        if self.category == CATEGORY_SELF and not items:
+        if self.subject == SUBJECT_YEQINGXU and not items:
             raise MissingEvidenceError(
-                "self_memory requires execution / tool receipt / world event evidence; "
+                "subject=yeqingxu requires execution / tool receipt / world event evidence; "
                 "without it there is no first-person experience to record"
             )
         object.__setattr__(self, "evidence", items)
@@ -276,7 +311,8 @@ def serialize_entry(entry: BiographyEntry) -> dict:
     return {
         "schema": SCHEMA_ID,
         "entry_id": entry.entry_id,
-        "category": entry.category,
+        "subject": entry.subject,
+        "kind": entry.kind,
         "statement": entry.statement,
         "provenance": {
             "origin": entry.provenance.origin,
@@ -350,7 +386,7 @@ def deserialize_entry(data: Any) -> BiographyEntry:
     schema = data.get("schema")
     if schema is not None and schema != SCHEMA_ID:
         raise InvalidBiographyEntryError(f"unsupported schema {schema!r}; this contract is {SCHEMA_ID}")
-    missing = [name for name in ("entry_id", "category", "statement", "provenance") if name not in data]
+    missing = [name for name in ("entry_id", "subject", "kind", "statement", "provenance") if name not in data]
     if missing:
         raise InvalidBiographyEntryError(f"serialized entry is missing required fields: {missing}")
 
@@ -359,7 +395,8 @@ def deserialize_entry(data: Any) -> BiographyEntry:
         raise InvalidBiographyEntryError("evidence must be a list")
     return BiographyEntry(
         entry_id=data["entry_id"],
-        category=data["category"],
+        subject=data["subject"],
+        kind=data["kind"],
         statement=data["statement"],
         provenance=_load_provenance(data["provenance"]),
         evidence=tuple(_load_evidence(item) for item in evidence),

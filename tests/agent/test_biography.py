@@ -6,8 +6,9 @@ exists and behaves.
 
 What the contract has to guarantee (numbers = ticket requirements):
 
-* three categories, exactly: ``user_memory`` / ``shared_memory`` /
-  ``self_memory`` (2);
+* three subjects, exactly: ``user`` / ``yeqingxu`` / ``shared`` (2), each with
+  a ``kind`` on the second axis — the old ``user_memory`` style names are
+  product-language aliases only (KB2-A migration);
 * every entry is traceable — stable ``provenance`` with non-empty
   ``sourceRefs``, never a summary that cannot be walked back to its evidence
   (1);
@@ -112,8 +113,8 @@ def test_schema_id_is_declared():
     assert SCHEMA_ID == "kissne.biography/1"
 
 
-def test_exactly_three_categories_are_biography_categories():
-    assert SUBJECTS == (SUBJECT_USER, SUBJECT_SHARED, SUBJECT_YEQINGXU)
+def test_exactly_three_subjects_are_biography_subjects():
+    assert SUBJECTS == (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
     assert SUBJECTS == ("user", "yeqingxu", "shared")
 
 
