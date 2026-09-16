@@ -36,13 +36,25 @@ API = "bind_source_to_existing_session"
 # ── fixtures / helpers ────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture()
-def store(tmp_path, monkeypatch):
-    """Real SessionStore backed by a real SessionDB (SQLite in tmp_path)."""
+def _pin_home(tmp_path, monkeypatch) -> SessionStore:
+    """Real SessionStore over a real state.db, with the routing index pinned to the same file.
+
+    The gateway routing index is deliberately pinned to HERMES_HOME's store (#66887), so a test
+    that inspects routing rows must point the ambient home AND ``DEFAULT_DB_PATH`` at one tmp_path
+    — otherwise routing lands in the sandbox home while the row reads hit the tmp store.
+    """
+    import hermes_constants
     import hermes_state
 
     monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: str(tmp_path))
     return SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+
+
+@pytest.fixture()
+def store(tmp_path, monkeypatch):
+    """Real SessionStore backed by a real SessionDB (SQLite in tmp_path)."""
+    return _pin_home(tmp_path, monkeypatch)
 
 
 def _bind(store, source, target_session_id):
@@ -241,16 +253,12 @@ def test_binding_to_ended_target_fails_closed(store):
 
 def test_binding_across_profile_scope_fails_closed(tmp_path, monkeypatch):
     """⑧ 跨 profile / scope 绑定 → fail closed（别名不得指向本 scope 之外的会话）。"""
-    import hermes_state
-
-    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
-    store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+    store = _pin_home(tmp_path, monkeypatch)
     foreign = store.get_or_create_session(_other_source())
 
     other_home = tmp_path / "other-profile"
     other_home.mkdir()
-    monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", other_home / "state.db")
-    other = SessionStore(sessions_dir=other_home, config=GatewayConfig())
+    other = _pin_home(other_home, monkeypatch)  # another profile / scope, its own state.db
     other.get_or_create_session(_existing_source())
     other_db = other_home / "state.db"
     before = _sessions(other_db), _alias_map(other_db)
