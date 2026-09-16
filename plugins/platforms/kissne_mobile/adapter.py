@@ -52,7 +52,7 @@ if TYPE_CHECKING:  # typing only — the module is imported lazily where it is a
 sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
 from gateway.config import Platform, PlatformConfig
-from gateway.platforms._shared import coerce_port
+from gateway.platforms._shared import coerce_port, get_scoped_secret
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import build_session_key
@@ -73,6 +73,12 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 0  # ephemeral by default: the Android side is told the port it must reach
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
+
+# This platform has NO external credential, so enablement needs an explicit per-profile opt-in:
+# either ``platforms.kissne_mobile.enabled: true`` in that profile's config.yaml or this flag in
+# that profile's own ``.env``. See ``_is_connected`` for why the opt-in must never be read from
+# ``PlatformConfig.enabled``.
+OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 
 PAIRING_PATH = "/pair"
 MESSAGES_PATH = "/messages"
@@ -248,6 +254,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
+        # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
+        # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
+        # is this platform's native client, so that is what handler factories receive.
+        self._wire_plugin_handlers(app)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -500,9 +510,44 @@ def check_kissne_mobile_requirements() -> bool:
         return False
 
 
+def _env_flag(name: str) -> str:
+    """Scope-aware flag read. ``get_scoped_secret`` makes an installed profile's own secret scope
+    authoritative: a scoped miss returns the default instead of borrowing ``os.environ``, so flagging
+    Mobile in one profile can never enable it in another. The unscoped default profile falls back to
+    its own ``os.environ`` value. (``agent.secret_scope`` is off-limits here — the ticket's boundary
+    guard forbids this plugin from importing anything under ``agent``.)"""
+    return str(get_scoped_secret(name, "") or "").strip()
+
+
+def _opted_in_via_env() -> bool:
+    return _env_flag(OPT_IN_ENV).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_enablement() -> Optional[Dict[str, Any]]:
+    """``env_enablement_fn``: enable ONLY the profile whose own env carries the opt-in flag — ``None``
+    everywhere else, so no profile inherits the listener from another one."""
+    return {"enabled": True} if _opted_in_via_env() else None
+
+
+def _apply_yaml_config(_yaml_cfg: Any, platform_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """YAML bridge: an explicit ``platforms.kissne_mobile.enabled: true`` in THIS profile's block is a
+    real opt-in, so surface it in ``extra`` — where ``_is_connected`` looks. (``enabled`` is a typed
+    key, so ``PlatformConfig.from_dict`` deliberately keeps it out of ``extra``.)"""
+    return {"enabled": True} if (platform_cfg or {}).get("enabled") is True else {}
+
+
 def _is_connected(config: Optional[PlatformConfig] = None) -> bool:
-    """Configured when the platform is enabled — the listener needs no external credential."""
-    return bool(getattr(config, "enabled", False))
+    """Configured = THIS profile explicitly opted in (its own env flag or ``enabled: true`` in its YAML).
+
+    MUST NOT read ``config.enabled``. ``gateway/config_env.py::_plugin_is_configured`` probes every
+    plugin platform with a transient ``PlatformConfig(enabled=True, extra=...)`` view — the question is
+    "if the user enabled it, is it configured?" — so echoing that field reports "configured" for every
+    profile on the box and silently auto-enables the listener gateway-wide (a Discord-only profile then
+    grows a Mobile adapter). Same contract as ``plugins/platforms/raft/adapter.py``, another platform
+    that has no external credential to test for.
+    """
+    extra = getattr(config, "extra", None) or {}
+    return bool(extra.get("enabled"))
 
 
 def register(ctx) -> None:
@@ -513,6 +558,11 @@ def register(ctx) -> None:
         adapter_factory=create_adapter,
         check_fn=check_kissne_mobile_requirements,
         is_connected=_is_connected,
+        # No external credential exists, so the opt-in IS the platform's config signal: the flag in this
+        # profile's own env (``env_enablement_fn``) or ``enabled: true`` in its YAML (bridge below).
+        required_env=[OPT_IN_ENV],
+        env_enablement_fn=_env_enablement,
+        apply_yaml_config_fn=_apply_yaml_config,
         install_hint="Kissne Mobile needs the gateway's aiohttp dependency (present in a standard install).",
         emoji="📱",
         platform_hint=(
