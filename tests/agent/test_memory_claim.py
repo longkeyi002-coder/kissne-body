@@ -33,22 +33,26 @@ from pathlib import Path
 import pytest
 
 import agent.memory_claim as memory_claim
-from agent.biography import (
-    EVIDENCE_TOOL_RECEIPT,
-    EVIDENCE_WORLD_EVENT,
-    SOURCE_CONVERSATION_TURN,
-    SOURCE_TOOL_RECEIPT,
-    Evidence,
-    SourceRef,
-)
+import agent.memory_vocabulary as vocabulary
 from agent.memory_claim import (
     CLAIM_FIELDS,
+    SCHEMA_ID,
+    Claim,
+    ClaimError,
+    InvalidValidityWindowError,
+    claim_from_legacy_payload,
+    deserialize_claim,
+    serialize_claim,
+)
+from agent.memory_vocabulary import (
     EPISTEMIC_AGENT_EXPERIENCED,
     EPISTEMIC_HYPOTHETICAL,
     EPISTEMIC_INFERRED,
     EPISTEMIC_OBSERVED,
     EPISTEMIC_USER_DECLARED,
     EPISTEMICS,
+    EVIDENCE_TOOL_RECEIPT,
+    EVIDENCE_WORLD_EVENT,
     KIND_EVENT,
     KIND_FACT,
     KIND_IMPRESSION,
@@ -60,26 +64,24 @@ from agent.memory_claim import (
     REALM_EARTH,
     REALM_SYSTEM,
     REALMS,
-    SCHEMA_ID,
+    SOURCE_CONVERSATION_TURN,
+    SOURCE_TOOL_RECEIPT,
     SUBJECT_PROJECT,
     SUBJECT_SHARED,
     SUBJECT_USER,
     SUBJECT_YEQINGXU,
     SUBJECTS,
-    Claim,
-    ClaimError,
+    Evidence,
     InvalidEpistemicError,
     InvalidKindError,
     InvalidRealmError,
     InvalidSubjectError,
-    InvalidValidityWindowError,
-    MissingClaimSourceRefError,
     MissingEvidenceError,
+    MissingSourceRefError,
+    SourceRef,
     SubjectConflictError,
-    claim_from_legacy_payload,
-    deserialize_claim,
+    UnsupportedEvidenceKindError,
     resolve_subject,
-    serialize_claim,
 )
 
 
@@ -282,7 +284,9 @@ def test_observed_and_declared_stay_distinct():
 
 
 def test_hypothetical_is_not_an_event_that_happened():
-    with pytest.raises(ClaimError):
+    from agent.memory_vocabulary import HypotheticalNotAnEventError
+
+    with pytest.raises(HypotheticalNotAnEventError):
         _claim(epistemic=EPISTEMIC_HYPOTHETICAL, kind=KIND_EVENT)
     # 同一句假设换一种 kind 就只是假设本身，仍是合法的
     assert _claim(epistemic=EPISTEMIC_HYPOTHETICAL, kind=KIND_INTENTION).epistemic == EPISTEMIC_HYPOTHETICAL
@@ -303,7 +307,7 @@ def test_agent_experienced_needs_real_evidence():
 
 def test_ai_world_experience_is_still_refused_by_name():
     """AI World Agent Experience 属 KB4，KB2-A 不得提前实现。"""
-    from agent.biography import EVIDENCE_AI_WORLD_EXPERIENCE, UnsupportedEvidenceKindError
+    # UnsupportedEvidenceKindError 已从 memory_vocabulary 导入
 
     with pytest.raises(UnsupportedEvidenceKindError):
         Evidence(kind=EVIDENCE_AI_WORLD_EXPERIENCE, sourceRef=_sourceref())
@@ -391,7 +395,7 @@ def test_validity_window_does_not_implement_status_changes():
 
 def test_source_refs_are_mandatory():
     for empty in ((), []):
-        with pytest.raises(MissingClaimSourceRefError):
+        with pytest.raises(MissingSourceRefError):
             _claim(source_refs=empty)
     assert _claim().source_refs
 
@@ -540,3 +544,32 @@ def test_module_is_a_contract_only_no_provider_or_recall_surface():
         "MutationGate",
     ):
         assert forbidden not in exported, f"{forbidden} belongs to KB2-C/D, not to this ticket"
+
+
+# ── hardening：四条轴只有一个定义 ──────────────────────────────────────────
+
+def test_claim_takes_its_axes_from_the_one_vocabulary():
+    assert memory_claim.SUBJECTS is vocabulary.SUBJECTS
+    assert memory_claim.KINDS is vocabulary.KINDS
+    assert memory_claim.REALMS is vocabulary.REALMS
+    assert memory_claim.EPISTEMICS is vocabulary.EPISTEMICS
+    assert memory_claim.SourceRef is vocabulary.SourceRef
+    assert memory_claim.Evidence is vocabulary.Evidence
+    assert memory_claim.InvalidSubjectError is vocabulary.InvalidSubjectError
+    assert memory_claim.InvalidKindError is vocabulary.InvalidKindError
+    assert memory_claim.InvalidRealmError is vocabulary.InvalidRealmError
+    assert memory_claim.InvalidEpistemicError is vocabulary.InvalidEpistemicError
+
+
+def test_claim_does_not_import_the_biography_module():
+    from pathlib import Path
+
+    source = Path(memory_claim.__file__).read_text(encoding="utf-8")
+    assert "biography" not in source
+    assert "agent.memory_vocabulary" in source
+
+
+def test_documented_contract_names_still_resolve_through_the_vocabulary():
+    """readme/文档里写的名字仍然可用，但都指向同一个对象。"""
+    assert memory_claim.LEGACY_SUBJECT_ALIASES is vocabulary.LEGACY_SUBJECT_ALIASES
+    assert memory_claim.SELF_EVIDENCE_KINDS is vocabulary.SELF_EVIDENCE_KINDS

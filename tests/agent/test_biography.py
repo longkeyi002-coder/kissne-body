@@ -41,28 +41,41 @@ from pathlib import Path
 import pytest
 
 import agent.biography as biography
+import agent.memory_vocabulary as vocabulary
 from agent.biography import (
-    KIND_PREFERENCE,
-    SUBJECTS,
-    SUBJECT_YEQINGXU,
-    SUBJECT_SHARED,
-    SUBJECT_USER,
+    BIOGRAPHY_SUBJECTS,
     ENTRY_FIELDS,
+    SCHEMA_ID,
+    BiographyEntry,
+)
+from agent.memory_vocabulary import (
+    EPISTEMIC_AGENT_EXPERIENCED,
+    EPISTEMIC_HYPOTHETICAL,
+    EPISTEMIC_OBSERVED,
+    EPISTEMIC_USER_DECLARED,
+    EPISTEMICS,
     EVIDENCE_AI_WORLD_EXPERIENCE,
     EVIDENCE_EXECUTION,
     EVIDENCE_TOOL_RECEIPT,
     EVIDENCE_WORLD_EVENT,
+    KIND_EVENT,
+    KIND_PREFERENCE,
     PROVENANCE_FIELDS,
-    SCHEMA_ID,
+    REALM_AI_WORLD,
+    REALM_EARTH,
+    REALMS,
     SOURCE_CONVERSATION_TURN,
     SOURCE_EARTH_OBSERVATION,
     SOURCE_REF_FIELDS,
     SOURCE_TOOL_RECEIPT,
-    BiographyEntry,
+    SUBJECT_YEQINGXU,
+    SUBJECT_SHARED,
+    SUBJECT_USER,
     Evidence,
-    InvalidSubjectError,
+    HypotheticalNotAnEventError,
     InvalidEvidenceKindError,
     InvalidSourceRefError,
+    InvalidSubjectError,
     MissingEvidenceError,
     MissingSourceRefError,
     Provenance,
@@ -93,11 +106,19 @@ def _evidence(kind: str = EVIDENCE_TOOL_RECEIPT) -> Evidence:
     return Evidence(kind=kind, sourceRef=_ref(SOURCE_TOOL_RECEIPT, "receipt-7"), detail="")
 
 
-def _entry(subject: str = SUBJECT_USER, kind: str = KIND_PREFERENCE, **overrides):
+def _entry(
+    subject: str = SUBJECT_USER,
+    kind: str = KIND_PREFERENCE,
+    realm: str = REALM_EARTH,
+    epistemic: str = EPISTEMIC_USER_DECLARED,
+    **overrides,
+):
     kwargs = dict(
         entry_id="bio-0001",
         subject=subject,
         kind=kind,
+        realm=realm,
+        epistemic=epistemic,
         statement="Holds a green sheep as her own image; the fox is mine.",
         provenance=_provenance(),
         evidence=(),
@@ -114,8 +135,12 @@ def test_schema_id_is_declared():
 
 
 def test_exactly_three_subjects_are_biography_subjects():
-    assert SUBJECTS == (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
-    assert SUBJECTS == ("user", "yeqingxu", "shared")
+    assert BIOGRAPHY_SUBJECTS == (SUBJECT_USER, SUBJECT_YEQINGXU, SUBJECT_SHARED)
+    assert BIOGRAPHY_SUBJECTS == ("user", "yeqingxu", "shared")
+    assert set(BIOGRAPHY_SUBJECTS) < set(vocabulary.SUBJECTS), "Biography 用四轴里的三条，不许自己另立一套"
+    assert biography.KINDS is vocabulary.KINDS
+    assert biography.REALMS is vocabulary.REALMS
+    assert biography.EPISTEMICS is vocabulary.EPISTEMICS
 
 
 @pytest.mark.parametrize("subject", [SUBJECT_USER, SUBJECT_SHARED, SUBJECT_YEQINGXU])
@@ -137,6 +162,8 @@ def test_entry_field_set_is_frozen_against_a_canonical_text_field():
         "entry_id",
         "subject",
         "kind",
+        "realm",
+        "epistemic",
         "statement",
         "provenance",
         "evidence",
@@ -343,15 +370,68 @@ def test_serialized_entry_uses_subject_and_carries_kind():
     assert "category" not in payload
 
 
-def test_biography_subject_axis_matches_the_claim_axis():
-    """三条 Biography subject 是记忆 subject 轴的子集，且 kind 轴与 Claim 完全一致。"""
-    import agent.memory_claim as memory_claim
-
-    assert SUBJECTS == ("user", "yeqingxu", "shared")
-    assert set(SUBJECTS) < set(memory_claim.SUBJECTS)
-    assert biography.BIOGRAPHY_KINDS == memory_claim.KINDS
+def test_biography_takes_its_axes_from_the_one_vocabulary():
+    """hardening：Biography 不再自带一份 kind 取值，四条轴都取自 memory_vocabulary。"""
+    assert BIOGRAPHY_SUBJECTS == ("user", "yeqingxu", "shared")
+    assert set(BIOGRAPHY_SUBJECTS) < set(vocabulary.SUBJECTS)
+    assert biography.KINDS is vocabulary.KINDS
+    assert not hasattr(biography, "BIOGRAPHY_KINDS")
 
 
 def test_biography_rejects_a_kind_outside_the_frozen_axis():
-    with pytest.raises(biography.InvalidKindError):
+    with pytest.raises(vocabulary.InvalidKindError):
         _entry(kind="episode_memory")
+
+
+# ── hardening：Biography 补 realm + epistemic ──────────────────────────────
+
+def test_biography_entry_carries_realm_and_epistemic():
+    entry = _entry(realm=REALM_EARTH, epistemic=EPISTEMIC_OBSERVED)
+    assert (entry.realm, entry.epistemic) == (REALM_EARTH, EPISTEMIC_OBSERVED)
+    payload = biography.serialize_entry(entry)
+    assert payload["realm"] == REALM_EARTH and payload["epistemic"] == EPISTEMIC_OBSERVED
+    again = biography.deserialize_entry(payload)
+    assert (again.realm, again.epistemic) == (entry.realm, entry.epistemic)
+
+
+def test_biography_realm_is_required_and_never_guessed():
+    kwargs = dict(
+        entry_id="bio-0001",
+        subject=SUBJECT_USER,
+        kind=KIND_PREFERENCE,
+        statement="no realm",
+        provenance=_provenance(),
+        evidence=(),
+        policy={},
+    )
+    with pytest.raises(vocabulary.InvalidRealmError):
+        BiographyEntry(**kwargs, epistemic=EPISTEMIC_USER_DECLARED)
+    with pytest.raises(vocabulary.InvalidEpistemicError):
+        BiographyEntry(**kwargs, realm=REALM_EARTH)
+
+
+@pytest.mark.parametrize("bad", ["earth", "", "AI_World", None])
+def test_biography_invalid_realm_is_rejected(bad):
+    with pytest.raises(vocabulary.InvalidRealmError):
+        _entry(realm=bad)
+
+
+@pytest.mark.parametrize("bad", ["observed", "", "GUESSED", None])
+def test_biography_invalid_epistemic_is_rejected(bad):
+    with pytest.raises(vocabulary.InvalidEpistemicError):
+        _entry(epistemic=bad)
+
+
+def test_biography_hypothetical_is_not_an_event():
+    with pytest.raises(HypotheticalNotAnEventError):
+        _entry(kind=KIND_EVENT, epistemic=EPISTEMIC_HYPOTHETICAL)
+
+
+def test_biography_first_person_entries_still_need_evidence():
+    with pytest.raises(MissingEvidenceError):
+        _entry(
+            subject=SUBJECT_YEQINGXU,
+            realm=REALM_AI_WORLD,
+            epistemic=EPISTEMIC_AGENT_EXPERIENCED,
+            evidence=(),
+        )
