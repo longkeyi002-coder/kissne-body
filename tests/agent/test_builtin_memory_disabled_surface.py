@@ -74,18 +74,20 @@ class TestBuiltinMemoryToolAvailability:
             hermes_home, memory_enabled=False, user_profile_enabled=True
         )
         definition = _memory_tool_definition()
-        assert definition["parameters"]["properties"]["target"]["enum"] == ["user"]
-        assert "only 'user' is enabled" in definition["description"]
-        assert "only 'memory' is enabled" not in definition["description"]
+        # 'self' (SELF.md) has no config flag of its own: it stays advertised
+        # whichever entry-list store is enabled.
+        assert definition["parameters"]["properties"]["target"]["enum"] == ["user", "self"]
+        assert "'user' is enabled" in definition["description"]
+        assert "'memory' is enabled" not in definition["description"]
 
     def test_tool_present_when_only_memory_enabled(self, hermes_home):
         _write_memory_config(
             hermes_home, memory_enabled=True, user_profile_enabled=False
         )
         definition = _memory_tool_definition()
-        assert definition["parameters"]["properties"]["target"]["enum"] == ["memory"]
-        assert "only 'memory' is enabled" in definition["description"]
-        assert "only 'user' is enabled" not in definition["description"]
+        assert definition["parameters"]["properties"]["target"]["enum"] == ["memory", "self"]
+        assert "'memory' is enabled" in definition["description"]
+        assert "'user' is enabled" not in definition["description"]
 
     def test_tool_present_by_default(self, hermes_home):
         """No config file at all must not strip a working tool."""
@@ -119,7 +121,7 @@ class TestBuiltinMemoryToolAvailability:
         definition = _memory_tool_definition()
 
         assert calls == 1
-        assert definition["parameters"]["properties"]["target"]["enum"] == ["user"]
+        assert definition["parameters"]["properties"]["target"]["enum"] == ["user", "self"]
 
     def test_unavailable_snapshot_cannot_survive_failed_recheck(self, monkeypatch):
         from tools import memory_tool as memory_tool_module
@@ -238,7 +240,7 @@ class TestIndependentStoreWriteGates:
             memory_tool(action="add", target="bogus", content="fact", store=store)
         )
         assert short["success"] is False
-        assert "Use 'memory' or 'user'" in short["error"]
+        assert "Use 'memory', 'user' or 'self'" in short["error"]
 
 
 class TestExternalProviderSurvivesBuiltinDisable:

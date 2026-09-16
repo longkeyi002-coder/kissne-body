@@ -1098,6 +1098,19 @@ def drain_identity_slots() -> tuple:
     return recorded
 
 
+def record_self_slot(text: "str | None", path: str = "") -> None:
+    """Classify SELF text supplied by a NON-file reader and record the slot.
+
+    The memory store owns the SELF read on the prompt path now (it renders the
+    block and keeps the load-time snapshot), so :func:`load_self_md` no longer
+    sees the file on that path.  KB1-IDENTITY-DEGRADED must still classify
+    whatever text the prompt actually carries — a missing / untouched-placeholder
+    SELF.md has to surface as an explicit degraded notice, never as silence.
+    Policy stays here (``identity_state``); this function does no I/O.
+    """
+    _record_identity_slot(identity_state.self_slot(text, path))
+
+
 # Skills index (two-layer cache: in-process LRU, then disk snapshot).
 # One entry per profile × platform (key carries skills_dir); a multiplexing gateway needs more than a handful.
 # Sized for multi-profile processes: since #86313 the cache key carries a per-profile skills_dir (one entry
@@ -1561,6 +1574,11 @@ def load_self_md(
     ``memories/SELF.md``; use it only while the canonical root file is absent.
     The file is read only when a Session Snapshot is built, so normal turns
     cannot hot-reload it.
+
+    On the live prompt path the SELF block now comes from the memory store
+    (``MemoryStore.format_for_system_prompt("self")``, whose ``whole_file_state``
+    feeds :func:`record_self_slot`); this reader remains the store-less fallback
+    and the direct-read entry point for the migration/reread/diagnostic paths.
     """
     home = Path(home_override) if home_override is not None else Path(get_hermes_home())
     canonical_path = home / "SELF.md"

@@ -628,6 +628,29 @@ def _kissne_volatile_head(
     return [self_snapshot, *memory_snapshot_parts, skills_prompt]
 
 
+def _self_block(agent: Any, ctx_len: Optional[int]) -> Optional[str]:
+    """SELF block for the volatile head, served by the SAME memory-store chain as
+    MEMORY/USER (``MemoryStore.format_for_system_prompt("self")``) so SELF.md no
+    longer rides a private file reader into the prompt.
+
+    The block is the store's frozen load-time snapshot — identical semantics to
+    MEMORY/USER: a mid-session write cannot change this session's prompt.
+
+    KB1-IDENTITY-DEGRADED: the text behind that block is classified here, so an
+    absent or untouched-placeholder SELF.md still yields the explicit degraded
+    notice (``identity_state.SELF``) that :func:`_assemble_prompt_parts` swaps in.
+
+    Without a store (memory AND user profile both disabled) the legacy direct
+    reader stays in charge, keeping a store-less session's SELF injection intact.
+    """
+    store = getattr(agent, "_memory_store", None)
+    if store is not None and hasattr(store, "whole_file_state"):
+        text, path = store.whole_file_state("self")
+        _pb.record_self_slot(text, path)
+        return store.format_for_system_prompt("self")
+    return _pb.load_self_md(ctx_len, home_override=_agent_home(agent))
+
+
 def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
@@ -685,12 +708,10 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
         stable_parts.extend([*coding_trailing_parts, *post_workspace_parts])
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
     # KISSNE-CTX-14 fixes the volatile head as SELF -> MEMORY -> Skills Index.
-    # These are frozen together for the Session Snapshot lifecycle.
+    # All three now come from the memory store (SELF included), and all three are
+    # frozen together for the Session Snapshot lifecycle.
     wants_identity_snapshot = agent.load_soul_identity or not agent.skip_context_files
-    self_snapshot = (
-        _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))
-        if wants_identity_snapshot else None
-    )
+    self_snapshot = _self_block(agent, _ctx_len) if wants_identity_snapshot else None
     # KB1-IDENTITY-DEGRADED: an absent or untouched-placeholder SELF.md must not
     # read as recorded self-state; the explicit degraded notice takes its place.
     self_slot = _pb.consume_identity_slot(identity_state.SELF) if wants_identity_snapshot else None

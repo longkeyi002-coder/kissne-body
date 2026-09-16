@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Memory Tool - persistent curated memory (MEMORY.md = agent notes, USER.md = user
-profile). Both enter the system prompt as a FROZEN snapshot at session start;
-mid-session writes hit disk but never change the prompt (prefix cache intact).
-Single `memory` tool: add/replace/remove or a batch `operations` list."""
+profile, SELF.md = the agent's own whole-file self-state). All three enter the
+system prompt as a FROZEN snapshot at session start; mid-session writes hit disk
+but never change the prompt (prefix cache intact).
+Single `memory` tool: add/replace/remove or a batch `operations` list.
+target='self' is whole-file: action='replace' only."""
 
 import copy
 import json
@@ -96,14 +98,31 @@ def _batch_op_line(op: Dict[str, Any]) -> str:
     return f"- replace: {old} -> {content}" if act == "replace" else f"- {act}: {content}"
 
 
+def _target_label(target: str) -> str:
+    """Human label for a target in an approval gate summary."""
+    return {"user": "user profile", "self": "SELF.md (whole file)"}.get(target, "memory")
+
+
+def _self_replace_only_message(action: str) -> str:
+    """SELF.md is one whole-file document; only ``replace`` writes it."""
+    return (f"target='self' (SELF.md) takes action='replace' only: it is a single whole-file "
+            f"document, not a list of entries, so '{action}' does not apply. Reissue with "
+            f"action='replace', target='self', content=<the complete new SELF.md text> "
+            f"(or edit the file with write_file).")
+
+
 def _apply_write_gate(action: str, target: str, content: Optional[str], old_text: Optional[str],
                       operations: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
     """Gate one mutating op, or (``operations`` set) a whole batch as a single unit."""
-    label = "user profile" if target == "user" else "memory"
+    label = _target_label(target)
     if operations is not None:
         return _gate_or_stage(f"apply {len(operations)} op(s) to {label}",
                               "\n".join(_batch_op_line(op) for op in operations),
                               {"action": "batch", "target": target, "operations": operations})
+    if target == "self":
+        # No old_text on a whole-file rewrite (there is no entry to select).
+        return _gate_or_stage(f"rewrite {label}", f"whole-file replace, new content:\n{content}",
+                              {"action": action, "target": target, "content": content, "old_text": None})
     return _gate_or_stage(*_STORE_ACTIONS[action][1](label, content, old_text),
                           {"action": action, "target": target, "content": content, "old_text": old_text})
 
@@ -112,6 +131,15 @@ def _validate_single_op(store, action, target, content, old_text) -> Optional[st
     """Validate BEFORE the gate so an invalid write is rejected now, not at approve time.
     Missing ``old_text`` is recoverable (it can't be schema-required — needs a combinator
     the Codex backend rejects): return the inventory plus a retry instruction."""
+    if target == "self":
+        # Whole-file semantics, enforced here (not by a schema combinator the Codex
+        # backend rejects): replace-only, no old_text, and the full new text required.
+        if action != "replace":
+            return tool_error(_self_replace_only_message(action), success=False)
+        if not content:
+            return tool_error("content is required for action='replace' target='self' — pass the complete "
+                              "new SELF.md text (a whole-file rewrite cannot be empty).", success=False)
+        return None
     if action == "add" and not content:
         return tool_error("Content is required for 'add' action.", success=False)
     if action in ("replace", "remove") and not old_text:
@@ -174,7 +202,10 @@ def memory_tool(action: str = None, target: str = "memory", content: str = None,
                 store: Optional[MemoryStore] = None) -> str:
     """Tool entry point; returns a JSON string. Single op (action + content/old_text)
     or batch (``operations``, atomic against the final budget). ``new_text``
-    aliases ``content`` — callers mirror ``old_text`` with it (patch-tool shape)."""
+    aliases ``content`` — callers mirror ``old_text`` with it (patch-tool shape).
+
+    ``target="self"`` is the whole-file SELF.md: only the single-op
+    ``action="replace"`` writes it (see ``_validate_single_op``)."""
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
     if content is None and new_text is not None:
@@ -184,6 +215,11 @@ def memory_tool(action: str = None, target: str = "memory", content: str = None,
     target_error = _memory_target_error(store, target)
     if target_error is not None:
         return json.dumps(target_error)
+    if operations and target == "self":
+        # A batch is an entry-list consolidation; SELF.md has no entries.
+        return tool_error("target='self' (SELF.md) is a single whole-file document, so an 'operations' "
+                          "batch cannot apply to it. Use the single-op shape: action='replace', "
+                          "target='self', content=<the complete new SELF.md text>.", success=False)
     if operations:
         if not isinstance(operations, list):
             return tool_error("operations must be a list of {action, content?, old_text?} objects.", success=False)
@@ -236,13 +272,13 @@ def check_memory_requirements() -> bool:
 
 def _memory_target_error(store: "MemoryStore", target: str) -> Optional[Dict[str, Any]]:
     """Return a shared validation error for an invalid or disabled target."""
-    if target not in {"memory", "user"}:
+    if target not in {"memory", "user", "self"}:
         from tools.registry import _bound_error_text
         return {"success": False,
-                "error": _bound_error_text(f"Invalid memory target '{target}'. Use 'memory' or 'user'.")}
+                "error": _bound_error_text(f"Invalid memory target '{target}'. Use 'memory', 'user' or 'self'.")}
     if store.target_enabled(target):
         return None
-    label = "USER.md" if target == "user" else "MEMORY.md"
+    label = {"user": "USER.md", "self": "SELF.md"}.get(target, "MEMORY.md")
     return {"success": False, "error": f"Built-in {label} writes are disabled in memory config.", "target": target}
 
 
@@ -258,6 +294,15 @@ def apply_memory_pending(payload: Dict[str, Any], store: "MemoryStore") -> Dict[
         return {"success": False, "error": f"Unknown staged action '{action}'."}
     return _STORE_ACTIONS[action][0](store, target, payload.get("content") or "", payload.get("old_text") or "")
 
+
+# One source of truth for the target sentence: the base description and the
+# single-store narrowing below must never drift apart (the narrowing rewrites it).
+TARGETS_SENTENCE = (
+    "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
+    "notes (environment, conventions, tool quirks, lessons). 'self' = your own evolving "
+    "self-state (SELF.md) — ONE whole-file document, written with action='replace' only; "
+    "'add'/'remove' and 'operations' batches do not apply to it."
+)
 
 MEMORY_SCHEMA = {
     "name": "memory",
@@ -279,8 +324,7 @@ MEMORY_SCHEMA = {
         "stay small.\n\n"
         "IF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that "
         "removes or shortens enough stale entries and adds the new one together.\n\n"
-        "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
-        "notes (environment, conventions, tool quirks, lessons).\n\n"
+        + TARGETS_SENTENCE + "\n\n" +
         "SKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, "
         "completed-work logs, temporary TODO state (use session_search for those). Reusable "
         "procedures belong in a skill, not memory."
@@ -291,20 +335,22 @@ MEMORY_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": ["add", "replace", "remove"],
-                "description": "The action to perform (single-op shape). Omit when using 'operations'."
+                "description": "The action to perform (single-op shape). Omit when using 'operations'. "
+                               "'self' takes 'replace' only."
             },
             "target": {
                 "type": "string",
-                "enum": ["memory", "user"],
-                "description": "Which memory store: 'memory' for personal notes, 'user' for user profile."
+                "enum": ["memory", "user", "self"],
+                "description": "Which memory store: 'memory' for personal notes, 'user' for user profile, "
+                               "'self' for your own SELF.md (whole file, rewritten with action='replace')."
             },
             "content": {
                 "type": "string",
-                "description": "The entry content. Required for 'add' and 'replace' (single-op shape). Alias: 'new_text' is also accepted (mirrors old_text)."
+                "description": "The entry content. Required for 'add' and 'replace' (single-op shape). Alias: 'new_text' is also accepted (mirrors old_text). For target='self' it is the COMPLETE new SELF.md text."
             },
             "old_text": {
                 "type": "string",
-                "description": "REQUIRED for 'replace' and 'remove' (single-op shape): a short unique substring identifying the existing entry to modify. Omit only for 'add'."
+                "description": "REQUIRED for 'replace' and 'remove' (single-op shape): a short unique substring identifying the existing entry to modify. Omit only for 'add' and for target='self' (a whole-file rewrite selects nothing)."
             },
             "new_text": {
                 "type": "string",
@@ -335,27 +381,33 @@ MEMORY_SCHEMA = {
 
 
 # Schema text when only one built-in store is enabled: (target description, TARGETS replacement).
-_SINGLE_TARGET_TEXT = {
-    ("memory",): ("The enabled built-in store: 'memory' for personal notes.",
-                  "TARGET: only 'memory' is enabled for personal notes (environment, conventions, "
-                  "tool quirks, lessons)."),
-    ("user",): ("The enabled built-in store: 'user' for user profile.",
-                "TARGET: only 'user' is enabled for user profile facts (name, role, preferences, style).")}
+# 'self' has no config flag, so it is always advertised alongside whichever store is on —
+# the keys carry it, and the text keeps saying what it is.
+_SINGLE_TARGET_TEXT: Dict[Tuple[str, ...], Tuple[str, str]] = {
+    ("memory", "self"): ("The enabled built-in stores: 'memory' for personal notes; 'self' for your own "
+                         "whole-file SELF.md ('replace' only).",
+                         "TARGET: 'memory' is enabled for personal notes (environment, conventions, "
+                         "tool quirks, lessons); 'self' = your own SELF.md, ONE whole-file document "
+                         "rewritten with action='replace'."),
+    ("user", "self"): ("The enabled built-in stores: 'user' for user profile; 'self' for your own "
+                       "whole-file SELF.md ('replace' only).",
+                       "TARGET: 'user' is enabled for user profile facts (name, role, preferences, "
+                       "style); 'self' = your own SELF.md, ONE whole-file document rewritten with "
+                       "action='replace'.")}
 
 
 def _build_memory_schema_overrides() -> Dict[str, Any]:
     """Narrow the advertised target surface using the availability snapshot."""
     flags = _memory_surface_flags.get() or get_builtin_memory_store_flags()
     _memory_surface_flags.set(None)
-    targets = [t for t, on in zip(("memory", "user"), flags) if on]
+    # SELF.md is not gated by the memory/user store flags, so 'self' is always advertised.
+    targets = [t for t, on in zip(("memory", "user"), flags) if on] + ["self"]
     parameters = copy.deepcopy(MEMORY_SCHEMA["parameters"])
     target_schema, description = parameters["properties"]["target"], MEMORY_SCHEMA["description"]
     target_schema["enum"] = targets
     if narrowed := _SINGLE_TARGET_TEXT.get(tuple(targets)):
         target_schema["description"], replacement = narrowed
-        description = description.replace(
-            "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
-            "notes (environment, conventions, tool quirks, lessons).", replacement)
+        description = description.replace(TARGETS_SENTENCE, replacement)
     return {"description": description, "parameters": parameters}
 
 
