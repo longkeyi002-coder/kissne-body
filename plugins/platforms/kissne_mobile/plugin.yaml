@@ -8,7 +8,12 @@ description: >
   to the SAME Hermes Runtime and the SAME Runtime Conversation as every other
   channel: an installation exchanges a short-lived, single-use pairing code for
   a device-scoped token (the endpoint being reachable never registers anything),
-  then posts plain text and drains replies. Conversation truth stays in the
+  then asks which Conversation it is on and gets a bounded tail of that history
+  (bootstrap), posts text idempotently per client message id, and reads its
+  replies as a durable, sequence-numbered event stream that it acknowledges
+  explicitly — so a reply is never lost by a disconnect, a restart, or a retry.
+  An open turn can be cancelled, and the cancellation is acknowledged.
+  Conversation truth stays in the
   existing SessionStore — the adapter only points the Mobile routing source at an
   already existing conversation, and never holds Agent / Memory / Provider truth.
   The device is never given a Runtime management key.

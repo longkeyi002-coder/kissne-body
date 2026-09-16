@@ -8,19 +8,36 @@ other channel. The adapter owns a loopback HTTP listener so the plugin needs no 
     Reachability alone never registers anything, and the only thing handed to the device is that
     token — never a Runtime management key, never a provider key.
 
+``POST /bootstrap``
+    Device token in, "which Runtime Conversation am I on" out: the joined Conversation's identity plus a
+    **bounded tail** of its history, so a fresh app launch shows the current chat instead of an empty
+    new one. Read straight from the Runtime session store on every call; it never creates anything, and
+    an installation that has joined nothing gets ``bound=false``.
+
 ``POST /messages``
     A paired device posts text, authenticated with its device token. The adapter turns it into a
     :class:`~gateway.platforms.event.MessageEvent` through ``build_source`` and hands it to
-    ``await self.handle_message(event)`` — the same inbound path every other adapter uses.
+    ``await self.handle_message(event)`` — the same inbound path every other adapter uses. A client
+    ``message_id`` makes the call idempotent (a retry never injects a second turn; a retry that rewrites
+    the payload is refused with 409), and the reply carries the ``turn_id`` the device correlates
+    stream/cancel events with. The same endpoint also takes ``{"ack": {"cursor": N}}`` to retire
+    delivered replies.
 
-``GET /messages``
-    The device drains the replies this Runtime queued for it (text out; the queue is transport-only).
+``GET /messages?cursor=N``
+    The device reads the replies this Runtime queued for it: typed, sequence-numbered events
+    (``pending`` / ``delta`` / ``completed`` / ``cancelled``) newer than ``N``. Reading is
+    **non-destructive** — a poll whose response never arrives loses nothing — and every event carries
+    the ``turn_id`` it belongs to.
+
+``POST /cancel``
+    ``{"turn_id": T}`` interrupts that turn's Runtime activity and answers with the resulting state, so
+    the device never has to infer "did my cancel land?" from silence.
 
 ``POST /revoke``
     The device kills its own token immediately; the row is committed, so it stays dead across restarts.
 
 ``GET /health``
-    Liveness + how many tokens would currently authenticate.
+    Liveness only (the reverse proxy must not publish it).
 
 Conversation truth is NOT owned here. The Mobile routing source is derived from ``installation_id``
 and pointed at an **already existing** Runtime Conversation through the public ``SessionStore`` API
@@ -36,6 +53,7 @@ Out of scope for this ticket: the Android client itself (``KB1-ANDROID-CHAT``).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import logging
@@ -44,7 +62,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path as _Path
-from typing import TYPE_CHECKING, Any, Deque, Dict, Optional
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # typing only — the module is imported lazily where it is actually needed
     from aiohttp import web
@@ -59,11 +77,20 @@ from gateway.session import build_session_key
 
 from .device_store import (
     DEFAULT_PAIRING_TTL_SECONDS,
+    EVENT_CANCELLED,
+    EVENT_COMPLETED,
+    EVENT_DELTA,
+    EVENT_PENDING,
+    INBOUND_CONFLICT,
+    INBOUND_DUPLICATE,
     DeviceStore,
     PairingCodeExpired,
     PairingCodeInvalid,
     PairingCodeReplayed,
     PairingError,
+    TURN_CANCELLED,
+    TURN_COMPLETED,
+    TURN_PENDING,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,9 +108,20 @@ DEFAULT_OUTBOUND_QUEUE_CAP = 200
 OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 
 PAIRING_PATH = "/pair"
+BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
+
+#: How many history messages a fresh app launch may ask for (§0.3.16: bootstrap returns a BOUNDED tail).
+DEFAULT_HISTORY_CAP = 50
+#: How many events one poll may return; the device acks and polls again for the rest.
+DEFAULT_READ_LIMIT = 200
+#: Pairing throttle. The exposure decision dropped IP allowlisting (mobile networks move), so ``/pair``
+#: is rate limited instead: this many attempts per client address per window, then 429 + Retry-After.
+PAIR_ATTEMPT_LIMIT = 10
+PAIR_ATTEMPT_WINDOW_SECONDS = 60.0
 
 
 def _fingerprint(value: str) -> str:
@@ -117,10 +155,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
             extra.get("max_body_bytes", DEFAULT_MAX_BODY_BYTES), DEFAULT_MAX_BODY_BYTES)
         self._outbound_cap: int = coerce_port(
             extra.get("outbound_queue_cap", DEFAULT_OUTBOUND_QUEUE_CAP), DEFAULT_OUTBOUND_QUEUE_CAP)
+        self._history_cap: int = coerce_port(
+            extra.get("history_cap", DEFAULT_HISTORY_CAP), DEFAULT_HISTORY_CAP)
+        self._read_limit: int = coerce_port(
+            extra.get("read_limit", DEFAULT_READ_LIMIT), DEFAULT_READ_LIMIT)
+        self._pair_attempt_limit: int = coerce_port(
+            extra.get("pair_attempt_limit", PAIR_ATTEMPT_LIMIT), PAIR_ATTEMPT_LIMIT)
         self._runner: Any = None
         self._store: Optional[DeviceStore] = None
-        # Transport only: replies waiting for their device to poll. Never conversation state.
-        self._outbound: Dict[str, Deque[Dict[str, Any]]] = {}
+        # Transport only, and only for the throttle: recent pairing attempts per client address. Queued
+        # replies are NOT kept in memory — they are rows (see ``device_store``), so a restart loses none.
+        self._pair_attempts: Dict[str, Deque[float]] = {}
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -250,8 +295,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # bodies with no Content-Length.
         app = web.Application(client_max_size=self._max_body_bytes)
         app.router.add_post(PAIRING_PATH, self._handle_pair)
+        app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
@@ -286,7 +333,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return self._port
 
     async def disconnect(self) -> None:
-        """Stop accepting devices, drop queued replies, and release the credential handle."""
+        """Stop accepting devices and release the credential handle.
+
+        Queued replies are rows, not process memory, so they are deliberately NOT dropped here: a
+        restart re-delivers whatever the device has not acknowledged yet.
+        """
         runner, self._runner = self._runner, None
         self.bound_port = None
         if runner is not None:
@@ -297,31 +348,82 @@ class KissneMobileAdapter(BasePlatformAdapter):
         store, self._store = self._store, None
         if store is not None:
             await asyncio.to_thread(store.close)
-        self._outbound.clear()
+        self._pair_attempts.clear()
         self._mark_disconnected()
         logger.info("[kissne_mobile] disconnected")
 
     # -- outbound ----------------------------------------------------------------------------------
 
+    async def _queue_event(self, installation_id: str, event_type: str, *,
+                           content: Optional[str] = None, reply_to: Optional[str] = None,
+                           extra: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """Append one typed event to the installation's durable stream; returns its transport message id.
+
+        The row is committed *before* the device is told anything, so nothing between "reply produced"
+        and "reply delivered" can lose it — not a dropped poll, not a Runtime restart. ``None`` means
+        there was no target installation at all (a caller mistake the Runtime must see as a failed send).
+        ``metadata`` is deliberately never echoed to the device: it carries Runtime-side routing.
+        """
+        installation = str(installation_id or "").strip()
+        if not installation:
+            return None
+        message_id = f"kbm_out_{secrets.token_hex(8)}"
+        payload: Dict[str, Any] = {"message_id": message_id}
+        if content is not None:
+            payload["text"] = self.format_message(content)
+        if reply_to:
+            payload["reply_to"] = reply_to
+        if extra:
+            payload.update(extra)
+        try:
+            store = self.device_store()
+        except Exception:
+            logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
+            return None
+        turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
+        try:
+            seq = await asyncio.to_thread(
+                store.enqueue_event, installation, event_type, payload, turn_id,
+                cap=max(1, self._outbound_cap),
+            )
+            if event_type == EVENT_COMPLETED and turn_id:
+                # The reply closes the turn it answers — but only from ``pending``: a late reply must not
+                # resurrect a turn the user already cancelled.
+                await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
+        except Exception:
+            logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
+                             event_type, _fingerprint(installation))
+            return None
+        logger.debug("[kissne_mobile] queued %s event seq=%d (%s) for installation %s",
+                     event_type, seq, message_id, _fingerprint(installation))
+        return message_id
+
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue ``content`` for the installation's device to pick up on its next poll."""
-        installation = str(chat_id or "").strip()
-        if not installation:
+        """Queue the FINAL reply for the installation as a ``completed`` event."""
+        message_id = await self._queue_event(chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
+        if message_id is None:
             return SendResult(success=False, error="missing target installation")
-        message_id = f"kbm_out_{secrets.token_hex(8)}"
-        queue = self._outbound.get(installation)
-        if queue is None:
-            queue = self._outbound[installation] = deque(maxlen=max(1, self._outbound_cap))
-        queue.append({
-            "message_id": message_id,
-            "text": self.format_message(content),
-            "reply_to": reply_to,
-            "created_at": time.time(),
-        })
-        logger.debug("[kissne_mobile] queued outbound message %s for installation %s",
-                     message_id, _fingerprint(installation))
         return SendResult(success=True, message_id=message_id)
+
+    async def send_draft(self, chat_id: str, draft_id: int, content: str,
+                         metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        """Queue one INCREMENTAL slice of a streaming answer as a ``delta`` event.
+
+        Deltas are their own event type, so the device renders them as they arrive and closes the turn
+        on the final ``send`` — it never has to guess whether a given text was the last one.
+        """
+        message_id = await self._queue_event(
+            chat_id, EVENT_DELTA, content=content, extra={"draft_id": int(draft_id)})
+        if message_id is None:
+            return SendResult(success=False, error="missing target installation")
+        return SendResult(success=True, message_id=message_id)
+
+    def supports_draft_streaming(self, chat_type: Optional[str] = None,
+                                 metadata: Optional[Dict[str, Any]] = None,
+                                 chat_id: Optional[str] = None) -> bool:
+        """Yes — streaming reaches this device as typed delta events (see :meth:`send_draft`)."""
+        return True
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """A Mobile "chat" is one installation."""
@@ -389,8 +491,42 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "live_devices": devices,
         })
 
+    def _client_address(self, request: web.Request) -> str:
+        """The address the pairing throttle counts against.
+
+        Deliberately the socket peer, never a client-supplied ``X-Forwarded-For``: a header a caller can
+        invent would let one attacker spread brute-force attempts across unlimited buckets. Behind the
+        reverse proxy this is the proxy's own address, which still makes guessing codes expensive.
+        """
+        return str(getattr(request, "remote", None) or "unknown")
+
+    def _pair_throttle(self, request: web.Request) -> Optional[float]:
+        """``None`` when this attempt may proceed, else the seconds the caller must wait.
+
+        Operator decision (2026-09-16): no IP allowlist — mobile addresses move, so the exposure knob is
+        a strict rate limit on ``/pair`` instead. The window is per client address and covers every
+        attempt, successful or not.
+        """
+        now = time.time()
+        window_start = now - PAIR_ATTEMPT_WINDOW_SECONDS
+        client = self._client_address(request)
+        attempts = self._pair_attempts.setdefault(client, deque())
+        while attempts and attempts[0] <= window_start:
+            attempts.popleft()
+        if len(attempts) >= max(1, self._pair_attempt_limit):
+            return max(0.0, (attempts[0] + PAIR_ATTEMPT_WINDOW_SECONDS) - now)
+        attempts.append(now)
+        return None
+
     async def _handle_pair(self, request: web.Request) -> web.Response:
         """One-time pairing code -> device token. Nothing else registers an installation."""
+        retry_after = self._pair_throttle(request)
+        if retry_after is not None:
+            logger.warning("[kissne_mobile] pairing attempts from %s throttled for %.1fs",
+                           _fingerprint(self._client_address(request)), retry_after)
+            response = _error_response("too_many_pairing_attempts", 429)
+            response.headers["Retry-After"] = str(max(1, int(retry_after) + 1))
+            return response
         payload, error = await self._payload(request)
         if error is not None:
             return error
@@ -429,8 +565,35 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "conversation_bound": bound,
         }, status=201)
 
+    @staticmethod
+    def _payload_fingerprint(text: str) -> str:
+        """Digest of an inbound payload — the thing that separates a retry from a rewrite."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
+        """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
+        ack = body.get("ack")
+        if not isinstance(ack, dict):
+            return _error_response("ack_must_be_an_object", 400)
+        raw_cursor = ack.get("cursor")
+        if isinstance(raw_cursor, bool) or not isinstance(raw_cursor, (int, str)):
+            return _error_response("ack_cursor_required", 400)
+        try:
+            cursor = int(raw_cursor)
+        except ValueError:
+            return _error_response("ack_cursor_required", 400)
+        if cursor < 0:
+            return _error_response("ack_cursor_must_not_be_negative", 400)
+        retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
+        return _json_response({"ok": True, "acked": retired, "cursor": cursor})
+
     async def _handle_inbound(self, request: web.Request) -> web.Response:
-        """Authenticated text in -> the Runtime's normal inbound path."""
+        """Authenticated text in -> the Runtime's normal inbound path.
+
+        Idempotent per client ``message_id``: a retry repeats the original ``turn_id`` without injecting
+        a second turn, and a retry that carries a different payload is refused instead of rewriting a
+        turn the Runtime already started.
+        """
         installation = await self._authenticated_installation(request)
         if not installation:
             return _error_response("unauthorized", 401)
@@ -438,6 +601,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if error is not None:
             return error
         body = payload or {}
+        if "ack" in body:
+            if str(body.get("text") or "").strip():
+                return _error_response("text_and_ack_are_mutually_exclusive", 400)
+            return await self._handle_ack(installation, body)
         text = str(body.get("text") or "")
         if not text.strip():
             return _error_response("text_required", 400)
@@ -452,7 +619,35 @@ class KissneMobileAdapter(BasePlatformAdapter):
                            _fingerprint(installation))
             return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
 
-        message_id = str(body.get("message_id") or f"kbm_in_{secrets.token_hex(8)}")
+        store = self.device_store()
+        client_message_id = str(body.get("message_id") or "").strip()
+        fingerprint = self._payload_fingerprint(text)
+        if client_message_id:
+            existing = await asyncio.to_thread(
+                store.inbound_record, installation, client_message_id)
+            if existing is not None:
+                if str(existing.get("payload_hash") or "") == fingerprint:
+                    return self._duplicate_response(client_message_id, str(existing.get("turn_id") or ""))
+                return _error_response("message_id_conflict", 409)
+
+        message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
+        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        if client_message_id:
+            # The claim is the gate: whichever concurrent retry wins it is the one that injects the turn.
+            outcome = await asyncio.to_thread(
+                store.record_inbound, installation, client_message_id, fingerprint, turn_id)
+            if outcome == INBOUND_DUPLICATE:
+                record = await asyncio.to_thread(
+                    store.inbound_record, installation, client_message_id) or {}
+                return self._duplicate_response(client_message_id, str(record.get("turn_id") or ""))
+            if outcome == INBOUND_CONFLICT:
+                return _error_response("message_id_conflict", 409)
+
+        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        await asyncio.to_thread(
+            store.enqueue_event, installation, EVENT_PENDING,
+            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
+
         source = self.source_for_installation(installation)
         event = MessageEvent(
             text=text,
@@ -467,19 +662,186 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
             return _error_response("inbound_injection_failed", 503)
-        return _json_response({"ok": True, "message_id": message_id}, status=202)
+        return _json_response(
+            {"ok": True, "message_id": message_id, "turn_id": turn_id}, status=202)
+
+    @staticmethod
+    def _duplicate_response(client_message_id: str, turn_id: str) -> web.Response:
+        """The answer to a retry: the original turn, and an explicit ``duplicate`` flag."""
+        return _json_response({
+            "ok": True,
+            "duplicate": True,
+            "message_id": client_message_id,
+            "turn_id": turn_id,
+        }, status=200)
 
     async def _handle_outbound(self, request: web.Request) -> web.Response:
-        """Drain the replies queued for the authenticated installation."""
+        """Typed events after the device's cursor. Reading them does NOT consume them: only an ack does."""
         installation = await self._authenticated_installation(request)
         if not installation:
             return _error_response("unauthorized", 401)
-        queue = self._outbound.get(installation)
-        messages: list = []
-        if queue:
-            while queue:
-                messages.append(queue.popleft())
-        return _json_response({"ok": True, "messages": messages})
+        raw_cursor = request.query.get("cursor")
+        try:
+            cursor = int(raw_cursor) if raw_cursor not in (None, "") else 0
+        except (TypeError, ValueError):
+            return _error_response("cursor_must_be_an_integer", 400)
+        if cursor < 0:
+            return _error_response("cursor_must_not_be_negative", 400)
+        limit = max(1, self._read_limit)
+        events = await asyncio.to_thread(
+            self.device_store().events_after, installation, cursor, limit=limit)
+        next_cursor = int(events[-1]["seq"]) if events else cursor
+        return _json_response({
+            "ok": True,
+            "events": events,
+            "next_cursor": next_cursor,
+            "has_more": len(events) >= limit,
+        })
+
+    # -- bootstrap / cancel (the app's cold start, and its stop button) -----------------------------
+
+    def _conversation_identity(self, installation: str) -> Optional[Dict[str, Any]]:
+        """The Runtime Conversation this installation is joined to, or ``None`` when it joined none.
+
+        Read live through the alias the bind already wrote, so the plugin keeps no mapping of its own and
+        a re-pointed installation is reported correctly on the very next call.
+        """
+        entry = self.bound_conversation(installation)
+        if entry is None:
+            return None
+        session_id = str(getattr(entry, "session_id", "") or "")
+        if not session_id:
+            return None
+        # This installation's key is an *alias*; the Conversation's canonical key is how every other entry
+        # point addresses it. Identity = canonical, and the alias is reported separately so the app can
+        # still see which routing key its own traffic travels under.
+        installation_key = self.mobile_session_key(installation)
+        canonical = self._canonical_key_for(session_id)
+        return {
+            "session_id": session_id,
+            "session_key": canonical or installation_key,
+            "installation_key": installation_key,
+        }
+
+    def _canonical_key_for(self, session_id: str) -> str:
+        """The canonical routing key of a Conversation, or ``""`` when it cannot be resolved.
+
+        An alias row carries the Conversation's ``session_id`` too, so this asks the store (first key that
+        points at the id — the one the Conversation was created under) instead of guessing from the key's
+        shape.
+        """
+        store = getattr(self, "_session_store", None)
+        if store is None or not session_id:
+            return ""
+        try:
+            entry = store.lookup_by_session_id(session_id)
+        except Exception:
+            logger.warning("[kissne_mobile] could not resolve a Conversation's canonical key", exc_info=True)
+            return ""
+        return str(getattr(entry, "session_key", "") or "")
+
+    def _history_tail(self, session_id: str) -> Tuple[List[Dict[str, Any]], bool]:
+        """The last ``history_cap`` user/assistant messages of a Conversation, plus a truncation flag."""
+        store = getattr(self, "_session_store", None)
+        if store is None or not session_id:
+            return [], False
+        try:
+            rows = store.load_transcript(session_id) or []
+        except Exception:
+            logger.warning("[kissne_mobile] could not read history for a bootstrap", exc_info=True)
+            return [], False
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            role = str(row.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            text = row.get("content", row.get("text"))
+            if not isinstance(text, str) or not text.strip():
+                continue
+            item: Dict[str, Any] = {"role": role, "text": text}
+            stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+            if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+                item["created_at"] = float(stamp)
+            items.append(item)
+        cap = max(0, self._history_cap)
+        if cap and len(items) > cap:
+            return items[-cap:], True
+        return items, False
+
+    async def _handle_bootstrap(self, request: web.Request) -> web.Response:
+        """Which Conversation this device is on, plus a bounded tail of it. Creates nothing, ever."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        identity = self._conversation_identity(installation)
+        if identity is None:
+            logger.info("[kissne_mobile] bootstrap: installation %s has joined no conversation yet",
+                        _fingerprint(installation))
+            return _json_response({
+                "ok": True, "bound": False, "conversation": None,
+                "history": [], "history_truncated": False, "pending_turn_id": None,
+            })
+        history, truncated = self._history_tail(identity["session_id"])
+        pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
+        return _json_response({
+            "ok": True,
+            "bound": True,
+            "conversation": identity,
+            "history": history,
+            "history_truncated": truncated,
+            "pending_turn_id": pending,
+        })
+
+    async def _handle_cancel(self, request: web.Request) -> web.Response:
+        """``{"turn_id": T}`` -> interrupt that turn's Runtime activity and acknowledge the state."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        turn_id = str(body.get("turn_id") or "").strip()
+        if not turn_id:
+            return _error_response("turn_id_required", 400)
+        store = self.device_store()
+        turn = await asyncio.to_thread(store.turn, turn_id)
+        if turn is None or str(turn.get("installation_id") or "") != installation:
+            # One answer for "never existed" and "belongs to another device": a device must not be able
+            # to probe which turns exist.
+            return _error_response("unknown_turn", 404)
+        state = str(turn.get("state") or "")
+        if state == TURN_COMPLETED:
+            return _error_response("turn_already_completed", 409)
+        if state == TURN_CANCELLED:
+            return _error_response("turn_not_cancellable", 409)
+        moved = await asyncio.to_thread(
+            store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
+        if not moved:
+            return _error_response("turn_not_cancellable", 409)
+        await asyncio.to_thread(
+            store.enqueue_event, installation, EVENT_CANCELLED,
+            {"turn_id": turn_id}, turn_id, cap=max(1, self._outbound_cap))
+        # Stop the Runtime work this turn started, exactly like a "stop" on any other channel does.
+        # The Runtime registers an in-flight turn under the key of the channel that STARTED it, so cancel
+        # must speak this installation's own routing key (an alias, not the Conversation's canonical key —
+        # using the canonical key would stop another entry point's turn on the same Conversation).
+        session_key = self.mobile_session_key(installation)
+        try:
+            await self.interrupt_session_activity(session_key, installation, None)
+        except Exception:
+            logger.warning("[kissne_mobile] cancel could not interrupt turn %s",
+                           _fingerprint(turn_id), exc_info=True)
+        logger.info("[kissne_mobile] cancelled turn %s for installation %s",
+                    _fingerprint(turn_id), _fingerprint(installation))
+        return _json_response({
+            "ok": True, "acknowledged": True, "turn_id": turn_id, "state": TURN_CANCELLED,
+        })
 
     async def _handle_revoke(self, request: web.Request) -> web.Response:
         """Self-revoke: the device kills its own token (immediate, and durable)."""
