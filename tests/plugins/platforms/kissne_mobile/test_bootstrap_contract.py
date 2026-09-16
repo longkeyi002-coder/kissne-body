@@ -14,6 +14,7 @@ first assertion fails on a 404/405 instead of a documented payload. Nothing is s
 """
 
 from _transport_harness import (
+    PAIRED_INSTALLATION,
     build_session_store,
     http,
     isolated_runtime,
@@ -42,11 +43,11 @@ def test_bootstrap_reports_the_current_conversation_and_its_tail(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=existing)
                 status, payload, _ = await http(port, "POST", "/bootstrap", token=token)
+                return existing, status, payload, adapter.mobile_session_key(PAIRED_INSTALLATION)
             finally:
                 await stop(adapter)
-        return existing, status, payload
 
-    existing, status, payload = run(scenario())
+    existing, status, payload, adapter_installation_key = run(scenario())
     assert status == 200, f"bootstrap must answer 200 for a paired device, got {status}: {payload}"
     conversation = payload.get("conversation")
     assert isinstance(conversation, dict), (
@@ -55,7 +56,10 @@ def test_bootstrap_reports_the_current_conversation_and_its_tail(tmp_path):
         "bootstrap reported a different Conversation than the one this installation joined: "
         f"{conversation} vs {existing.session_id}")
     assert conversation.get("session_key") == existing.session_key, (
-        f"bootstrap must report the joined routing key: {conversation}")
+        f"bootstrap must report the Conversation's canonical key: {conversation}")
+    assert conversation.get("installation_key") == adapter_installation_key, (
+        "bootstrap must also report the alias this installation's own traffic travels under "
+        f"(otherwise the app cannot tell its own routing key apart from the Conversation's): {conversation}")
 
     history = payload.get("history")
     assert isinstance(history, list) and history, f"bootstrap must return the Conversation history: {payload}"
