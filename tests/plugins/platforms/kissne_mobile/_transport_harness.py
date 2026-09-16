@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional, Tuple
 ADAPTER_MODULE = "plugins.platforms.kissne_mobile.adapter"
 PLATFORM = "kissne_mobile"
 OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
+#: The installation id every test pairs by default (per-device identity, not a Conversation).
+PAIRED_INSTALLATION = "inst-1"
 
 Status = int
 Payload = Dict[str, Any]
@@ -124,7 +126,7 @@ async def http(port: int, method: str, path: str, *, token: Optional[str] = None
             return response.status, payload, {k.lower(): v for k, v in response.headers.items()}
 
 
-async def pair(port: int, adapter, *, installation_id: str = "inst-1", conversation=None,
+async def pair(port: int, adapter, *, installation_id: str = PAIRED_INSTALLATION, conversation=None,
                ttl: Optional[float] = None) -> str:
     """Operator mints a code, device redeems it over HTTP; returns the device token."""
     code = adapter.issue_pairing_code() if ttl is None else adapter.issue_pairing_code(ttl)

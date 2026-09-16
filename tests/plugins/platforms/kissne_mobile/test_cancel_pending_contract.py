@@ -41,9 +41,10 @@ def _interrupt_recorder(adapter):
     return calls
 
 
-async def _open_turn(port, token) -> dict:
+async def _open_turn(port, token, message_id: str = "m-cancel-1") -> dict:
+    """Open one turn. The message id is a parameter because a retried id is (correctly) a duplicate."""
     status, payload, _ = await http(port, "POST", "/messages", token=token,
-                                    body={"text": "long running question", "message_id": "m-cancel-1"})
+                                    body={"text": "long running question", "message_id": message_id})
     assert status == 202, f"opening a turn must succeed, got {status}: {payload}"
     assert payload.get("turn_id"), f"the accept response must carry a turn_id: {payload}"
     return payload
@@ -109,7 +110,15 @@ def test_cancel_interrupts_the_runtime_turn_and_acknowledges(tmp_path):
         f"the cancelled turn must be published as a 'cancelled' event: {events}")
 
 
-def test_cancel_interrupts_the_joined_conversation(tmp_path):
+def test_cancel_targets_this_installations_own_turn_route(tmp_path):
+    """Cancel must speak the key the Runtime registered the turn under: this installation's alias.
+
+    Established against the Runtime rather than assumed — an in-flight turn is registered under
+    ``_event_session_key`` of the *starting* channel (gateway/platforms/base.py), which for a phone
+    message is the mobile alias, not the Conversation's canonical key. Interrupting the canonical key
+    would stop another entry point's turn on the same Conversation, which is exactly what "several entry
+    points, one Conversation truth" forbids.
+    """
     async def scenario():
         with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
@@ -122,15 +131,19 @@ def test_cancel_interrupts_the_joined_conversation(tmp_path):
                 token = await pair(port, adapter, conversation=existing)
                 turn = await _open_turn(port, token)
                 await http(port, "POST", "/cancel", token=token, body={"turn_id": turn["turn_id"]})
+                return existing.session_key, adapter.mobile_session_key(INSTALLATION), calls
             finally:
                 await stop(adapter)
-        return existing, calls
 
-    existing, calls = run(scenario())
+    canonical, installation_key, calls = run(scenario())
     assert calls, "cancel must interrupt the Runtime turn"
-    assert existing.session_key in repr(calls), (
-        "cancel must target the Conversation this installation is joined to: "
-        f"{calls} does not mention {existing.session_key}")
+    target = repr(calls)
+    assert installation_key in target, (
+        "cancel must interrupt under this installation's routing key: "
+        f"{calls} does not mention {installation_key}")
+    assert canonical not in target, (
+        "cancel must not interrupt under the Conversation's canonical key: "
+        f"{calls} mentions {canonical}")
 
 
 def test_cancelling_a_finished_or_unknown_turn_fails_closed(tmp_path):
@@ -152,7 +165,7 @@ def test_cancelling_a_finished_or_unknown_turn_fails_closed(tmp_path):
                 await adapter.send(INSTALLATION, "already answered")
                 late_status, late_payload, _ = await http(
                     port, "POST", "/cancel", token=token, body={"turn_id": turn["turn_id"]})
-                twice = await _open_turn(port, token)
+                twice = await _open_turn(port, token, message_id="m-cancel-2")
                 await http(port, "POST", "/cancel", token=token, body={"turn_id": twice["turn_id"]})
                 again_status, again_payload, _ = await http(
                     port, "POST", "/cancel", token=token, body={"turn_id": twice["turn_id"]})
