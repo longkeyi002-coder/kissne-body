@@ -23,7 +23,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendButton: Button
     private lateinit var cancelButton: Button
     private lateinit var pairCode: EditText
-    private lateinit var sessionKey: EditText
     private lateinit var pairButton: Button
     private val polling = AtomicBoolean(false)
     private val state = ChatState()
@@ -43,7 +42,6 @@ class MainActivity : AppCompatActivity() {
         }
         status = TextView(this)
         pairCode = EditText(this).apply { hint = "输入一次性配对码"; visibility = View.GONE }
-        sessionKey = EditText(this).apply { hint = "当前 Conversation 的 session_key"; visibility = View.GONE }
         pairButton = Button(this).apply { text = "配对"; visibility = View.GONE; setOnClickListener { pair() } }
         transcript = TextView(this).apply { textSize = 16f }
         input = EditText(this).apply { hint = "输入消息"; minLines = 1; maxLines = 4 }
@@ -66,7 +64,6 @@ class MainActivity : AppCompatActivity() {
     private fun showPairing() {
         status.text = "需要设备配对"
         pairCode.visibility = View.VISIBLE
-        sessionKey.visibility = View.VISIBLE
         pairButton.visibility = View.VISIBLE
         input.visibility = View.GONE
         sendButton.visibility = View.GONE
@@ -74,8 +71,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun pair() {
         val code = pairCode.text.toString().trim()
-        val key = sessionKey.text.toString().trim()
-        if (code.isEmpty() || key.isEmpty()) return
+        if (code.isEmpty()) return
         pairButton.isEnabled = false
         requestExecutor.execute {
             try {
