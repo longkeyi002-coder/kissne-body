@@ -22,7 +22,7 @@ class ChatState {
             else -> Status.READY
         }
     }
-    fun sent(receipt: SendReceipt) { activeTurnId = receipt.turnId; status = Status.SENDING }
+    fun sent(receipt: SendReceipt) { activeTurnId = receipt.turnId.ifBlank { null }; status = Status.SENDING }
     fun remember(message: OutboundMessage) { lastOutbound = message }
     fun pending(turnId: String?) { activeTurnId = turnId ?: activeTurnId; status = Status.SENDING }
     fun delta(text: String?) { if (!text.isNullOrEmpty()) draftText += text; status = Status.STREAMING }
