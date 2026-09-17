@@ -61,10 +61,11 @@ class MobileTransportClient(
         )
     }
 
-    fun pair(pairingCode: String, installationId: String): String =
+    fun pair(pairingCode: String, installationId: String, sessionKey: String): String =
         request("POST", "/pair", JSONObject()
             .put("pairing_code", pairingCode)
-            .put("installation_id", installationId))
+            .put("installation_id", installationId)
+            .put("session_key", sessionKey))
             .getString("device_token")
 
     fun send(messageId: String, text: String): SendReceipt {
