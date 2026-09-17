@@ -13,7 +13,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : AppCompatActivity() {
-    private val executor = Executors.newSingleThreadExecutor()
+    private val requestExecutor = Executors.newSingleThreadExecutor()
+    private val pollExecutor = Executors.newSingleThreadExecutor()
     private lateinit var store: MobileSessionStore
     private lateinit var client: MobileTransportClient
     private lateinit var transcript: TextView
@@ -22,6 +23,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendButton: Button
     private lateinit var cancelButton: Button
     private lateinit var pairCode: EditText
+    private lateinit var sessionKey: EditText
     private lateinit var pairButton: Button
     private val polling = AtomicBoolean(false)
     private val state = ChatState()
@@ -41,6 +43,7 @@ class MainActivity : AppCompatActivity() {
         }
         status = TextView(this)
         pairCode = EditText(this).apply { hint = "输入一次性配对码"; visibility = View.GONE }
+        sessionKey = EditText(this).apply { hint = "当前 Conversation 的 session_key"; visibility = View.GONE }
         pairButton = Button(this).apply { text = "配对"; visibility = View.GONE; setOnClickListener { pair() } }
         transcript = TextView(this).apply { textSize = 16f }
         input = EditText(this).apply { hint = "输入消息"; minLines = 1; maxLines = 4 }
@@ -52,7 +55,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.END
             addView(cancelButton); addView(sendButton)
         }
-        root.addView(status); root.addView(pairCode); root.addView(pairButton)
+        root.addView(status); root.addView(pairCode); root.addView(sessionKey); root.addView(pairButton)
         root.addView(ScrollView(this).apply {
             addView(transcript); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
         })
@@ -63,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     private fun showPairing() {
         status.text = "需要设备配对"
         pairCode.visibility = View.VISIBLE
+        sessionKey.visibility = View.VISIBLE
         pairButton.visibility = View.VISIBLE
         input.visibility = View.GONE
         sendButton.visibility = View.GONE
@@ -70,15 +74,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun pair() {
         val code = pairCode.text.toString().trim()
-        if (code.isEmpty()) return
+        val key = sessionKey.text.toString().trim()
+        if (code.isEmpty() || key.isEmpty()) return
         pairButton.isEnabled = false
-        executor.execute {
+        requestExecutor.execute {
             try {
-                store.saveToken(client.pair(code, store.installationId()))
+                store.saveToken(client.pair(code, store.installationId(), key))
                 runOnUiThread {
-                    pairCode.visibility = View.GONE; pairButton.visibility = View.GONE
-                    input.visibility = View.VISIBLE; sendButton.visibility = View.VISIBLE
-                    bootstrap()
+                    pairCode.visibility = View.GONE; sessionKey.visibility = View.GONE
+                    pairButton.visibility = View.GONE; input.visibility = View.VISIBLE
+                    sendButton.visibility = View.VISIBLE; bootstrap()
                 }
             } catch (error: Exception) {
                 runOnUiThread {
@@ -91,7 +96,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bootstrap() {
         state.beginBootstrap(); render()
-        executor.execute {
+        requestExecutor.execute {
             try {
                 val result = client.bootstrap()
                 state.bootstrapLoaded(result)
@@ -115,7 +120,7 @@ class MainActivity : AppCompatActivity() {
             state.remember(outbound)
         }
         state.sent(SendReceipt(outbound.messageId, "", false)); render()
-        executor.execute {
+        requestExecutor.execute {
             try {
                 val receipt = client.send(outbound.messageId, outbound.text)
                 state.sent(receipt); runOnUiThread { render() }
@@ -128,7 +133,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPolling() {
         if (!polling.compareAndSet(false, true)) return
-        executor.execute {
+        pollExecutor.execute {
             while (polling.get() && !isFinishing) {
                 try {
                     val events = client.poll(store.cursor)
@@ -159,7 +164,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun cancelTurn() {
         val turnId = state.activeTurnId ?: return
-        executor.execute {
+        requestExecutor.execute {
             try {
                 client.cancel(turnId); state.cancelled(); runOnUiThread { render() }
             } catch (error: Exception) {
@@ -192,6 +197,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        polling.set(false); executor.shutdownNow(); super.onDestroy()
+        polling.set(false)
+        requestExecutor.shutdownNow()
+        pollExecutor.shutdownNow()
+        super.onDestroy()
     }
 }
