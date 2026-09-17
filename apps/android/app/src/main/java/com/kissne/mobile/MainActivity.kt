@@ -108,12 +108,16 @@ class MainActivity : AppCompatActivity() {
         val text = input.text.toString().trim()
         if (text.isEmpty() || state.status == ChatState.Status.SENDING) return
         input.setText("")
-        val messageId = "android-" + System.currentTimeMillis()
-        state.messages += HistoryMessage("user", text, messageId)
-        state.sent(SendReceipt(messageId, "", false)); render()
+        val retrying = state.status == ChatState.Status.ERROR && state.lastOutbound != null
+        val outbound = state.lastOutbound ?: OutboundMessage("android-" + System.currentTimeMillis(), text)
+        if (!retrying) {
+            state.messages += HistoryMessage("user", text, outbound.messageId)
+            state.remember(outbound)
+        }
+        state.sent(SendReceipt(outbound.messageId, "", false)); render()
         executor.execute {
             try {
-                val receipt = client.send(messageId, text)
+                val receipt = client.send(outbound.messageId, outbound.text)
                 state.sent(receipt); runOnUiThread { render() }
             } catch (error: Exception) {
                 state.failed()
@@ -182,7 +186,9 @@ class MainActivity : AppCompatActivity() {
             ChatState.Status.DISCONNECTED -> "未连接"
         }
         cancelButton.visibility = if (state.activeTurnId != null) View.VISIBLE else View.GONE
-        sendButton.isEnabled = state.status == ChatState.Status.READY
+        sendButton.isEnabled = state.status == ChatState.Status.READY ||
+            (state.status == ChatState.Status.ERROR && state.lastOutbound != null)
+        sendButton.text = if (state.status == ChatState.Status.ERROR && state.lastOutbound != null) "重试" else "发送"
     }
 
     override fun onDestroy() {
