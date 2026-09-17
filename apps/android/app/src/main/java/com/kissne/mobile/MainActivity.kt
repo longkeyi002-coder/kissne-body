@@ -1,8 +1,5 @@
 package com.kissne.mobile
 
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -20,8 +17,7 @@ class MainActivity : AppCompatActivity() {
     private val pollExecutor = Executors.newSingleThreadExecutor()
     private lateinit var store: MobileSessionStore
     private lateinit var client: MobileTransportClient
-    private lateinit var conversationTitle: TextView
-    private lateinit var messageList: LinearLayout
+    private lateinit var transcript: TextView
     private lateinit var status: TextView
     private lateinit var input: EditText
     private lateinit var sendButton: Button
@@ -30,7 +26,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pairButton: Button
     private val polling = AtomicBoolean(false)
     private val state = ChatState()
-    private var currentConversation = "当前 Conversation"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,107 +38,35 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(247, 251, 255))
-            setPadding(20, 18, 20, 12)
+            setPadding(24, 24, 24, 16)
         }
-
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val avatar = TextView(this).apply {
-            text = "叶"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = rounded(Color.rgb(102, 156, 126), 22)
-        }
-        header.addView(avatar, LinearLayout.LayoutParams(52, 52))
-        val titles = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(14, 0, 0, 0)
-        }
-        titles.addView(TextView(this).apply {
-            text = "叶青栩"
-            textSize = 21f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(34, 49, 61))
-        })
-        conversationTitle = TextView(this).apply {
-            text = currentConversation
-            textSize = 12f
-            setTextColor(Color.rgb(100, 120, 132))
-        }
-        titles.addView(conversationTitle)
-        header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
-        root.addView(header)
-
-        status = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.rgb(100, 120, 132))
-            setPadding(66, 6, 0, 8)
-        }
-        root.addView(status)
-
-        pairCode = EditText(this).apply {
-            hint = "输入一次性配对码"
-            visibility = View.GONE
-        }
-        pairButton = Button(this).apply {
-            text = "连接叶青栩"
-            visibility = View.GONE
-            setOnClickListener { pair() }
-        }
-        root.addView(pairCode)
-        root.addView(pairButton)
-
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-        }
-        messageList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 8, 0, 12)
-        }
-        scroll.addView(messageList)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-
-        input = EditText(this).apply {
-            hint = "和叶青栩说点什么…"
-            minLines = 1
-            maxLines = 4
-            setPadding(18, 10, 18, 10)
-            background = rounded(Color.WHITE, 24)
-        }
-        sendButton = Button(this).apply {
-            text = "发送"
-            setOnClickListener { sendMessage() }
-        }
+        status = TextView(this)
+        pairCode = EditText(this).apply { hint = "输入一次性配对码"; visibility = View.GONE }
+        pairButton = Button(this).apply { text = "配对"; visibility = View.GONE; setOnClickListener { pair() } }
+        transcript = TextView(this).apply { textSize = 16f }
+        input = EditText(this).apply { hint = "输入消息"; minLines = 1; maxLines = 4 }
+        sendButton = Button(this).apply { text = "发送"; setOnClickListener { sendMessage() } }
         cancelButton = Button(this).apply {
-            text = "停止"
-            visibility = View.GONE
-            setOnClickListener { cancelTurn() }
+            text = "停止"; visibility = View.GONE; setOnClickListener { cancelTurn() }
         }
         val actions = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 8, 0, 0)
-            addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(cancelButton)
-            addView(sendButton)
+            gravity = Gravity.END
+            addView(cancelButton); addView(sendButton)
         }
-        root.addView(actions)
+        root.addView(status); root.addView(pairCode); root.addView(pairButton)
+        root.addView(ScrollView(this).apply {
+            addView(transcript); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        })
+        root.addView(input); root.addView(actions)
         return root
     }
 
-    private fun rounded(color: Int, radius: Int): GradientDrawable =
-        GradientDrawable().apply { setColor(color); cornerRadius = radius.toFloat() }
-
     private fun showPairing() {
-        status.text = "第一次使用：输入一次性配对码"
+        status.text = "需要设备配对"
         pairCode.visibility = View.VISIBLE
         pairButton.visibility = View.VISIBLE
         input.visibility = View.GONE
         sendButton.visibility = View.GONE
-        messageList.removeAllViews()
     }
 
     private fun pair() {
@@ -155,10 +78,8 @@ class MainActivity : AppCompatActivity() {
                 store.saveToken(client.pair(code, store.installationId()))
                 runOnUiThread {
                     pairCode.visibility = View.GONE
-                    pairButton.visibility = View.GONE
-                    input.visibility = View.VISIBLE
-                    sendButton.visibility = View.VISIBLE
-                    bootstrap()
+                    pairButton.visibility = View.GONE; input.visibility = View.VISIBLE
+                    sendButton.visibility = View.VISIBLE; bootstrap()
                 }
             } catch (error: Exception) {
                 runOnUiThread {
@@ -170,21 +91,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootstrap() {
-        state.beginBootstrap()
-        render()
+        state.beginBootstrap(); render()
         requestExecutor.execute {
             try {
                 val result = client.bootstrap()
-                currentConversation = result.conversationTitle ?: "当前 Conversation"
                 state.bootstrapLoaded(result)
                 runOnUiThread { render() }
                 if (result.bound) startPolling()
             } catch (error: Exception) {
                 state.failed()
-                runOnUiThread {
-                    status.text = "连接失败：" + (error.message ?: "未知错误")
-                    render()
-                }
+                runOnUiThread { status.text = "未连接：" + (error.message ?: "未知错误"); render() }
             }
         }
     }
@@ -199,16 +115,14 @@ class MainActivity : AppCompatActivity() {
             state.messages += HistoryMessage("user", text, outbound.messageId)
             state.remember(outbound)
         }
-        state.sent(SendReceipt(outbound.messageId, "", false))
-        render()
+        state.sent(SendReceipt(outbound.messageId, "", false)); render()
         requestExecutor.execute {
             try {
                 val receipt = client.send(outbound.messageId, outbound.text)
-                state.sent(receipt)
-                runOnUiThread { render() }
+                state.sent(receipt); runOnUiThread { render() }
             } catch (error: Exception) {
                 state.failed()
-                runOnUiThread { render() }
+                runOnUiThread { status.text = "发送失败：" + (error.message ?: "未知错误"); render() }
             }
         }
     }
@@ -234,9 +148,9 @@ class MainActivity : AppCompatActivity() {
                     Thread.sleep(1200)
                 } catch (_: InterruptedException) {
                     break
-                } catch (_: Exception) {
+                } catch (error: Exception) {
                     state.failed()
-                    runOnUiThread { render() }
+                    runOnUiThread { status.text = "连接中断，重试中…" }
                     try { Thread.sleep(2500) } catch (_: InterruptedException) { break }
                 }
             }
@@ -248,60 +162,28 @@ class MainActivity : AppCompatActivity() {
         val turnId = state.activeTurnId ?: return
         requestExecutor.execute {
             try {
-                client.cancel(turnId)
-                state.cancelled()
-                runOnUiThread { render() }
-            } catch (_: Exception) {
+                client.cancel(turnId); state.cancelled(); runOnUiThread { render() }
+            } catch (error: Exception) {
                 state.failed()
-                runOnUiThread { render() }
+                runOnUiThread { status.text = "停止失败：" + (error.message ?: "未知错误") }
             }
         }
     }
 
     private fun render() {
-        conversationTitle.text = currentConversation
-        messageList.removeAllViews()
-        state.messages.forEach { message ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(16, 10, 16, 10)
-                background = rounded(
-                    if (message.role == "user") Color.rgb(224, 241, 232) else Color.WHITE,
-                    18
-                )
+        transcript.text = buildString {
+            state.messages.forEach {
+                append(if (it.role == "user") "我：" else "Agent：")
+                    .append(it.text).append("\n\n")
             }
-            row.addView(TextView(this).apply {
-                text = if (message.role == "user") "我" else "叶青栩"
-                textSize = 12f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.rgb(91, 120, 104))
-            })
-            row.addView(TextView(this).apply {
-                text = message.text
-                textSize = 16f
-                setTextColor(Color.rgb(36, 48, 56))
-                setPadding(0, 4, 0, 0)
-            })
-            val params = LinearLayout.LayoutParams(-1, -2)
-            params.setMargins(0, 6, 0, 6)
-            messageList.addView(row, params)
-        }
-        if (state.draftText.isNotBlank()) {
-            val draft = TextView(this).apply {
-                text = "叶青栩（正在回复）\n" + state.draftText
-                textSize = 16f
-                setTextColor(Color.rgb(57, 81, 68))
-                setPadding(16, 14, 16, 14)
-                background = rounded(Color.rgb(235, 247, 239), 18)
-            }
-            messageList.addView(draft)
+            if (state.draftText.isNotBlank()) append("Agent（生成中）：").append(state.draftText)
         }
         status.text = when (state.status) {
-            ChatState.Status.LOADING -> "正在打开当前 Conversation…"
-            ChatState.Status.READY -> "已连接到叶青栩"
-            ChatState.Status.SENDING -> "叶青栩正在思考…"
-            ChatState.Status.STREAMING -> "叶青栩正在回复…"
-            ChatState.Status.ERROR -> "连接异常，可重试"
+            ChatState.Status.LOADING -> "加载当前 Conversation…"
+            ChatState.Status.READY -> "已连接"
+            ChatState.Status.SENDING -> "等待回复…"
+            ChatState.Status.STREAMING -> "正在生成…"
+            ChatState.Status.ERROR -> "连接异常"
             ChatState.Status.DISCONNECTED -> "未连接"
         }
         cancelButton.visibility = if (state.activeTurnId != null) View.VISIBLE else View.GONE
