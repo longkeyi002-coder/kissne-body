@@ -61,7 +61,7 @@ class MobileTransportClient(
         )
     }
 
-    fun pair(pairingCode: String, installationId: String, sessionKey: String): String =
+    fun pair(pairingCode: String, installationId: String): String =
         request("POST", "/pair", JSONObject()
             .put("pairing_code", pairingCode)
             .put("installation_id", installationId)
