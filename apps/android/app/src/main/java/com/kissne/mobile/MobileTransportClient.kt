@@ -44,6 +44,7 @@ class MobileTransportClient(
 
     fun bootstrap(): Bootstrap {
         val json = request("POST", "/bootstrap")
+        val conversation = json.optJSONObject("conversation")
         val history = mutableListOf<HistoryMessage>()
         val array = json.optJSONArray("history") ?: JSONArray()
         for (i in 0 until array.length()) {
@@ -51,14 +52,20 @@ class MobileTransportClient(
             history += HistoryMessage(item.optString("role", "assistant"), item.optString("text"),
                 item.optString("message_id").ifBlank { null })
         }
-        return Bootstrap(json.optBoolean("bound", false),
-            json.optString("conversation_id").ifBlank { null },
-            json.optString("conversation_title").ifBlank { null }, history,
-            json.optString("pending_turn_id").ifBlank { null })
+        return Bootstrap(
+            bound = json.optBoolean("bound", false),
+            conversationId = conversation?.optString("session_id").ifBlank { null },
+            conversationTitle = conversation?.optString("session_key").ifBlank { null },
+            history = history,
+            pendingTurnId = json.optString("pending_turn_id").ifBlank { null }
+        )
     }
 
-    fun pair(code: String): String =
-        request("POST", "/pair", JSONObject().put("code", code)).getString("device_token")
+    fun pair(pairingCode: String, installationId: String): String =
+        request("POST", "/pair", JSONObject()
+            .put("pairing_code", pairingCode)
+            .put("installation_id", installationId))
+            .getString("device_token")
 
     fun send(messageId: String, text: String): SendReceipt {
         val json = request("POST", "/messages", JSONObject()
