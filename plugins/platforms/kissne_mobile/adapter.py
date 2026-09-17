@@ -161,7 +161,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             extra.get("read_limit", DEFAULT_READ_LIMIT), DEFAULT_READ_LIMIT)
         self._pair_attempt_limit: int = coerce_port(
             extra.get("pair_attempt_limit", PAIR_ATTEMPT_LIMIT), PAIR_ATTEMPT_LIMIT)
-        self._runner: Any = None
+        # Optional operator override; otherwise use the newest active Conversation.\n        self._default_session_key: str = str(\n            extra.get("session_key", extra.get("default_session_key", "")) or "").strip()\n        self._runner: Any = None
         self._store: Optional[DeviceStore] = None
         # Transport only, and only for the throttle: recent pairing attempts per client address. Queued
         # replies are NOT kept in memory — they are rows (see ``device_store``), so a restart loses none.
@@ -518,6 +518,32 @@ class KissneMobileAdapter(BasePlatformAdapter):
         attempts.append(now)
         return None
 
+    def _current_conversation_key(self) -> Optional[str]:
+        """Resolve the Conversation a fresh mobile install should open.
+
+        The Android client must not ask the user for an internal session key. Operators may pin one
+        explicitly; otherwise the newest active Runtime Conversation is used. This lookup creates nothing.
+        """
+        if self._default_session_key:
+            return self._default_session_key
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return None
+        try:
+            entries = [
+                entry for entry in store.list_sessions()
+                if getattr(entry, "session_id", None)
+                and not getattr(entry, "ended_at", None)
+            ]
+            if not entries:
+                return None
+            current = max(entries, key=lambda entry: getattr(entry, "updated_at", 0))
+            return str(getattr(current, "session_key", "") or "").strip() or None
+        except Exception:
+            logger.warning("[kissne_mobile] could not resolve current Conversation for pairing",
+                           exc_info=True)
+            return None
+
     async def _handle_pair(self, request: web.Request) -> web.Response:
         """One-time pairing code -> device token. Nothing else registers an installation."""
         retry_after = self._pair_throttle(request)
@@ -553,7 +579,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except ValueError as exc:
             return _error_response(f"bad_request: {exc}", 400)
 
-        conversation_key = str(body.get("session_key") or "").strip()
+        conversation_key = str(body.get("session_key") or "").strip() or self._current_conversation_key() or ""
         bound = False
         if conversation_key:
             bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
