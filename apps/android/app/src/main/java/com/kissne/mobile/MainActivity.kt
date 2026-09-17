@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.END
             addView(cancelButton); addView(sendButton)
         }
-        root.addView(status); root.addView(pairCode); root.addView(sessionKey); root.addView(pairButton)
+        root.addView(status); root.addView(pairCode); root.addView(pairButton)
         root.addView(ScrollView(this).apply {
             addView(transcript); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
         })
@@ -79,9 +79,9 @@ class MainActivity : AppCompatActivity() {
         pairButton.isEnabled = false
         requestExecutor.execute {
             try {
-                store.saveToken(client.pair(code, store.installationId(), key))
+                store.saveToken(client.pair(code, store.installationId()))
                 runOnUiThread {
-                    pairCode.visibility = View.GONE; sessionKey.visibility = View.GONE
+                    pairCode.visibility = View.GONE
                     pairButton.visibility = View.GONE; input.visibility = View.VISIBLE
                     sendButton.visibility = View.VISIBLE; bootstrap()
                 }
