@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.Kissne" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.Kissne" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#6750A4</item>
     </style>
