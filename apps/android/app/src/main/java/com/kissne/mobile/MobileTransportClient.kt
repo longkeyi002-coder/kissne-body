@@ -54,8 +54,8 @@ class MobileTransportClient(
         }
         return Bootstrap(
             bound = json.optBoolean("bound", false),
-            conversationId = conversation?.optString("session_id").ifBlank { null },
-            conversationTitle = conversation?.optString("session_key").ifBlank { null },
+            conversationId = conversation?.optString("session_id")?.ifBlank { null },
+            conversationTitle = conversation?.optString("session_key")?.ifBlank { null },
             history = history,
             pendingTurnId = json.optString("pending_turn_id").ifBlank { null }
         )
