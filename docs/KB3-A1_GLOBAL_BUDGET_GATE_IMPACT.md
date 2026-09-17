@@ -30,13 +30,15 @@
 ## A1 冻结的外部合同
 
 1. `BudgetPolicy` 是不透明策略输入；默认额度不写死在本票。
-2. `BudgetLedger.reserve()` 在模型调用前建立不可重复占用；成功、失败、超时由 `settle()` 结算。
-3. 未知结果保持占用，直到显式 reconciliation；重试不得自动释放并重新获得额度。
-4. `BudgetDecision` 必须结构化，至少区分 `allowed`、`budget_exhausted`、`rate_limited`、`invalid_policy`。
-5. Work / Learning / Life-Exploration / Social / Repair Reserve 独立记账；日常类别不能消费 Repair Reserve。
-6. ledger 必须跨进程/重启可恢复；不得出现第二套按入口各自记账。
-7. Gate 拒绝后不得再调用模型生成解释文本。
-8. A1 不改变任何现有模型调用路径；A2 才逐入口接线。
+2. 预算账本使用抽象的整数 `units`；A1 不规定 units 与 token、金额或调用次数的映射，映射由 policy/调用方提供。每次 `reserve(category, units, action_id)` 必须先建立唯一 reservation，再允许模型调用。
+3. `settle(reservation_id, outcome, actual_units)` 结算成功或失败；不得把一次已建立的 reservation 重新当作新的 retry 额度。
+4. 未知结果保持占用，直到显式 `reconcile(reservation_id, outcome, actual_units)`。同一 reconciliation 重放必须幂等；冲突的重复结果必须 fail closed。
+5. `BudgetDecision` 必须结构化，至少区分 `allowed`、`budget_exhausted`、`rate_limited`、`invalid_policy`、`retry_blocked`。
+6. Work / Learning / Life-Exploration / Social / Repair Reserve 独立记账；日常类别不能消费 Repair Reserve。
+7. 每次 admit、deny、reserve、settle、reconcile 都必须留下可查询的审计记录，至少含 action/reservation、category、units、结果、时间和 reason。
+8. ledger 必须跨进程/重启可恢复，使用独立于会话 `state.db` 的专用持久化存储；不得出现第二套按入口各自记账。
+9. Gate 拒绝后不得再调用模型生成解释文本。
+10. A1 不改变任何现有模型调用路径；A2 才逐入口接线。
 
 ## A2 前置与风险
 
