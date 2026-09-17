@@ -41,11 +41,7 @@ class MainActivity : AppCompatActivity() {
         }
         status = TextView(this)
         pairCode = EditText(this).apply { hint = "输入一次性配对码"; visibility = View.GONE }
-        pairButton = Button(this).apply {
-            text = "配对"
-            visibility = View.GONE
-            setOnClickListener { pair() }
-        }
+        pairButton = Button(this).apply { text = "配对"; visibility = View.GONE; setOnClickListener { pair() } }
         transcript = TextView(this).apply { textSize = 16f }
         input = EditText(this).apply { hint = "输入消息"; minLines = 1; maxLines = 4 }
         sendButton = Button(this).apply { text = "发送"; setOnClickListener { sendMessage() } }
@@ -58,8 +54,7 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(status); root.addView(pairCode); root.addView(pairButton)
         root.addView(ScrollView(this).apply {
-            addView(transcript)
-            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+            addView(transcript); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
         })
         root.addView(input); root.addView(actions)
         return root
@@ -79,12 +74,10 @@ class MainActivity : AppCompatActivity() {
         pairButton.isEnabled = false
         executor.execute {
             try {
-                store.saveToken(client.pair(code))
+                store.saveToken(client.pair(code, store.installationId()))
                 runOnUiThread {
-                    pairCode.visibility = View.GONE
-                    pairButton.visibility = View.GONE
-                    input.visibility = View.VISIBLE
-                    sendButton.visibility = View.VISIBLE
+                    pairCode.visibility = View.GONE; pairButton.visibility = View.GONE
+                    input.visibility = View.VISIBLE; sendButton.visibility = View.VISIBLE
                     bootstrap()
                 }
             } catch (error: Exception) {
@@ -97,8 +90,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootstrap() {
-        state.beginBootstrap()
-        render()
+        state.beginBootstrap(); render()
         executor.execute {
             try {
                 val result = client.bootstrap()
@@ -118,13 +110,11 @@ class MainActivity : AppCompatActivity() {
         input.setText("")
         val messageId = "android-" + System.currentTimeMillis()
         state.messages += HistoryMessage("user", text, messageId)
-        state.sent(SendReceipt(messageId, "", false))
-        render()
+        state.sent(SendReceipt(messageId, "", false)); render()
         executor.execute {
             try {
                 val receipt = client.send(messageId, text)
-                state.sent(receipt)
-                runOnUiThread { render() }
+                state.sent(receipt); runOnUiThread { render() }
             } catch (error: Exception) {
                 state.failed()
                 runOnUiThread { status.text = "发送失败：" + (error.message ?: "未知错误"); render() }
@@ -151,7 +141,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (events.isNotEmpty()) client.ack(store.cursor)
                     Thread.sleep(1200)
-                } catch (error: InterruptedException) {
+                } catch (_: InterruptedException) {
                     break
                 } catch (error: Exception) {
                     state.failed()
@@ -167,9 +157,7 @@ class MainActivity : AppCompatActivity() {
         val turnId = state.activeTurnId ?: return
         executor.execute {
             try {
-                client.cancel(turnId)
-                state.cancelled()
-                runOnUiThread { render() }
+                client.cancel(turnId); state.cancelled(); runOnUiThread { render() }
             } catch (error: Exception) {
                 state.failed()
                 runOnUiThread { status.text = "停止失败：" + (error.message ?: "未知错误") }
@@ -198,8 +186,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        polling.set(false)
-        executor.shutdownNow()
-        super.onDestroy()
+        polling.set(false); executor.shutdownNow(); super.onDestroy()
     }
 }
