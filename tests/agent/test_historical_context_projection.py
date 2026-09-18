@@ -78,3 +78,43 @@ def test_historical_tool_result_projects_images_and_long_text_blocks():
     assert projected["content"][1]["type"] == "text"
     assert "historical image omitted" in projected["content"][1]["text"]
     assert original["content"][1]["type"] == "image_url"
+
+
+def test_previous_turn_image_is_projected_on_the_next_user_turn():
+    class _Layers:
+        def read(self, **_kwargs):
+            return SimpleNamespace(system_prompt="")
+
+    agent = SimpleNamespace(
+        api_mode="chat_completions",
+        provider="openai",
+        _current_turn_timestamp=1.0,
+        _kissne_context_layers=_Layers(),
+        ephemeral_system_prompt="",
+        _copy_reasoning_content_for_api=lambda _msg, _api_msg: None,
+        _should_sanitize_tool_calls=lambda: False,
+    )
+    prior_image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + ("A" * 10000)},
+    }
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "look"}, prior_image]},
+        {"role": "assistant", "content": "seen"},
+        {"role": "user", "content": "next"},
+    ]
+
+    api_messages, _ = build_api_messages(
+        agent,
+        messages,
+        current_turn_user_idx=2,
+        ext_prefetch_cache=None,
+        plugin_user_context="",
+        moa_config=None,
+        active_system_prompt="",
+    )
+
+    historical = api_messages[0]["content"]
+    assert historical[1]["type"] == "text"
+    assert "historical image omitted" in historical[1]["text"]
+    assert messages[0]["content"][1]["type"] == "image_url"
