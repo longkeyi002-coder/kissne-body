@@ -158,7 +158,9 @@ class MemoryStore:
         poisoned content (dropping it silently would hide the attack)."""
         for target in ("memory", "user", *WHOLE_FILE_TARGETS):
             path = self._path_for(target)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            from hermes_constants import mkdir_under_hermes_home
+
+            mkdir_under_hermes_home(path.parent)
             if target in WHOLE_FILE_TARGETS:
                 # One whole-file document: no §-split, no dedup, no char budget
                 # (its bytes must never eat MEMORY's room). A read that fails on
@@ -170,6 +172,7 @@ class MemoryStore:
                 self._system_prompt_snapshot[target] = self._render_block(
                     target, [self._sanitize(text, path.name)] if text else [])
                 continue
+
             # Deduplicate (order-preserving, first occurrence wins).
             entries = list(dict.fromkeys(self._read_file(path)))
             self._set_entries(target, entries)
@@ -191,7 +194,9 @@ class MemoryStore:
         from tools import memory_tool as _mt  # fcntl/msvcrt live (and are patched) there
         fcntl, msvcrt = _mt.fcntl, _mt.msvcrt
         lock_path = path.with_suffix(path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        from hermes_constants import mkdir_under_hermes_home
+
+        mkdir_under_hermes_home(lock_path.parent)
         if fcntl is None and msvcrt is None:
             yield
             return
@@ -307,7 +312,9 @@ class MemoryStore:
             if isinstance(result, dict):
                 return result
             self._set_entries(target, result[0])
-            path.parent.mkdir(parents=True, exist_ok=True)
+            from hermes_constants import mkdir_under_hermes_home
+
+            mkdir_under_hermes_home(path.parent)
             self._write_file(path, result[0])
             return self._success_response(target, result[1])
 
