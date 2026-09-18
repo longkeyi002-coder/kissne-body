@@ -3,9 +3,15 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val mobileBaseUrl = providers.gradleProperty("KISSNE_MOBILE_BASE_URL")
+    .orElse("https://yeqingxu.cyou/mobile/")
+
 android {
     namespace = "com.kissne.mobile"
     compileSdk = 35
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId = "com.kissne.mobile"
         minSdk = 26
@@ -13,6 +19,8 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Source: Soul §0.3.16 production HTTPS mobile adapter entrypoint.
+        buildConfigField("String", "MOBILE_BASE_URL", "\"${mobileBaseUrl.get()}\"")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
