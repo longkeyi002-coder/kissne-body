@@ -654,7 +654,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             message_type=MessageType.TEXT,
             source=source,
             raw_message=body,
-            message_id=message_id,
+            # The client message_id is only an HTTP retry/idempotency key.  The server turn_id is
+            # Runtime identity, so the persisted user row can be reconciled with outbound frames.
+            message_id=turn_id,
             user_id=installation,
         )
         try:
@@ -740,16 +742,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return ""
         return str(getattr(entry, "session_key", "") or "")
 
-    def _history_tail(self, session_id: str) -> Tuple[List[Dict[str, Any]], bool]:
-        """The last ``history_cap`` user/assistant messages of a Conversation, plus a truncation flag."""
+    def _bootstrap_history_snapshot(
+        self, session_id: str
+    ) -> Tuple[List[Dict[str, Any]], bool, set[str]]:
+        """Returned history plus turn identities proven by that exact snapshot.
+
+        ``SessionStore.load_transcript()`` exposes the persisted ``platform_message_id`` as
+        ``message_id`` for JSONL compatibility.  New Mobile inbound writes the server ``turn_id``
+        there; legacy rows carry a client retry id and therefore cannot match a DeviceStore turn.
+        """
         store = getattr(self, "_session_store", None)
         if store is None or not session_id:
-            return [], False
+            return [], False, set()
         try:
             rows = store.load_transcript(session_id) or []
         except Exception:
             logger.warning("[kissne_mobile] could not read history for a bootstrap", exc_info=True)
-            return [], False
+            return [], False, set()
         items: List[Dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -761,14 +770,74 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if not isinstance(text, str) or not text.strip():
                 continue
             item: Dict[str, Any] = {"role": role, "text": text}
+            if role == "user":
+                turn_id = str(row.get("message_id") or "").strip()
+                if turn_id:
+                    item["_turn_id"] = turn_id
             stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
             if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
                 item["created_at"] = float(stamp)
             items.append(item)
+
         cap = max(0, self._history_cap)
-        if cap and len(items) > cap:
-            return items[-cap:], True
-        return items, False
+        truncated = bool(cap and len(items) > cap)
+        if truncated:
+            items = items[-cap:]
+        # A bounded tail may cut between user and assistant.  That assistant half-turn cannot prove
+        # reconciliation, so never expose it as the first visible history row.
+        if items and items[0].get("role") == "assistant":
+            items = items[1:]
+
+        represented_turn_ids: set[str] = set()
+        for current, following in zip(items, items[1:]):
+            if current.get("role") != "user" or following.get("role") != "assistant":
+                continue
+            turn_id = str(current.get("_turn_id") or "").strip()
+            if turn_id:
+                represented_turn_ids.add(turn_id)
+
+        history = [
+            {key: value for key, value in item.items() if key != "_turn_id"}
+            for item in items
+        ]
+        return history, truncated, represented_turn_ids
+
+    def _history_tail(self, session_id: str) -> Tuple[List[Dict[str, Any]], bool]:
+        """The bounded user/assistant tail retained for existing callers/tests."""
+        history, truncated, _represented = self._bootstrap_history_snapshot(session_id)
+        return history, truncated
+
+    async def _bootstrap_covered_event_seqs(
+        self, installation: str, cursor: int, represented_turn_ids: set[str],
+    ) -> List[int]:
+        """Non-destructively identify queued frames already materialized in bootstrap history."""
+        if not represented_turn_ids:
+            return []
+        store = self.device_store()
+        events = await asyncio.to_thread(
+            store.events_after, installation, cursor,
+            limit=max(1, self._outbound_cap, self._read_limit),
+        )
+        covered: List[int] = []
+        turn_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        coverable_types = {EVENT_PENDING, EVENT_DELTA, EVENT_COMPLETED}
+        for event in events:
+            if str(event.get("type") or "") not in coverable_types:
+                continue
+            turn_id = str(event.get("turn_id") or "").strip()
+            if not turn_id or turn_id not in represented_turn_ids:
+                continue
+            if turn_id not in turn_cache:
+                turn_cache[turn_id] = await asyncio.to_thread(store.turn, turn_id)
+            turn = turn_cache[turn_id]
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("installation_id") or "") != installation:
+                continue
+            if str(turn.get("state") or "") != TURN_COMPLETED:
+                continue
+            covered.append(int(event["seq"]))
+        return covered
 
     async def _handle_bootstrap(self, request: web.Request) -> web.Response:
         """Which Conversation this device is on, plus a bounded tail of it. Creates nothing, ever."""
@@ -778,6 +847,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
         payload, error = await self._payload(request)
         if error is not None:
             return error
+        body = payload or {}
+        raw_cursor = body.get("cursor", 0)
+        if isinstance(raw_cursor, bool) or not isinstance(raw_cursor, (int, str)):
+            return _error_response("cursor_must_be_an_integer", 400)
+        try:
+            cursor = int(raw_cursor) if raw_cursor != "" else 0
+        except (TypeError, ValueError):
+            return _error_response("cursor_must_be_an_integer", 400)
+        if cursor < 0:
+            return _error_response("cursor_must_not_be_negative", 400)
+
         identity = self._conversation_identity(installation)
         if identity is None:
             logger.info("[kissne_mobile] bootstrap: installation %s has joined no conversation yet",
@@ -785,9 +865,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _json_response({
                 "ok": True, "bound": False, "conversation": None,
                 "history": [], "history_truncated": False, "pending_turn_id": None,
+                "covered_event_seqs": [],
             })
-        history, truncated = self._history_tail(identity["session_id"])
+        history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
+            identity["session_id"])
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
+        covered = await self._bootstrap_covered_event_seqs(
+            installation, cursor, represented_turn_ids)
         return _json_response({
             "ok": True,
             "bound": True,
@@ -795,6 +879,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "history": history,
             "history_truncated": truncated,
             "pending_turn_id": pending,
+            "covered_event_seqs": covered,
         })
 
     async def _handle_cancel(self, request: web.Request) -> web.Response:
