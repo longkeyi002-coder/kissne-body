@@ -17,7 +17,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = MobileSessionStore(this)
-        client = MobileTransportClient(BuildConfig.MOBILE_BASE_URL) { store.deviceToken }
+        client = MobileTransportClient(
+            baseUrl = BuildConfig.MOBILE_BASE_URL,
+            tokenProvider = { store.deviceToken }
+        )
         ui = ChatUi(this, ::pair, ::sendMessage, ::cancelTurn)
         setContentView(ui.root)
 
