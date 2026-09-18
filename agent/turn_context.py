@@ -1089,20 +1089,11 @@ def build_api_messages(
     split = current_turn_user_idx if has_current else 0
     canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
 
-    # Projection boundary. The IMMEDIATELY PREVIOUS turn is still live for the
-    # recovery paths: a 413 evicts image payloads from the most recent tool
-    # result, and a provider-invalid image is stripped from the message that
-    # carried it and retried. Both need the image bytes to still be in the
-    # request, so image/argument projection starts one turn earlier. Older
-    # history — the bulk of a long conversation — is projected as before.
-    # canonicalize_replay_history can DROP rows (dangling tool-call tails), so the
-    # canonical list may be shorter than ``messages``: bound the scan by its length.
+    # Everything before this turn's user row is historical and may be projected.
+    # Current-turn user images and tool-loop payloads stay exact for 413/image
+    # recovery; payloads from completed prior turns no longer need to be replayed
+    # verbatim and are compacted on the very next user turn.
     projection_boundary = split
-    for _idx in range(min(split, len(canonical_messages)) - 1, -1, -1):
-        entry = canonical_messages[_idx]
-        if isinstance(entry, dict) and entry.get("role") == "user":
-            projection_boundary = _idx
-            break
 
     api_messages = []
     for idx, msg in enumerate(canonical_messages):
