@@ -4,7 +4,7 @@ profile, SELF.md = the agent's own whole-file self-state). All three enter the
 system prompt as a FROZEN snapshot at session start; mid-session writes hit disk
 but never change the prompt (prefix cache intact).
 Single `memory` tool: add/replace/remove or a batch `operations` list.
-target='self' is whole-file: action='replace' only."""
+target='self' uses entry-delimited format like MEMORY.md (supports add/replace/remove)."""
 
 import copy
 import json
@@ -132,13 +132,19 @@ def _validate_single_op(store, action, target, content, old_text) -> Optional[st
     Missing ``old_text`` is recoverable (it can't be schema-required — needs a combinator
     the Codex backend rejects): return the inventory plus a retry instruction."""
     if target == "self":
-        # Whole-file semantics, enforced here (not by a schema combinator the Codex
-        # backend rejects): replace-only, no old_text, and the full new text required.
-        if action != "replace":
-            return tool_error(_self_replace_only_message(action), success=False)
-        if not content:
-            return tool_error("content is required for action='replace' target='self' — pass the complete "
-                              "new SELF.md text (a whole-file rewrite cannot be empty).", success=False)
+        # SELF.md now uses entry-delimited format like MEMORY.md.
+        # For replace/remove, old_text is required; for add, content is required.
+        if action in ("replace", "remove") and not old_text:
+            return json.dumps({
+                "success": False,
+                "error": (f"'{action}' on target='self' needs old_text — a short unique substring of the section "
+                          f"to {action}. None was provided. Reissue the {action} with old_text set to part of "
+                          f"one of the current sections below."),
+                "current_entries": store._entries_for(target), "usage": store._usage(target)}, ensure_ascii=False)
+        if action == "add" and not content:
+            return tool_error("Content is required for 'add' action on target='self'.", success=False)
+        if action == "replace" and not content:
+            return tool_error("content is required for 'replace' action on target='self'.", success=False)
         return None
     if action == "add" and not content:
         return tool_error("Content is required for 'add' action.", success=False)
@@ -215,11 +221,6 @@ def memory_tool(action: str = None, target: str = "memory", content: str = None,
     target_error = _memory_target_error(store, target)
     if target_error is not None:
         return json.dumps(target_error)
-    if operations and target == "self":
-        # A batch is an entry-list consolidation; SELF.md has no entries.
-        return tool_error("target='self' (SELF.md) is a single whole-file document, so an 'operations' "
-                          "batch cannot apply to it. Use the single-op shape: action='replace', "
-                          "target='self', content=<the complete new SELF.md text>.", success=False)
     if operations:
         if not isinstance(operations, list):
             return tool_error("operations must be a list of {action, content?, old_text?} objects.", success=False)
@@ -336,13 +337,13 @@ MEMORY_SCHEMA = {
                 "type": "string",
                 "enum": ["add", "replace", "remove"],
                 "description": "The action to perform (single-op shape). Omit when using 'operations'. "
-                               "'self' takes 'replace' only."
+                               "'self' supports add/replace/remove."
             },
             "target": {
                 "type": "string",
                 "enum": ["memory", "user", "self"],
                 "description": "Which memory store: 'memory' for personal notes, 'user' for user profile, "
-                               "'self' for your own SELF.md (whole file, rewritten with action='replace')."
+                               "'self' for your own SELF.md (supports add/replace/remove like memory)."
             },
             "content": {
                 "type": "string",
@@ -385,12 +386,12 @@ MEMORY_SCHEMA = {
 # the keys carry it, and the text keeps saying what it is.
 _SINGLE_TARGET_TEXT: Dict[Tuple[str, ...], Tuple[str, str]] = {
     ("memory", "self"): ("The enabled built-in stores: 'memory' for personal notes; 'self' for your own "
-                         "whole-file SELF.md ('replace' only).",
+                         "SELF.md (add/replace/remove).",
                          "TARGET: 'memory' is enabled for personal notes (environment, conventions, "
                          "tool quirks, lessons); 'self' = your own SELF.md, ONE whole-file document "
                          "rewritten with action='replace'."),
     ("user", "self"): ("The enabled built-in stores: 'user' for user profile; 'self' for your own "
-                       "whole-file SELF.md ('replace' only).",
+                       "SELF.md (add/replace/remove).",
                        "TARGET: 'user' is enabled for user profile facts (name, role, preferences, "
                        "style); 'self' = your own SELF.md, ONE whole-file document rewritten with "
                        "action='replace'.")}

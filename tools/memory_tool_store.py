@@ -67,16 +67,6 @@ def _read_failed_error(path: Path) -> Dict[str, Any]:
         f"memory, so the write is refused. Nothing was changed — retry in a moment.")
 
 
-def _self_whole_file_error(action: str) -> Dict[str, Any]:
-    """``add``/``remove`` do not apply to SELF.md: it is one document, not an entry
-    list. Named explicitly so the call is never silently routed to MEMORY.md."""
-    return _error(
-        f"target='self' (SELF.md) is a single whole-file document, not a list of entries, so "
-        f"action='{action}' cannot apply to it. Rewrite the file in ONE call with action='replace', "
-        f"target='self', content=<the complete new SELF.md text> (or edit the file with write_file).",
-        target=SELF_TARGET)
-
-
 def _find_unique_match(entries: List[str], old_text: str) -> Tuple[Optional[int], bool]:
     """``(index, ambiguous)`` for entries containing *old_text*. Exact-duplicate
     matches are safe (first wins); distinct matches → ``(None, True)``."""
@@ -235,10 +225,12 @@ class MemoryStore:
         return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "MEMORY.md")
 
     def _entries_for(self, target: str) -> List[str]:
-        """Entries of an entry-list target; whole-file targets answer with their
-        single blob so they can never reach MEMORY's entry list."""
+        """Entries of an entry-list target."""
         if target in WHOLE_FILE_TARGETS:
-            return [self.self_text] if self.self_text else []
+            # SELF.md now uses §-delimited entries like MEMORY.md
+            if not self.self_text:
+                return []
+            return [e.strip() for e in self.self_text.split(ENTRY_DELIMITER) if e.strip()]
         return self.user_entries if target == "user" else self.memory_entries
 
     def whole_file_state(self, target: str) -> Tuple[str, str]:
@@ -253,7 +245,8 @@ class MemoryStore:
 
     def _set_entries(self, target: str, entries: List[str]):
         if target in WHOLE_FILE_TARGETS:
-            self.self_text = entries[0] if entries else ""
+            # SELF.md now uses §-delimited entries like MEMORY.md
+            self.self_text = ENTRY_DELIMITER.join(entries) if entries else ""
             return
         setattr(self, "user_entries" if target == "user" else "memory_entries", entries)
 
@@ -312,10 +305,7 @@ class MemoryStore:
             return self._success_response(target, result[1])
 
     def add(self, target: str, content: str) -> Dict[str, Any]:
-        """Append a new entry. Returns error if it would exceed the char limit.
-        Whole-file targets have no entries: ``add`` is refused, not rerouted."""
-        if target in WHOLE_FILE_TARGETS:
-            return _self_whole_file_error("add")
+        """Append a new entry. Returns error if it would exceed the char limit."""
         content = content.strip()
         if not content:
             return _error("Content cannot be empty.")
@@ -325,7 +315,8 @@ class MemoryStore:
         def _add(entries, limit):
             if content in entries:
                 return self._success_response(target, "Entry already exists (no duplicate added).")
-            if len(ENTRY_DELIMITER.join(entries + [content])) > limit:
+            # Skip limit check for unbudgeted targets (limit=0 means no cap)
+            if limit > 0 and len(ENTRY_DELIMITER.join(entries + [content])) > limit:
                 return self._failure_with_entries(target, (
                     f"Memory at {self._char_count(target):,}/{limit:,} chars. Adding this entry "
                     f"({len(content)} chars) would exceed the limit. Consolidate now: use 'replace' to merge "
@@ -337,12 +328,7 @@ class MemoryStore:
         return self._mutate(target, _add, skip_drift=True)
 
     def replace(self, target: str, old_text: str, new_content: str) -> Dict[str, Any]:
-        """Find entry containing old_text substring, replace it with new_content.
-
-        Whole-file targets are replaced in full: ``old_text`` is not an entry
-        selector there (there is exactly one document), so it is ignored."""
-        if target in WHOLE_FILE_TARGETS:
-            return self.replace_whole_file(target, new_content)
+        """Find entry containing old_text substring, replace it with new_content."""
         new_content = new_content.strip()
         if not old_text.strip():
             return _error("old_text cannot be empty.")
@@ -389,8 +375,7 @@ class MemoryStore:
     def remove(self, target: str, old_text: str) -> Dict[str, Any]:
         """Remove the entry containing old_text substring. Whole-file targets have
         no entries: refused explicitly instead of falling into MEMORY's list."""
-        if target in WHOLE_FILE_TARGETS:
-            return _self_whole_file_error("remove")
+
         if not old_text.strip():
             return _error("old_text cannot be empty.")
         return self._edit(target, old_text.strip(), None)
@@ -410,7 +395,8 @@ class MemoryStore:
             if new_content is None:
                 return replaced, "Entry removed."
             new_total = len(ENTRY_DELIMITER.join(replaced))
-            if new_total > limit:
+            # Skip limit check for unbudgeted targets (limit=0 means no cap)
+            if limit > 0 and new_total > limit:
                 return self._failure_with_entries(target, (
                     f"Replacement would put memory at {new_total:,}/{limit:,} chars. Shorten the new content, "
                     f"or 'remove' other stale or less important entries to make room (see current_entries "
@@ -447,9 +433,7 @@ class MemoryStore:
         an over-limit result writes NOTHING and returns the first failure plus live state."""
         if not operations:
             return _error("operations list is empty.")
-        if target in WHOLE_FILE_TARGETS:
-            # A batch is an entry-list consolidation; SELF has no entries.
-            return _self_whole_file_error("batch")
+
         ops = [op or {} for op in operations]
         # Scan every add/replace content BEFORE touching disk -- one poisoned op rejects the batch.
         for i, op in enumerate(ops):
@@ -565,8 +549,10 @@ class MemoryStore:
         round-trip mismatch, or one entry over the whole-file limit (no tool-written
         entry can be — an external writer appended free-form text)."""
         parsed = self._parse_entries(raw)
+        limit = self._char_limit(target)
+        # Skip char limit check for unbudgeted targets (limit=0 means no cap)
         if not raw.strip() or (raw.strip() == ENTRY_DELIMITER.join(parsed)
-                               and max(map(len, parsed), default=0) <= self._char_limit(target)):
+                               and (limit <= 0 or max(map(len, parsed), default=0) <= limit)):
             return None
         path = self._path_for(target)
         bak_path = path.with_suffix(path.suffix + f".bak.{int(time.time())}")
