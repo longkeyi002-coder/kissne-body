@@ -1065,6 +1065,7 @@ def build_api_messages(
     The system prompt is built once per Session Snapshot and replayed verbatim."""
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
+    from agent.historical_context_projection import project_historical_message
     from agent.replay_cleanup import canonicalize_replay_history
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
@@ -1101,6 +1102,21 @@ def build_api_messages(
     turn_now = agent._current_turn_timestamp
     split = current_turn_user_idx if has_current else 0
     canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
+
+    # Projection boundary. The IMMEDIATELY PREVIOUS turn is still live for the
+    # recovery paths: a 413 evicts image payloads from the most recent tool
+    # result, and a provider-invalid image is stripped from the message that
+    # carried it and retried. Both need the image bytes to still be in the
+    # request, so image/argument projection starts one turn earlier. Older
+    # history — the bulk of a long conversation — is projected as before.
+    # canonicalize_replay_history can DROP rows (dangling tool-call tails), so the
+    # canonical list may be shorter than ``messages``: bound the scan by its length.
+    projection_boundary = split
+    for _idx in range(min(split, len(canonical_messages)) - 1, -1, -1):
+        entry = canonical_messages[_idx]
+        if isinstance(entry, dict) and entry.get("role") == "user":
+            projection_boundary = _idx
+            break
 
     api_messages = []
     for idx, msg in enumerate(canonical_messages):
@@ -1146,6 +1162,13 @@ def build_api_messages(
             # prefix stays byte-stable. User rows carry the injection sidecar; user
             # and assistant rows may carry a sanitize-divergence sidecar.
             api_msg["content"] = _api_content
+
+        # Historical tool arguments and image parts are replayed on every later
+        # request. Keep the durable transcript lossless, but send only bounded
+        # argument metadata and image references for old messages. The current
+        # turn is excluded: its tool loop may still need exact arguments/images.
+        if idx < projection_boundary:
+            api_msg = project_historical_message(api_msg)
 
         # Pass reasoning back to the API for ALL assistant messages so multi-turn
         # reasoning context is preserved.
