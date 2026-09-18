@@ -133,6 +133,13 @@ _DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "project"})
 _DEFAULT_DEFERRED_TOOLS = frozenset({
     "computer_use", "session_search", "image_generate",
     "todo_list", "process_manage", "cronjob_manage",
+    # Low-frequency core capabilities: keep the basic browser/file/web working
+    # set ambient, but disclose diagnostic, credential-vault, speech, and skill
+    # administration schemas only when the model searches for those capabilities.
+    "browser_get_images", "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
+    "browser_vault_list", "browser_vault_unlock", "browser_vault_fill",
+    "browser_vault_save_login", "browser_vault_enter_code",
+    "text_to_speech", "skill_manage",
     # Desktop GUI surface (desktop_ui + project toolsets)
     "drive_preview", "gui_tour", "desktop_preview", "annotate_preview",
     "show_tip", "setup_mcp", "desktop_project", "close_terminal",
