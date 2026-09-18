@@ -2,7 +2,6 @@
 
 These tests intentionally fail on the pre-Gate baseline because the public contract
 has not been implemented yet. They must remain offline and must not call a provider.
-Imports are lazy so a future partial implementation reaches assertion-level failures.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ def _ledger():
     return BudgetLedger.in_memory()
 
 
-def test_budget_exhaustion_is_structured_and_does_not_call_model():
+def test_budget_exhaustion_is_structured():
     BudgetDecision, _, _, _ = _contract()
     gate = _ledger().gate(policy=_policy(work=0))
     decision = gate.admit(category="work", units=1, action_id="turn-1")
@@ -40,6 +39,7 @@ def test_budget_exhaustion_is_structured_and_does_not_call_model():
 
 
 def test_rate_gate_denies_then_recovers_after_window():
+    BudgetDecision, _, _, _ = _contract()
     ledger = _ledger()
     gate = ledger.gate(policy=_policy())
     assert gate.admit(category="work", units=1, action_id="a").allowed
@@ -69,24 +69,57 @@ def test_unknown_reconciliation_is_idempotent_and_keeps_units_accounted():
     assert ledger.outstanding(category="work") == 0
 
 
-def test_retry_is_bounded_and_does_not_reuse_unknown_reservation():
+def test_unknown_action_is_retry_blocked_by_same_idempotency_key():
+    BudgetDecision, _, _, _ = _contract()
     ledger = _ledger()
     gate = ledger.gate(policy=_policy())
     first = gate.admit(category="work", units=1, action_id="turn-1")
-    assert first.allowed
     ledger.settle(first.reservation_id, outcome="unknown", actual_units=1)
-    retry = gate.admit(category="work", units=1, action_id="turn-1-retry")
-    assert retry.reason in {"budget_exhausted", "rate_limited", "retry_blocked"}
+
+    retry = gate.admit(category="work", units=1, action_id="turn-1")
+
+    assert retry == BudgetDecision.denied("retry_blocked")
 
 
-def test_ledger_survives_restart_without_releasing_unknown_usage():
-    ledger = _ledger()
-    gate = ledger.gate(policy=_policy())
-    decision = gate.admit(category="work", units=1, action_id="turn-1")
-    assert decision.allowed
+def test_unknown_usage_survives_reopen_from_dedicated_store(tmp_path):
+    _, BudgetLedger, _, _ = _contract()
+    ledger_path = tmp_path / "budget-ledger.sqlite3"
+    ledger = BudgetLedger.open(ledger_path)
+    decision = ledger.gate(policy=_policy()).admit(
+        category="work", units=1, action_id="turn-1"
+    )
     ledger.settle(decision.reservation_id, outcome="unknown", actual_units=1)
-    restored = ledger.restart()
+
+    restored = BudgetLedger.open(ledger_path)
+
+    assert restored is not ledger
     assert restored.outstanding(category="work") == 1
+
+
+def test_audit_query_exposes_required_denial_fields():
+    ledger = _ledger()
+    ledger.gate(policy=_policy(work=0)).admit(
+        category="work", units=1, action_id="turn-audit"
+    )
+
+    records = ledger.audit_records(action_id="turn-audit")
+
+    assert records
+    latest = records[-1]
+    assert {
+        "event",
+        "action_id",
+        "reservation_id",
+        "category",
+        "units",
+        "outcome",
+        "timestamp",
+        "reason",
+    } <= latest.keys()
+    assert latest["action_id"] == "turn-audit"
+    assert latest["category"] == "work"
+    assert latest["units"] == 1
+    assert latest["reason"] == "budget_exhausted"
 
 
 def test_invalid_policy_fails_closed_without_model_explanation():

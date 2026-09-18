@@ -7,6 +7,7 @@ wire any model call path or provide production budget semantics yet.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -63,6 +64,12 @@ class BudgetLedger:
     def in_memory(cls) -> "BudgetLedger":
         return cls()
 
+    @classmethod
+    def open(cls, path: str | Path) -> "BudgetLedger":
+        # Signature-only scaffold. A2 must provide real independent persistence.
+        del path
+        return cls()
+
     def gate(self, *, policy: BudgetPolicy | None) -> _Gate:
         return _Gate(self, policy)
 
@@ -70,12 +77,12 @@ class BudgetLedger:
         del seconds
 
     def settle(
-        self, reservation_id: str, *, outcome: str, actual_units: int
+        self, reservation_id: str | None, *, outcome: str, actual_units: int
     ) -> None:
         del reservation_id, outcome, actual_units
 
     def reconcile(
-        self, reservation_id: str, *, outcome: str, actual_units: int
+        self, reservation_id: str | None, *, outcome: str, actual_units: int
     ) -> Any:
         del reservation_id, outcome, actual_units
         return None
@@ -84,5 +91,11 @@ class BudgetLedger:
         del category
         return 0
 
-    def restart(self) -> "BudgetLedger":
-        return self
+    def audit_records(
+        self,
+        *,
+        action_id: str | None = None,
+        reservation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del action_id, reservation_id
+        return []

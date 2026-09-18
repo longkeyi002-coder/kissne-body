@@ -31,14 +31,15 @@
 
 1. `BudgetPolicy` 是不透明策略输入；默认额度不写死在本票。
 2. 预算账本使用抽象的整数 `units`；A1 不规定 units 与 token、金额或调用次数的映射，映射由 policy/调用方提供。每次 `reserve(category, units, action_id)` 必须先建立唯一 reservation，再允许模型调用。
-3. `settle(reservation_id, outcome, actual_units)` 结算成功或失败；不得把一次已建立的 reservation 重新当作新的 retry 额度。
-4. 未知结果保持占用，直到显式 `reconcile(reservation_id, outcome, actual_units)`。同一 reconciliation 重放必须幂等；冲突的重复结果必须 fail closed。
-5. `BudgetDecision` 必须结构化，至少区分 `allowed`、`budget_exhausted`、`rate_limited`、`invalid_policy`、`retry_blocked`。
-6. Work / Learning / Life-Exploration / Social / Repair Reserve 独立记账；日常类别不能消费 Repair Reserve。
-7. 每次 admit、deny、reserve、settle、reconcile 都必须留下可查询的审计记录，至少含 action/reservation、category、units、结果、时间和 reason。
-8. ledger 必须跨进程/重启可恢复，使用独立于会话 `state.db` 的专用持久化存储；不得出现第二套按入口各自记账。
-9. Gate 拒绝后不得再调用模型生成解释文本。
-10. A1 不改变任何现有模型调用路径；A2 才逐入口接线。
+3. `action_id` 是逻辑动作的幂等键。同一个逻辑动作重试时必须复用同一 `action_id`；若上一 reservation 仍为 `unknown` 且尚未 reconcile，再次 admit 必须返回 `retry_blocked`，不得建立第二 reservation。
+4. `settle(reservation_id, outcome, actual_units)` 结算成功或失败；不得把一次已建立的 reservation 重新当作新的 retry 额度。
+5. 未知结果保持占用，直到显式 `reconcile(reservation_id, outcome, actual_units)`。同一 reconciliation 重放必须幂等；冲突的重复结果必须 fail closed。
+6. `BudgetDecision` 必须结构化，至少区分 `allowed`、`budget_exhausted`、`rate_limited`、`invalid_policy`、`retry_blocked`。
+7. Work / Learning / Life-Exploration / Social / Repair Reserve 独立记账；日常类别不能消费 Repair Reserve。
+8. 每次 admit、deny、reserve、settle、reconcile 都必须留下可查询的审计记录；`BudgetLedger.audit_records(...)` 是 A1 冻结的最小查询面，记录至少含 event、action/reservation、category、units、结果、时间和 reason。
+9. ledger 必须跨进程/重启可恢复，使用独立于会话 `state.db` 的专用持久化存储；`BudgetLedger.open(path)` 必须用同一路径重新打开一个新实例并恢复未决 reservation，`in_memory()` 仅用于离线单元测试。不得出现第二套按入口各自记账。
+10. Gate 拒绝后不得再调用模型生成解释文本；该条由 A2 wiring 的 integration test 验证，A1 unit contract 只冻结结构化 deny。
+11. A1 不改变任何现有模型调用路径；A2 才逐入口接线。
 
 ## A2 前置与风险
 
