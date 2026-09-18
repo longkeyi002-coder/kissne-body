@@ -7,9 +7,10 @@ Contract pinned here:
   ``memories/SELF.md`` is the legacy migration source, never a data source;
 * the frozen-snapshot rule holds for SELF exactly as for MEMORY/USER: a
   mid-session write does not touch this session's system prompt;
-* SELF is a whole file, not an entry list: ``add``/``remove``/``operations``
-  are refused with a pointer at ``replace``, and its bytes never count against
-  MEMORY's 2,200-char budget;
+* SELF.md is an entry list like MEMORY.md (§-delimited): ``add``/``replace``/
+  ``remove``/``operations`` all apply, and its bytes still never count against
+  MEMORY's 2,200-char budget (SELF is uncapped);
+* ``replace_whole_file`` stays as the one-call whole-file rewrite escape hatch;
 * KB1-IDENTITY-DEGRADED still fires: a missing or untouched-placeholder SELF.md
   keeps producing the explicit degraded notice in ``kissne_self``.
 """
@@ -22,7 +23,7 @@ import pytest
 
 from agent.system_prompt import _assemble_prompt_parts, _self_block
 from hermes_cli.default_self import DEFAULT_SELF_MD
-from tools.memory_tool import MemoryStore, MEMORY_BLOCK_HEADERS, memory_tool
+from tools.memory_tool import ENTRY_DELIMITER, MEMORY_BLOCK_HEADERS, MemoryStore, memory_tool
 
 CUSTOM_SELF = "# Self\n\nI answer more briefly now, and I like tea."
 
@@ -134,7 +135,7 @@ def test_self_write_does_not_change_this_session_snapshot(home):
     store.load_from_disk()
     frozen = store.format_for_system_prompt("self")
 
-    assert store.replace("self", "", "REWRITTEN SELF")["success"] is True
+    assert store.replace("self", "I like tea", "REWRITTEN SELF")["success"] is True
 
     # Live state moved on, the frozen snapshot did not (same rule as MEMORY/USER).
     assert store.self_text == "REWRITTEN SELF"
@@ -149,71 +150,106 @@ def test_self_write_does_not_change_this_session_snapshot(home):
 # ── 3. whole-file write semantics ───────────────────────────────────────────
 
 
-def test_replace_target_self_rewrites_the_whole_file(home):
-    (home / "SELF.md").write_text(CUSTOM_SELF, encoding="utf-8")
+def test_replace_target_self_edits_only_the_matching_entry(home):
+    keep = "# Self\n\nKeeps replies short."
+    (home / "SELF.md").write_text(f"{keep}{ENTRY_DELIMITER}Likes tea.\n", encoding="utf-8")
     store = MemoryStore()
     store.load_from_disk()
 
-    result = json.loads(memory_tool(action="replace", target="self", content="NEW SELF BODY", store=store))
+    result = json.loads(memory_tool(action="replace", target="self", old_text="tea",
+                                    content="Drinks coffee instead.", store=store))
 
     assert result["success"] is True
     assert result["target"] == "self"
-    assert (home / "SELF.md").read_text(encoding="utf-8").strip() == "NEW SELF BODY"
-    # The success response must not echo the file back as entries.
-    assert "entries" not in result and "current_entries" not in result and "entry_count" not in result
+    assert store._entries_for("self") == [keep, "Drinks coffee instead."]
+    written = (home / "SELF.md").read_text(encoding="utf-8")
+    assert keep in written and "Drinks coffee instead." in written and "Likes tea." not in written
 
 
-@pytest.mark.parametrize("action,payload", [
-    ("add", {"content": "a brand new entry"}),
-    ("remove", {"old_text": "anything"}),
-])
-def test_entry_actions_are_refused_for_self_with_a_replace_hint(home, action, payload):
+def test_add_appends_a_new_entry_to_self(home):
     (home / "SELF.md").write_text(CUSTOM_SELF, encoding="utf-8")
     store = MemoryStore()
     store.load_from_disk()
 
-    result = json.loads(memory_tool(action=action, target="self", store=store, **payload))
+    result = json.loads(memory_tool(action="add", target="self", content="Keeps replies short.", store=store))
 
-    assert result["success"] is False
-    assert "replace" in result["error"]
-    assert "whole-file" in result["error"]
-    assert "target='self'" in result["error"]
-    # Nothing was written and SELF never fell through to the notes store.
-    assert (home / "SELF.md").read_text(encoding="utf-8").strip() == CUSTOM_SELF
+    assert result["success"] is True
+    assert store._entries_for("self") == [CUSTOM_SELF, "Keeps replies short."]
+    assert "Keeps replies short." in (home / "SELF.md").read_text(encoding="utf-8")
 
 
-def test_batch_operations_are_refused_for_self(home):
+def test_remove_drops_only_the_matching_entry(home):
+    keep = "# Self\n\nKeeps replies short."
+    (home / "SELF.md").write_text(f"{keep}{ENTRY_DELIMITER}Likes tea.\n", encoding="utf-8")
+    store = MemoryStore()
+    store.load_from_disk()
+
+    result = json.loads(memory_tool(action="remove", target="self", old_text="tea", store=store))
+
+    assert result["success"] is True
+    assert store._entries_for("self") == [keep]
+    assert "Likes tea." not in (home / "SELF.md").read_text(encoding="utf-8")
+
+
+def test_batch_operations_apply_to_self_in_one_call(home):
+    keep = "# Self\n\nKeeps replies short."
+    (home / "SELF.md").write_text(keep, encoding="utf-8")
+    store = MemoryStore()
+    store.load_from_disk()
+
+    result = json.loads(memory_tool(target="self", operations=[
+        {"action": "add", "content": "Likes tea."},
+        {"action": "replace", "old_text": "Keeps replies short", "content": "Keeps replies very short."},
+    ], store=store))
+
+    assert result["success"] is True
+    assert store._entries_for("self") == ["Keeps replies very short.", "Likes tea."]
+
+
+def test_a_batch_may_not_empty_self(home):
+    """#103419 still holds: an all-or-nothing batch cannot wipe the last entry."""
     (home / "SELF.md").write_text(CUSTOM_SELF, encoding="utf-8")
     store = MemoryStore()
     store.load_from_disk()
 
     result = json.loads(memory_tool(
-        target="self", operations=[{"action": "add", "content": "nope"}], store=store))
+        target="self", operations=[{"action": "remove", "old_text": "tea"}], store=store))
 
     assert result["success"] is False
-    assert "replace" in result["error"]
+    assert "empty" in result["error"]
+    assert (home / "SELF.md").read_text(encoding="utf-8").strip() == CUSTOM_SELF
 
 
-def test_cross_store_calls_cannot_reroute_self_into_memory(home):
-    """The store's own entry API is guarded too, not just the tool dispatcher."""
+def test_self_entry_calls_write_self_and_never_reroute_into_memory(home):
+    """The store's own entry API targets SELF.md, not the notes store."""
     store = MemoryStore()
     store.load_from_disk()
 
-    assert store.add("self", "entry")["success"] is False
-    assert store.remove("self", "entry")["success"] is False
-    assert store.apply_batch("self", [{"action": "add", "content": "entry"}])["success"] is False
+    assert store.add("self", "entry")["success"] is True
+    assert store.replace("self", "entry", "changed")["success"] is True
+    assert store.remove("self", "changed")["success"] is True
+    assert store.apply_batch("self", [{"action": "add", "content": "batched"}])["success"] is True
+
+    assert (home / "SELF.md").read_text(encoding="utf-8").strip() == "batched"
     assert store.memory_entries == []
     assert not (MemoryStore._path_for("memory")).exists()
 
 
-def test_self_write_is_refused_when_the_body_is_empty(home):
+def test_self_entry_writes_require_their_fields(home):
     (home / "SELF.md").write_text(CUSTOM_SELF, encoding="utf-8")
     store = MemoryStore()
     store.load_from_disk()
 
-    result = json.loads(memory_tool(action="replace", target="self", content="   ", store=store))
+    # replace without old_text has no entry to select.
+    missing_old = json.loads(memory_tool(action="replace", target="self", content="NEW", store=store))
+    assert missing_old["success"] is False
+    assert "old_text" in missing_old["error"]
 
-    assert result["success"] is False
+    # replace with old_text but blank content is refused too.
+    blank = json.loads(memory_tool(action="replace", target="self", old_text="tea", content="   ", store=store))
+    assert blank["success"] is False
+    assert "content" in blank["error"]
+
     assert (home / "SELF.md").read_text(encoding="utf-8").strip() == CUSTOM_SELF
 
 
