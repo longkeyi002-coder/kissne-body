@@ -468,7 +468,8 @@ class MemoryStore:
                     f"of removing the last one (see current_entries below). To delete the final entry "
                     f"deliberately, use single remove() calls."))
             new_total = len(ENTRY_DELIMITER.join(working))  # budget check against the FINAL state only
-            if new_total > limit:
+            # Unbudgeted targets (SELF.md, limit 0) have no cap -- same guard as add/replace/_edit.
+            if limit > 0 and new_total > limit:
                 return self._failure_with_entries(target, (
                     f"After applying all {len(operations)} operations, memory would be at "
                     f"{new_total:,}/{limit:,} chars -- over the limit. Remove or shorten more "
