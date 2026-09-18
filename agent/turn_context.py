@@ -1051,6 +1051,7 @@ def build_api_messages(
     The system prompt is built once per Session Snapshot and replayed verbatim."""
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
+    from agent.historical_context_projection import project_historical_message
     from agent.replay_cleanup import canonicalize_replay_history
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
@@ -1132,6 +1133,13 @@ def build_api_messages(
             # prefix stays byte-stable. User rows carry the injection sidecar; user
             # and assistant rows may carry a sanitize-divergence sidecar.
             api_msg["content"] = _api_content
+
+        # Historical tool arguments and image parts are replayed on every later
+        # request. Keep the durable transcript lossless, but send only bounded
+        # argument metadata and image references for old messages. The current
+        # turn is excluded: its tool loop may still need exact arguments/images.
+        if idx < split:
+            api_msg = project_historical_message(api_msg)
 
         # Pass reasoning back to the API for ALL assistant messages so multi-turn
         # reasoning context is preserved.
