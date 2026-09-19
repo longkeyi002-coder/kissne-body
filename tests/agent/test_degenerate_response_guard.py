@@ -116,9 +116,9 @@ class TestDegenerateResponseDetector:
         monkeypatch.setattr(guard_mod, "MIN_TOTAL_CHARS", 300)
         monkeypatch.setattr(guard_mod, "REPEAT_HITS", 2)
         paragraphs = [
-            "我应该先验证本地网页是否正常，再验证本地 websocket，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题而没有新的证据。",
-            "我应该先检查本地页面，再检查本地 websocket，最后和公网连接做对比，不能一直重复猜认证、网络或配置问题却没有获得新的证据。",
-            "下一步仍然应该验证本地页面和 websocket，再与公网路径比较，而不是继续换一种说法猜认证、网络和配置，因为这并没有增加新的证据。",
+            "我应该先验证本地页面是否正常，再验证本地 websocket 是否正常，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题而没有新的证据。",
+            "我应该先验证本地页面是否正常，再检查本地 websocket 是否正常，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题却没有新的证据。",
+            "我应该先验证本地页面是否正常，再检查本地 websocket 是否正常，然后比较公网连接，不能继续反复猜测认证、网络或者配置问题却没有新的证据。",
         ]
         guard = DegenerateResponseGuard()
         for paragraph in paragraphs:
