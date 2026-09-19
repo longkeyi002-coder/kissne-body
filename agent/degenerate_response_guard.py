@@ -26,6 +26,7 @@ RECOVERY_NUDGE = (
     "Either make one concrete tool call now, or answer briefly with only verified facts "
     "and what remains unknown."
 )
+RECOVERY_PLACEHOLDER = "[repetitive no-progress output stopped by runtime guard]"
 
 DEFAULT_ENABLED = True
 MIN_TOTAL_CHARS = 6000
