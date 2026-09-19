@@ -788,20 +788,12 @@ def skill_manage(
 
 def _skill_manage_description(create_dir: str) -> str:
     return (
-        "Create, update, or delete skills — your procedural memory for "
-        "recurring task types. The call is an operations array (a single "
-        "edit is a list of one); it applies atomically — any failure rolls "
-        "every touched skill back. Ops: create (full SKILL.md; lands in "
-        f"{create_dir}; must precede that skill's other "
-        "ops), patch (targeted old_string/new_string fix — preferred; "
-        "content alone REPLACES the whole file, read it via skill_view() "
-        "first), write_file/remove_file (supporting files), delete (sole "
-        "op only). Existing skills are modified wherever they live. Keep "
-        "the description's first 57 chars a self-contained trigger: 'Use "
-        "when <trigger>. <one-line behavior>.' Write lessons, not logs: "
-        "imperative rule + why, no PR numbers/dates/incident narration, one "
-        "rule per lesson, references/ named by topic (extend before adding). "
-        "skill_view() shows format conventions."
+        "Manage procedural skills with atomic operations[]. create writes full SKILL.md; patch is preferred for "
+        "targeted edits, while content alone REPLACES the whole file — read it with skill_view() first. "
+        "write_file/remove_file manage support files; delete must be the sole op. New skills land in "
+        f"{create_dir}. Keep the description's first 57 chars a self-contained trigger: "
+        "'Use when <trigger>. <one-line behavior>.' Store reusable lessons, not task logs; skill_view() shows "
+        "format conventions."
     )
 
 
@@ -823,17 +815,13 @@ SKILL_MANAGE_SCHEMA = {
         "properties": {
             "operations": {
                 "type": "array",
-                "description": "Ordered ops; each names its target skill.",
+                "description": "Ordered atomic ops; each names its skill.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": (
-                                "Skill name (lowercase, hyphens/underscores, "
-                                "max 64 chars); an existing skill's name "
-                                "unless creating."
-                            )
+                            "description": "Skill name (lowercase, hyphens/underscores, max 64 chars)."
                         },
                         "action": {
                             "type": "string",
@@ -841,44 +829,37 @@ SKILL_MANAGE_SCHEMA = {
                         },
                         "content": {
                             "type": "string",
-                            "description": (
-                                "Full SKILL.md text (YAML frontmatter + "
-                                "markdown body) for create, or a full "
-                                "rewrite on patch."
-                            )
+                            "description": "Full SKILL.md for create; full rewrite for patch."
                         },
                         "category": {
                             "type": "string",
-                            "description": "Optional category subdir for create (e.g. 'devops')."
+                            "description": "Create subdirectory, e.g. 'devops'."
                         },
                         # patch args: same fuzzy-matching semantics as the
                         # `patch` tool — teach only skill-specific facts here.
                         "old_string": {
                             "type": "string",
-                            "description": "Text to find (patch; same matching semantics as the patch tool)."
+                            "description": "Text to find; uses patch tool matching."
                         },
                         "new_string": {
                             "type": "string",
-                            "description": "Replacement (patch); empty string deletes the match."
+                            "description": "Replacement; empty deletes the match."
                         },
                         "replace_all": {
                             "type": "boolean",
-                            "description": "patch: replace all occurrences (default false)."
+                            "description": "Replace all matches (default false)."
                         },
                         "file_path": {
                             "type": "string",
                             "description": (
-                                "Path RELATIVE to the skill's own directory, "
-                                "e.g. 'references/api.md' — no leading slash, "
-                                "never absolute. write_file/remove_file: "
-                                "required; first segment references/, "
-                                "templates/, scripts/, or assets/. patch: "
-                                "optional (default SKILL.md)."
+                                "RELATIVE skill-dir path (e.g. 'references/api.md'), never absolute; allowed roots: "
+                                "references/, templates/, scripts/, assets/. Required for write_file/remove_file; "
+                                "optional for patch (default SKILL.md)."
                             )
                         },
                         "file_content": {
                             "type": "string",
-                            "description": "Content for write_file."
+                            "description": "Support-file content."
                         }
                     },
                     "required": ["name", "action"]
