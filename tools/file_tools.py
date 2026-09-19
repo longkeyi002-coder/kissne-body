@@ -1148,14 +1148,14 @@ SEARCH_FILES_SCHEMA = {
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "Regex (content) or glob (files)."},
-            "target": {"type": "string", "enum": ["content", "files"], "description": "Search contents or filenames.", "default": "content"},
-            "path": {"type": "string", "description": "Search path.", "default": "."},
+            "target": {"type": "string", "enum": ["content", "files"], "default": "content"},
+            "path": {"type": "string", "default": "."},
             "file_glob": {"type": "string", "description": "Optional file glob filter."},
-            "limit": {"type": "integer", "description": "Max results.", "default": 50},
-            "offset": {"type": "integer", "description": "Pagination offset.", "default": 0},
-            "order": {"type": "string", "enum": ["discovery", "modified"], "description": "File-search ordering.", "default": "discovery"},
-            "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "description": "Content-search output form.", "default": "content"},
-            "context": {"type": "integer", "description": "Context lines around matches.", "default": 0}
+            "limit": {"type": "integer", "default": 50},
+            "offset": {"type": "integer", "default": 0},
+            "order": {"type": "string", "enum": ["discovery", "modified"], "default": "discovery"},
+            "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "default": "content"},
+            "context": {"type": "integer", "default": 0}
         },
         "required": ["pattern"]
     }
