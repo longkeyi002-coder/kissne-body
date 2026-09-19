@@ -273,18 +273,17 @@ MEMORY_SCHEMA = {
             "target": {
                 "type": "string",
                 "enum": ["memory", "user"],
-                "description": "Store to update: 'memory' for agent notes, 'user' for user profile."
+                "description": "'memory' notes or 'user' profile."
             },
             "operations": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Atomic memory changes.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "action": {"type": "string", "enum": ["add", "replace", "remove"]},
                         "content": {"type": "string", "description": "Text for add/replace."},
-                        "old_text": {"type": "string", "description": "Existing unique text for replace/remove."},
+                        "old_text": {"type": "string", "description": "Match for replace/remove."},
                     },
                     "required": ["action"],
                 },
