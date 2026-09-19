@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 from hermes_cli.timeouts import get_provider_request_timeout, get_provider_stale_timeout
 from hermes_constants import PARTIAL_STREAM_STUB_ID, FINISH_REASON_LENGTH
 from agent.error_classifier import (FailoverReason, PROVIDER_STREAM_NON_JSON_ERROR_CODE)
+from agent.degenerate_response_guard import DegenerateResponseGuard, FINISH_REASON as DEGENERATE_FINISH_REASON
 from agent.errors import EmptyStreamError
 from agent.chat_completion_stream_monitor import StreamingWaitMonitor
 from agent.fast_mode import effective_request_overrides
@@ -2771,6 +2772,9 @@ class _StreamingCall(StreamingWaitMonitor):
         content_parts: list = []
         reasoning_parts: list = []
         reasoning_details: list = []  # OpenRouter replay data (signatures, encrypted blocks)
+        degenerate_guard = DegenerateResponseGuard(
+            enabled=getattr(self.agent, "_degenerate_guard_enabled", True)
+        )
         pending_text_parts: list[str] = []
         tool_calls = _ToolCallAccumulator()
         tool_calls_acc = tool_calls.acc
@@ -2838,6 +2842,19 @@ class _StreamingCall(StreamingWaitMonitor):
             if hasattr(chunk, "usage") and chunk.usage:
                 usage_obj = chunk.usage
 
+            # Read tool-call presence before scoring text. Once a tool-call delta starts,
+            # repetitive prose must never interrupt or truncate its JSON arguments.
+            delta_tool_calls = getattr(delta, "tool_calls", None)
+            guard_may_stop = not tool_calls_acc and not delta_tool_calls
+
+            # Structured reasoning_details deltas carry the provider's replay data; collect
+            # them before a possible guard stop so provider-required replay signatures survive.
+            rd_delta = getattr(delta, "reasoning_details", None)
+            if rd_delta is None and isinstance(getattr(delta, "model_extra", None), dict):
+                rd_delta = delta.model_extra.get("reasoning_details")
+            for rd in rd_delta if isinstance(rd_delta, (list, tuple)) else ():
+                append_streamed_reasoning_detail(reasoning_details, rd)
+
             reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
             if reasoning_text:
                 # Summary-part models omit the separator between markdown blocks; re-insert it.
@@ -2845,21 +2862,30 @@ class _StreamingCall(StreamingWaitMonitor):
                     reasoning_parts[-1] if reasoning_parts else "", reasoning_text)
                 reasoning_parts.append(reasoning_text)
                 self._emit_reasoning(reasoning_text)
-            # Structured reasoning_details deltas carry the provider's replay data; the
-            # non-streaming path already keeps them, so dropping them here lost
-            # reasoning continuity on nearly every turn. Pydantic parks unknown fields
-            # in ``model_extra``.
-            rd_delta = getattr(delta, "reasoning_details", None)
-            if rd_delta is None and isinstance(getattr(delta, "model_extra", None), dict):
-                rd_delta = delta.model_extra.get("reasoning_details")
-            for rd in rd_delta if isinstance(rd_delta, (list, tuple)) else ():
-                append_streamed_reasoning_detail(reasoning_details, rd)
+                if guard_may_stop and degenerate_guard.feed(reasoning_text):
+                    finish_reason = DEGENERATE_FINISH_REASON
+                    logger.warning(
+                        "Degenerate-response guard stopped repetitive reasoning at %s chars "
+                        "(model=%s provider=%s).",
+                        degenerate_guard.trip_at_chars, self.agent.model, self.agent.provider,
+                    )
+                    self.agent._touch_activity("degenerate response guard stopped stream")
+                    break
 
             # Text (list-of-blocks deltas flattened once); possible echoed SSE is
             # buffered until it can be judged.
             delta_content = flatten_message_text(getattr(delta, "content", None), sep="")
             if delta_content:
                 content_parts.append(delta_content)
+                if guard_may_stop and degenerate_guard.feed(delta_content):
+                    finish_reason = DEGENERATE_FINISH_REASON
+                    logger.warning(
+                        "Degenerate-response guard stopped repetitive content at %s chars "
+                        "(model=%s provider=%s).",
+                        degenerate_guard.trip_at_chars, self.agent.model, self.agent.provider,
+                    )
+                    self.agent._touch_activity("degenerate response guard stopped stream")
+                    break
                 if tool_calls_acc:
                     self._route_suppressed_text(delta_content)
                 elif pending_text_parts or _provider_stream_text_may_be_sse(delta_content):
@@ -2870,7 +2896,6 @@ class _StreamingCall(StreamingWaitMonitor):
                 else:
                     self._emit_text(delta_content)
 
-            delta_tool_calls = getattr(delta, "tool_calls", None)
             if delta_tool_calls:
                 _flush_pending_stream_text()
                 for tc_delta in delta_tool_calls:

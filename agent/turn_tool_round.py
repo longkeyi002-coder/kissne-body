@@ -272,6 +272,16 @@ def stage_tool_call_message(
     while messages and isinstance(messages[-1], dict) and messages[-1].get("_thinking_prefill"):
         messages.pop()
         _had_prefill = True
+
+    # A tool call is successful recovery from the degenerate-response nudge. Remove
+    # the synthetic assistant/user pair before durable tool-call persistence.
+    from agent.degenerate_response_guard import SYNTHETIC_FLAG as _DEGENERATE_SYNTHETIC_FLAG
+    while (
+        messages
+        and isinstance(messages[-1], dict)
+        and messages[-1].get(_DEGENERATE_SYNTHETIC_FLAG)
+    ):
+        messages.pop()
     if _had_prefill:
         agent._thinking_prefill_retries = 0
         agent._empty_content_retries = 0
