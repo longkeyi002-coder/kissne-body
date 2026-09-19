@@ -100,7 +100,7 @@ class TestDegenerateResponseDetector:
             block = "\n".join(f"INFO worker step {i} completed" for i in range(20))
         else:
             block = "\n".join(["| key | value |", "| --- | --- |", "| alpha | beta |"])
-        text = "\n\n".join(block for _ in range(80))
+        text = "\n\n".join(block for _ in range(160))
         assert len(text) > 6000
         assert is_degenerate_response(text) is False
 
