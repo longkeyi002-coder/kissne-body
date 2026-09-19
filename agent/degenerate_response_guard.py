@@ -75,7 +75,7 @@ def _looks_structured(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return True
-    if "```" in stripped:
+    if "```" in stripped or "~~~" in stripped:
         return True
     lines = [line for line in stripped.splitlines() if line.strip()]
     if len(lines) >= 3:
