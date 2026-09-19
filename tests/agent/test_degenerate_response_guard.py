@@ -260,3 +260,52 @@ class TestGuardScaffoldCleanup:
 
         assert all(not m.get(SYNTHETIC_FLAG) for m in messages)
         assert messages == [{"role": "user", "content": "diagnose it"}]
+
+
+@pytest.fixture()
+def loop_agent():
+    from run_agent import AIAgent
+
+    with (
+        patch("model_tools.get_tool_definitions", return_value=[]),
+        patch("model_tools.check_toolset_requirements", return_value={}),
+        patch("agent.process_bootstrap.OpenAI"),
+    ):
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            base_url="https://openrouter.ai/api/v1",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+    agent.client = MagicMock()
+    agent._cached_system_prompt = "You are helpful."
+    agent._use_prompt_caching = False
+    agent.compression_enabled = False
+    agent.save_trajectories = False
+    return agent
+
+
+class TestDegenerateRecoveryBound:
+    def test_two_degenerate_responses_use_exactly_one_recovery(self, loop_agent):
+        from tests.agent.test_run_agent import _mock_response
+
+        bad = _incident_shape()
+        loop_agent.client.chat.completions.create.side_effect = [
+            _mock_response(content=bad, finish_reason="stop"),
+            _mock_response(content=bad, finish_reason="stop"),
+        ]
+
+        with (
+            patch.object(loop_agent, "_persist_session"),
+            patch.object(loop_agent, "_save_trajectory"),
+            patch.object(loop_agent, "_cleanup_task_resources"),
+        ):
+            result = loop_agent.run_conversation("diagnose the websocket problem")
+
+        assert loop_agent.client.chat.completions.create.call_count == 2
+        assert "repeated the same analysis twice" in (result["final_response"] or "")
+        assert not any(
+            isinstance(message, dict) and message.get("_degenerate_guard_nudge")
+            for message in result["messages"]
+        )
