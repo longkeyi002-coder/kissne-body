@@ -1087,16 +1087,20 @@ def build_api_messages(
     # rather than silently un-freezing it.
     turn_now = agent._current_turn_timestamp
     split = current_turn_user_idx if has_current else 0
-    canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
+    canonical_prefix = canonicalize_replay_history(messages[:split], now=turn_now)
+    canonical_messages = canonical_prefix + messages[split:]
 
     # Projection boundary. Keep the immediately previous completed turn exact for
     # one grace turn: 413 recovery may need to evict its most recent tool image,
     # and corrupt-image recovery must be able to strip the exact bytes that the
-    # provider rejected. Older turns are safe to project. Scan the canonicalized
-    # list because replay cleanup may have dropped rows before this boundary.
-    projection_boundary = split
-    for _idx in range(min(split, len(canonical_messages)) - 1, -1, -1):
-        entry = canonical_messages[_idx]
+    # provider rejected. Older turns are safe to project.
+    #
+    # Scan ONLY canonical_prefix. Replay cleanup may drop rows, so split is no
+    # longer a valid index into canonical_messages; scanning the combined list can
+    # accidentally land on the current user row and project live recovery bytes.
+    projection_boundary = len(canonical_prefix)
+    for _idx in range(len(canonical_prefix) - 1, -1, -1):
+        entry = canonical_prefix[_idx]
         if isinstance(entry, dict) and entry.get("role") == "user":
             projection_boundary = _idx
             break
