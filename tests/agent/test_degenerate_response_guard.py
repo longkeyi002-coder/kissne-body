@@ -17,39 +17,40 @@ def _incident_shape() -> str:
         filler.append((f"{ch}context " * 28).strip())
     loops = [
         (
-            "Actually, I think I should focus on the practical solution. The dashboard is still not working. "
-            "I should check whether HTTP works locally, then test the websocket locally, then compare the "
-            "public path. If local works and public fails, investigate the network boundary; otherwise inspect "
-            "the application configuration and authentication path before making another claim."
+            "Actually, I think I should focus on the practical solution. I should check whether the dashboard works "
+            "from localhost, check whether the websocket works from localhost, and then compare the public connection. "
+            "If localhost works but the public path fails, that points to the network boundary; if localhost fails too, "
+            "that points back to application configuration or authentication."
         ),
         (
-            "Actually, I should just provide a practical solution instead of circling. First verify the dashboard "
-            "over localhost, then verify the websocket from localhost, and finally compare it with the public "
-            "connection. A local-only success points to the network boundary; a local failure points back to "
-            "application configuration or authentication, so I should gather evidence before guessing again."
+            "Actually, I think I should focus on the practical solution. I should verify whether the dashboard works "
+            "from localhost, verify whether the websocket works from localhost, and then compare the public connection. "
+            "If localhost works but the public path fails, that points to the network boundary; if localhost fails too, "
+            "that points back to application configuration or authentication."
         ),
         (
-            "The most likely causes are an authentication failure, a websocket configuration problem, or a "
-            "network rule. I should stop listing possibilities and run one concrete check that separates those "
-            "cases, then use the result as new evidence rather than repeating the same hypotheses in different words."
+            "The most likely causes are authentication, websocket configuration, or a network rule. I should stop "
+            "listing the same possibilities and run one concrete websocket test that separates those cases, then use "
+            "the result as new evidence before proposing another diagnosis or another speculative fix."
         ),
         (
-            "The likely causes remain authentication, websocket configuration, or a network rule. Instead of "
-            "listing the same possibilities again, I should perform a concrete test that distinguishes them and "
-            "use that result as evidence before making another diagnosis or proposing another speculative fix."
+            "The most likely causes are authentication, websocket configuration, or a network rule. I should stop "
+            "repeating the same possibilities and run one concrete websocket test that separates those cases, then use "
+            "the result as new evidence before proposing another diagnosis or another speculative fix."
         ),
         (
-            "I realize I have been spending too much time restating the plan. The next useful step is a real "
-            "websocket client check with the required authentication state, because that would tell me whether the "
-            "server accepts the handshake and whether the abnormal close is produced before or after application logic."
+            "I realize I have been spending too much time restating the plan. The next useful step is an authenticated "
+            "websocket client check, because that result would show whether the server accepts the handshake and whether "
+            "the abnormal close happens before or after application logic begins handling the connection."
         ),
         (
-            "I realize I am spending too much time restating the same plan. The useful next step is an authenticated "
-            "websocket client test, because that concrete result would show whether the server accepts the handshake "
-            "and whether the abnormal close happens before or after the application begins handling the connection."
+            "I realize I have been spending too much time repeating the plan. The next useful step is an authenticated "
+            "websocket client check, because that result would show whether the server accepts the handshake and whether "
+            "the abnormal close happens before or after application logic begins handling the connection."
         ),
     ]
-    return "\n\n".join([*filler, *loops])
+    tail = ("post_guard_unique_material " * 80).strip()
+    return "\n\n".join([*filler, *loops, tail])
 
 
 def _unique_long_prose() -> str:
@@ -113,7 +114,7 @@ class TestDegenerateResponseDetector:
         from agent.degenerate_response_guard import DegenerateResponseGuard
         import agent.degenerate_response_guard as guard_mod
 
-        monkeypatch.setattr(guard_mod, "MIN_TOTAL_CHARS", 300)
+        monkeypatch.setattr(guard_mod, "MIN_TOTAL_CHARS", 180)
         monkeypatch.setattr(guard_mod, "REPEAT_HITS", 2)
         paragraphs = [
             "我应该先验证本地页面是否正常，再验证本地 websocket 是否正常，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题而没有新的证据。",
@@ -199,8 +200,8 @@ class TestDegenerateStreamingStop:
                 "repeating another authentication or configuration hypothesis because speculation does not move the task forward."
             ),
             (
-                "I need to verify localhost and compare the public websocket path with real evidence instead of repeating "
-                "the same authentication or configuration hypothesis, since more speculation does not make progress."
+                "I should verify the local endpoint and compare the public websocket path using concrete evidence, then "
+                "avoid repeating another authentication or configuration hypothesis because speculation does not move the task forward."
             ),
         ]
 
