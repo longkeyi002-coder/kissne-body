@@ -172,9 +172,9 @@ class TestClassification:
         # computer_use IS in the curated defer set → behind the bridge.
         assert "computer_use" not in names
 
-    def test_low_frequency_core_tools_defer_but_browser_working_set_stays_eager(self):
-        """Large event-triggered schemas stay discoverable behind the bridge without
-        hiding the browser actions used on ordinary navigation turns."""
+    def test_low_frequency_core_tools_defer_but_stateful_capabilities_stay_eager(self):
+        """Diagnostics/TTS may defer; navigation, vault, and skill management stay
+        directly visible because other runtime behavior depends on that surface."""
         from tools.tool_search import BRIDGE_TOOL_NAMES, ToolSearchConfig, assemble_tool_defs
 
         assembled = assemble_tool_defs(
@@ -192,8 +192,8 @@ class TestClassification:
         names = {td["function"]["name"] for td in assembled.tool_defs}
 
         assert assembled.activated
-        assert {"browser_navigate", "browser_click"} <= names
-        assert {"browser_console", "browser_vault_fill", "text_to_speech", "skill_manage"}.isdisjoint(names)
+        assert {"browser_navigate", "browser_click", "browser_vault_fill", "skill_manage"} <= names
+        assert {"browser_console", "text_to_speech"}.isdisjoint(names)
         assert BRIDGE_TOOL_NAMES <= names
 
     def test_clarify_stays_eager_by_default(self):
