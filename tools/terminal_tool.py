@@ -155,7 +155,7 @@ from tools.environments.base import EnvironmentConnectionError
 
 
 # Tool description for LLM
-TERMINAL_TOOL_DESCRIPTION = """Execute shell commands for builds, git, installs, processes, and scripts; use file tools for reading, searching, and editing. Filesystem, cwd, and exported environment variables persist between calls; activate a virtualenv or export variables once per session."""
+TERMINAL_TOOL_DESCRIPTION = """Execute shell commands for builds, git, installs, processes, or scripts. Filesystem, cwd, and exported environment variables persist between calls; activate a virtualenv once per session."""
 
 # Environment lifecycle state.
 _active_environments: Dict[str, Any] = {}
