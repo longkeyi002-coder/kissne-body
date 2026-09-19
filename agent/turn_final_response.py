@@ -15,6 +15,7 @@ from agent.message_metadata import append_message
 from agent.degenerate_response_guard import (
     FINISH_REASON as DEGENERATE_FINISH_REASON,
     RECOVERY_NUDGE as DEGENERATE_RECOVERY_NUDGE,
+    RECOVERY_PLACEHOLDER as DEGENERATE_RECOVERY_PLACEHOLDER,
     SYNTHETIC_FLAG as DEGENERATE_SYNTHETIC_FLAG,
     is_degenerate_response,
 )
@@ -137,6 +138,9 @@ def finish_text_response(
             _partial = agent._build_assistant_message(
                 assistant_message, DEGENERATE_FINISH_REASON
             )
+            # The already-seen repetitive prose is not useful evidence for the retry and
+            # would charge it again as input. Keep provider replay metadata, but bound text.
+            _partial["content"] = DEGENERATE_RECOVERY_PLACEHOLDER
             _partial[DEGENERATE_SYNTHETIC_FLAG] = True
             append_message(messages, _partial)
             append_message(messages, {
