@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, Iterable
 
 _IMAGE_PART_TYPES = frozenset({"image", "image_url", "input_image"})
 _TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text"})
@@ -56,6 +56,87 @@ def _compact_tool_result_text(content: str) -> str:
         + f"omitted={omitted}; chars={len(content)}; sha256={digest}]\n"
         + content[-_TOOL_RESULT_TAIL_CHARS:]
     )
+
+
+def _terminal_result_failed(result: dict[str, Any]) -> bool:
+    """Keep failed terminal results lossless so recovery clues are never trimmed."""
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, int) and exit_code != 0:
+        return True
+    return bool(result.get("error")) or bool(result.get("traceback"))
+
+
+def _terminal_command(arguments: Any) -> str:
+    if not isinstance(arguments, str):
+        return ""
+    try:
+        parsed = json.loads(arguments)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    command = parsed.get("command")
+    if not isinstance(command, str):
+        return ""
+    return command if len(command) <= 192 else command[:189] + "…"
+
+
+def _compact_terminal_result(content: str, *, arguments: Any) -> str:
+    """Compact a structured terminal receipt while retaining recovery metadata.
+
+    Terminal results are JSON receipts whose output field can be very large. The
+    command, exit status, error/recovery fields and output head/tail carry the
+    information needed to decide the next action; the durable spill file remains
+    available through ``full_output_path``.
+    """
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        return _compact_tool_result_text(content)
+    if not isinstance(result, dict) or not isinstance(result.get("output"), str):
+        return _compact_tool_result_text(content)
+    if _terminal_result_failed(result):
+        return content
+
+    output = result["output"]
+    if len(content) <= _MAX_TOOL_RESULT_CHARS:
+        return content
+    digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:12]
+    command = _terminal_command(arguments)
+    exit_code = result.get("exit_code")
+    header = (
+        "[historical terminal result compacted; "
+        f"command={command!r}; exit_code={exit_code!r}; "
+        f"chars={len(content)}; sha256={digest}]"
+    )
+    recovery = []
+    for key in ("full_output_path", "truncation_note", "hint", "exit_code_meaning"):
+        value = result.get(key)
+        if value:
+            text = str(value)
+            recovery.append(f"{key}={text[:240]}")
+    if recovery:
+        header += "\n" + "\n".join(recovery)
+
+    # Keep the receipt under the existing 1536-character contract, accounting for
+    # the header and labels rather than slicing a serialized JSON object.
+    available = max(120, _MAX_TOOL_RESULT_CHARS - len(header) - 24)
+    head = min(len(output), max(64, int(available * 0.68)))
+    tail = min(len(output) - head, max(0, available - head))
+    omitted = max(0, len(output) - head - tail)
+    def render(head_chars: int) -> str:
+        omitted_chars = max(0, len(output) - head_chars - tail)
+        return (
+            header
+            + f"\nstdout_head={output[:head_chars]}"
+            + f"\n[stdout omitted={omitted_chars}; output_chars={len(output)}]"
+            + f"\nstdout_tail={output[-tail:] if tail else ''}"
+        )
+
+    body = render(head)
+    if len(body) > _MAX_TOOL_RESULT_CHARS:
+        body = render(max(64, head - (len(body) - _MAX_TOOL_RESULT_CHARS)))
+    return body
 
 
 def _project_content(content: Any, *, compact_text: bool = False) -> Any:
@@ -134,7 +215,59 @@ def _project_tool_arguments(arguments: Any, name: str) -> Any:
     return _minimal_tool_argument_marker(len(arguments))
 
 
-def project_historical_message(message: dict[str, Any]) -> dict[str, Any]:
+def build_tool_call_index(messages: Iterable[dict[str, Any]]) -> dict[str, tuple[str, Any]]:
+    """Index historical call ids so a tool receipt can retain typed metadata."""
+    index: dict[str, tuple[str, Any]] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for call in message.get("tool_calls") or ():
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("id") or call.get("call_id")
+            function = call.get("function")
+            if call_id and isinstance(function, dict):
+                index[str(call_id)] = (str(function.get("name") or ""), function.get("arguments"))
+    return index
+
+
+def find_referenced_tool_result_ids(
+    messages: list[dict[str, Any]],
+    tool_call_index: dict[str, tuple[str, Any]] | None = None,
+) -> set[str]:
+    """Return tool ids whose id, command, or spill path is mentioned later."""
+    protected: set[str] = set()
+    serialized = [json.dumps(message, ensure_ascii=False, default=str) for message in messages]
+    for idx, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        call_id = message.get("tool_call_id")
+        terms = [str(call_id)] if call_id else []
+        if tool_call_index and call_id in tool_call_index:
+            _name, arguments = tool_call_index[str(call_id)]
+            command = _terminal_command(arguments)
+            if len(command) >= 8:
+                terms.append(command)
+        content = message.get("content")
+        if isinstance(content, str):
+            try:
+                receipt = json.loads(content)
+            except (TypeError, ValueError):
+                receipt = None
+            if isinstance(receipt, dict):
+                for key in ("full_output_path", "output_path"):
+                    path = receipt.get(key)
+                    if isinstance(path, str) and path:
+                        terms.append(path)
+        if terms and any(any(term in later for term in terms) for later in serialized[idx + 1:]):
+            protected.add(str(call_id))
+    return protected
+
+
+def project_historical_message(
+    message: dict[str, Any], *, tool_name: str = "", tool_arguments: Any = None,
+    protected_tool_result: bool = False,
+) -> dict[str, Any]:
     """Project one historical message for a provider request.
 
     Only the request copy is changed. Tool-call structure and ids remain intact
@@ -147,8 +280,14 @@ def project_historical_message(message: dict[str, Any]) -> dict[str, Any]:
 
     if "content" in projected:
         content = projected["content"]
-        if is_tool_result and isinstance(content, str):
-            projected["content"] = _compact_tool_result_text(content)
+        if is_tool_result and protected_tool_result:
+            # A later message explicitly refers to this receipt; replay it exactly.
+            projected["content"] = content
+        elif is_tool_result and isinstance(content, str):
+            if tool_name in {"terminal", "shell"}:
+                projected["content"] = _compact_terminal_result(content, arguments=tool_arguments)
+            else:
+                projected["content"] = _compact_tool_result_text(content)
         else:
             projected["content"] = _project_content(content, compact_text=is_tool_result)
 
@@ -176,4 +315,8 @@ def project_historical_message(message: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
-__all__ = ["project_historical_message"]
+__all__ = [
+    "build_tool_call_index",
+    "find_referenced_tool_result_ids",
+    "project_historical_message",
+]

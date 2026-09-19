@@ -689,7 +689,7 @@ class TestCatalogListing:
         from tools.tool_search import ToolSearchConfig
         cfg = ToolSearchConfig.from_raw(None)
         assert cfg.listing == "auto"
-        assert cfg.listing_max_tokens == 4000
+        assert cfg.listing_max_tokens == 1800
         # legacy bool shapes keep defaults too
         assert ToolSearchConfig.from_raw(True).listing == "auto"
 
@@ -722,9 +722,50 @@ class TestCatalogListing:
         )
         description_tokens = estimate_tokens_from_schemas([search])
         # Includes the bridge schema around the listing, so allow modest
-        # framing overhead above the 4K listing budget.
-        assert description_tokens < 4500
+        # framing overhead above the 1.8K listing budget.
+        assert description_tokens < 2300
         assert result.listing_form in {"names", "groups", "mixed"}
+
+    def test_listing_budget_keeps_deferred_discovery_and_describe_contract(self):
+        """The smaller default must still expose names and recover full parameters on demand."""
+        from tools.tool_search import (
+            ToolSearchConfig,
+            assemble_tool_defs,
+            dispatch_tool_describe,
+        )
+
+        defs = []
+        for i in range(24):
+            name = f"mcp_contract_lookup_{i:02d}"
+            schema = _td(
+                name,
+                "Look up a connected record by its repository and issue identifier.",
+                {"repository": {"type": "string"}, "issue_id": {"type": "string"}},
+            )
+            from tools.registry import registry
+            registry.register(
+                name=name,
+                handler=lambda args, **kwargs: "{}",
+                schema=schema,
+                toolset="mcp-contract",
+            )
+            defs.append(schema)
+
+        config = ToolSearchConfig.from_raw({"enabled": "on", "listing_max_tokens": 1800})
+        assembled = assemble_tool_defs(defs, context_length=1_000_000, config=config)
+        search = next(td for td in assembled.tool_defs
+                      if td["function"]["name"] == "tool_search")
+        listing = search["function"]["description"]
+        assert "mcp_contract_lookup_00" in listing
+        assert "mcp_contract_lookup_23" in listing
+
+        described = json.loads(dispatch_tool_describe(
+            {"names": ["mcp_contract_lookup_00"]},
+            current_tool_defs=defs,
+            config=config,
+        ))
+        assert described["tools"]["mcp_contract_lookup_00"]["parameters"]["properties"] \
+            .keys() >= {"repository", "issue_id"}
 
     def test_short_desc_first_sentence_and_clip(self):
         from tools.tool_search_catalog import _short_desc
