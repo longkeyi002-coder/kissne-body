@@ -38,13 +38,13 @@ def test_hot_schema_surface_stays_under_budget():
         for name in _TARGETS
     )
     # Before this diet these seven model-facing schemas were ~21.7K chars.
-    # Leave headroom for dynamic limits/model-family variants while guarding
-    # against the explanatory prose growing back.
-    assert total_chars <= 15_500, total_chars
+    # Second-pass target: at least ~33% below the ~21.7K-char baseline while
+    # leaving headroom for dynamic limits/model-family variants.
+    assert total_chars <= 14_500, total_chars
 
 
 def test_terminal_description_stays_compact():
-    assert len(TERMINAL_TOOL_DESCRIPTION) <= 300
+    assert len(TERMINAL_TOOL_DESCRIPTION) <= 180
     assert "exported environment variables persist between calls" in TERMINAL_TOOL_DESCRIPTION
     assert "once per session" in TERMINAL_TOOL_DESCRIPTION
 
