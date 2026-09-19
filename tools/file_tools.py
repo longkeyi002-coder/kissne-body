@@ -1153,7 +1153,7 @@ SEARCH_FILES_SCHEMA = {
             "file_glob": {"type": "string", "description": "Optional file glob filter."},
             "limit": {"type": "integer", "default": 50},
             "offset": {"type": "integer", "default": 0},
-            "order": {"type": "string", "enum": ["discovery", "modified"], "default": "discovery"},
+            "order": {"type": "string", "enum": ["discovery", "modified"], "description": "File search: discovery = fast bounded traversal order; modified = exact global newest-first; ignored for content.", "default": "discovery"},
             "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "default": "content"},
             "context": {"type": "integer", "default": 0}
         },
