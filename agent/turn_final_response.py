@@ -12,6 +12,12 @@ import logging
 from typing import Any, Dict, Optional
 
 from agent.message_metadata import append_message
+from agent.degenerate_response_guard import (
+    FINISH_REASON as DEGENERATE_FINISH_REASON,
+    RECOVERY_NUDGE as DEGENERATE_RECOVERY_NUDGE,
+    SYNTHETIC_FLAG as DEGENERATE_SYNTHETIC_FLAG,
+    is_degenerate_response,
+)
 from agent.turn_empty_response import recover_empty_response
 from agent.turn_stop_gates import apply_stop_gates
 
@@ -20,7 +26,7 @@ logger = logging.getLogger("agent.conversation_loop")
 # Ephemeral retry scaffolding rows popped before the final answer becomes durable.
 _EPHEMERAL_SCAFFOLDING_FLAGS = (
     "_thinking_prefill", "_empty_recovery_synthetic", "_empty_terminal_sentinel",
-    "_dropped_toolcall_nudge",
+    "_dropped_toolcall_nudge", DEGENERATE_SYNTHETIC_FLAG,
 )
 
 
@@ -96,6 +102,68 @@ def finish_text_response(
     # Unmute: _mute_post_response from a housekeeping tool turn must not silence
     # empty-response warnings on the final response path.
     agent._mute_post_response = False
+
+    # A streaming guard marks its own intentional stop with a dedicated finish reason;
+    # non-streaming responses use the same deterministic classifier after generation.
+    # Run this BEFORE empty-response recovery because a repetitive reasoning-only stream
+    # may have no visible content at the point where the guard intentionally closes it.
+    _degenerate = finish_reason == DEGENERATE_FINISH_REASON
+    if (
+        not _degenerate
+        and not assistant_message.tool_calls
+        and final_response
+        and getattr(agent, "_degenerate_guard_enabled", True)
+    ):
+        _degenerate = is_degenerate_response(
+            agent._strip_think_blocks(final_response),
+            enabled=True,
+        )
+
+    if _degenerate:
+        _recoveries = getattr(agent, "_degenerate_guard_recoveries", 0)
+        if _recoveries < 1:
+            agent._degenerate_guard_recoveries = _recoveries + 1
+            logger.warning(
+                "Degenerate-response guard recovery requested (model=%s provider=%s chars=%d).",
+                getattr(agent, "model", None), getattr(agent, "provider", None),
+                len(final_response),
+            )
+            agent._emit_status(
+                "↻ Repetitive no-progress output stopped — asking the model to act once"
+            )
+            # Keep role alternation and provider replay metadata, but do not re-emit the
+            # already-streamed partial response. Both rows are ephemeral and are stripped
+            # before any successful final answer or tool round becomes durable.
+            _partial = agent._build_assistant_message(
+                assistant_message, DEGENERATE_FINISH_REASON
+            )
+            _partial[DEGENERATE_SYNTHETIC_FLAG] = True
+            append_message(messages, _partial)
+            append_message(messages, {
+                "role": "user",
+                "content": DEGENERATE_RECOVERY_NUDGE,
+                DEGENERATE_SYNTHETIC_FLAG: True,
+            })
+            agent._session_messages = messages
+            final_response = None
+            return _verdict("continue")
+
+        # A second hit in the same turn is terminal: do not turn one degenerate response
+        # into an unbounded retry/fallback loop. Replace the repetitive payload with a
+        # concise diagnostic final answer.
+        final_response = (
+            "I stopped this turn because the model repeated the same analysis twice "
+            "without producing new evidence or an action. No further retry was sent."
+        )
+        assistant_message.content = final_response
+        logger.warning(
+            "Degenerate-response guard terminal stop after one recovery "
+            "(model=%s provider=%s).",
+            getattr(agent, "model", None), getattr(agent, "provider", None),
+        )
+        agent._emit_status(
+            "⚠️ Repetitive no-progress output repeated after recovery; stopping this turn"
+        )
 
     # Think-block-only / empty content: recovery path.
     if not agent._has_content_after_think_block(final_response):
