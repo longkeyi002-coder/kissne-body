@@ -172,6 +172,30 @@ class TestClassification:
         # computer_use IS in the curated defer set → behind the bridge.
         assert "computer_use" not in names
 
+    def test_low_frequency_core_tools_defer_but_stateful_capabilities_stay_eager(self):
+        """Diagnostics/TTS may defer; navigation, vault, and skill management stay
+        directly visible because other runtime behavior depends on that surface."""
+        from tools.tool_search import BRIDGE_TOOL_NAMES, ToolSearchConfig, assemble_tool_defs
+
+        assembled = assemble_tool_defs(
+            [
+                _td("browser_navigate", "Open a URL"),
+                _td("browser_click", "Click an element"),
+                _td("browser_console", "Inspect browser console output"),
+                _td("browser_vault_fill", "Fill saved login credentials"),
+                _td("text_to_speech", "Speak text aloud"),
+                _td("skill_manage", "Create or modify skills"),
+            ],
+            context_length=200_000,
+            config=ToolSearchConfig.from_raw({"enabled": "on"}),
+        )
+        names = {td["function"]["name"] for td in assembled.tool_defs}
+
+        assert assembled.activated
+        assert {"browser_navigate", "browser_click", "browser_vault_fill", "skill_manage"} <= names
+        assert {"browser_console", "text_to_speech"}.isdisjoint(names)
+        assert BRIDGE_TOOL_NAMES <= names
+
     def test_clarify_stays_eager_by_default(self):
         """PR #97979 A/B verdict (288 runs, 3 model tiers): clarify deferred
         collapsed structured ask-the-user usage 18/18 → 7/18 (gpt-terra 0/6);
