@@ -1051,7 +1051,11 @@ def build_api_messages(
     The system prompt is built once per Session Snapshot and replayed verbatim."""
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
-    from agent.historical_context_projection import project_historical_message
+    from agent.historical_context_projection import (
+        build_tool_call_index,
+        find_referenced_tool_result_ids,
+        project_historical_message,
+    )
     from agent.replay_cleanup import canonicalize_replay_history
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
@@ -1089,6 +1093,10 @@ def build_api_messages(
     split = current_turn_user_idx if has_current else 0
     canonical_prefix = canonicalize_replay_history(messages[:split], now=turn_now)
     canonical_messages = canonical_prefix + messages[split:]
+    historical_tool_calls = build_tool_call_index(canonical_messages)
+    referenced_tool_result_ids = find_referenced_tool_result_ids(
+        canonical_messages, historical_tool_calls
+    )
 
     # Projection boundary. Keep the immediately previous completed turn exact for
     # one grace turn: 413 recovery may need to evict its most recent tool image,
@@ -1155,7 +1163,15 @@ def build_api_messages(
         # argument metadata and image references for old messages. The current
         # turn is excluded: its tool loop may still need exact arguments/images.
         if idx < projection_boundary:
-            api_msg = project_historical_message(api_msg)
+            tool_call = historical_tool_calls.get(str(api_msg.get("tool_call_id")))
+            api_msg = project_historical_message(
+                api_msg,
+                tool_name=tool_call[0] if tool_call else "",
+                tool_arguments=tool_call[1] if tool_call else None,
+                protected_tool_result=(
+                    str(api_msg.get("tool_call_id")) in referenced_tool_result_ids
+                ),
+            )
 
         # Pass reasoning back to the API for ALL assistant messages so multi-turn
         # reasoning context is preserved.

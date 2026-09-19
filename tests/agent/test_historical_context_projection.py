@@ -210,3 +210,53 @@ def test_persisted_terminal_pointer_survives_historical_result_bound():
     assert f"Full output saved to: {path}" in projected["content"]
     assert "historical tool result compacted" in projected["content"]
     assert "sha256=" in projected["content"]
+
+
+def test_terminal_projection_keeps_command_status_and_output_edges():
+    payload = {
+        "output": "STDOUT-HEAD\n" + ("x" * 5000) + "\nSTDOUT-TAIL",
+        "exit_code": 0,
+        "full_output_path": "/tmp/hermes-results/terminal-full.txt",
+    }
+    projected = project_historical_message(
+        {"role": "tool", "tool_call_id": "call-terminal", "content": json.dumps(payload)},
+        tool_name="terminal",
+        tool_arguments=json.dumps({"command": "git status --short"}),
+    )
+
+    assert len(projected["content"]) <= 1536
+    assert "command='git status --short'" in projected["content"]
+    assert "exit_code=0" in projected["content"]
+    assert "STDOUT-HEAD" in projected["content"]
+    assert "STDOUT-TAIL" in projected["content"]
+    assert payload["output"].startswith("STDOUT-HEAD")
+
+
+def test_failed_and_referenced_tool_results_are_not_trimmed():
+    failed = {"output": "failure details\n" + ("!" * 5000), "exit_code": 2, "error": "failed"}
+    failed_message = {"role": "tool", "tool_call_id": "call-failed", "content": json.dumps(failed)}
+    assert project_historical_message(
+        failed_message, tool_name="terminal", tool_arguments='{"command":"make test"}'
+    ) == failed_message
+
+    referenced = {"role": "tool", "tool_call_id": "call-ref", "content": "R" * 5000}
+    projected = project_historical_message(referenced, protected_tool_result=True)
+    assert projected == referenced
+
+
+def test_build_api_messages_protects_a_later_tool_reference():
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call-ref", "type": "function",
+            "function": {"name": "terminal", "arguments": '{"command":"cat x"}'},
+        }]},
+        {"role": "tool", "tool_call_id": "call-ref", "content": "R" * 5000},
+        {"role": "assistant", "content": "I will use call-ref to decide the next step."},
+        {"role": "user", "content": "current"},
+    ]
+    api_messages, _ = build_api_messages(
+        _fake_agent(), messages, current_turn_user_idx=4, ext_prefetch_cache=None,
+        plugin_user_context="", moa_config=None, active_system_prompt="",
+    )
+    assert api_messages[2]["content"] == "R" * 5000
