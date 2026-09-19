@@ -85,6 +85,9 @@ hermes_cli/web_dist/
 # Cross-process web UI build lock (flock target, always empty)
 .web_ui_build.lock
 apps/desktop/build/
+# Android/Gradle outputs are local or CI artifacts, never source or release truth.
+apps/android/.gradle/
+apps/android/**/build/
 apps/desktop/dist/
 
 # tsc-emitted artifacts (a stray `tsc -b` compiles into src/, and vite then
