@@ -155,7 +155,7 @@ from tools.environments.base import EnvironmentConnectionError
 
 
 # Tool description for LLM
-TERMINAL_TOOL_DESCRIPTION = """Execute shell commands for builds, git, installs, processes, or scripts. Filesystem, cwd, and exported environment variables persist between calls; activate a virtualenv once per session."""
+TERMINAL_TOOL_DESCRIPTION = """Run shell commands for builds, git, installs, processes, or scripts. Cwd and exported environment variables persist between calls; activate a virtualenv once per session."""
 
 # Environment lifecycle state.
 _active_environments: Dict[str, Any] = {}
@@ -1275,7 +1275,7 @@ TERMINAL_SCHEMA = {
             },
             "timeout": {
                 "type": "integer",
-                "description": f"Foreground timeout in seconds (max {FOREGROUND_MAX_TIMEOUT}).",
+                "description": f"Foreground timeout (max {FOREGROUND_MAX_TIMEOUT}s); larger values promote to a tracked background process.",
                 "minimum": 1
             },
             "workdir": {
