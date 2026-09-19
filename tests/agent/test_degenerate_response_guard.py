@@ -90,7 +90,7 @@ class TestDegenerateResponseDetector:
         assert len(text) > 6000
         assert is_degenerate_response(text) is False
 
-    @pytest.mark.parametrize("kind", ["code", "logs", "table"])
+    @pytest.mark.parametrize("kind", ["code", "logs", "table", "list"])
     def test_structured_repetition_is_not_killed(self, kind):
         from agent.degenerate_response_guard import is_degenerate_response
 
@@ -98,11 +98,33 @@ class TestDegenerateResponseDetector:
             block = "~~~python\nfor item in values:\n    print(item)\n~~~"
         elif kind == "logs":
             block = "\n".join(f"INFO worker step {i} completed" for i in range(20))
-        else:
+        elif kind == "table":
             block = "\n".join(["| key | value |", "| --- | --- |", "| alpha | beta |"])
+        else:
+            block = (
+                "1. Repeated section title with a deliberately long explanatory sentence "
+                "that is valid enumerated report structure and must remain fail-open."
+            )
         text = "\n\n".join(block for _ in range(160))
         assert len(text) > 6000
         assert is_degenerate_response(text) is False
+
+    def test_chinese_near_duplicate_prose_is_supported(self, monkeypatch):
+        from agent.degenerate_response_guard import DegenerateResponseGuard
+        import agent.degenerate_response_guard as guard_mod
+
+        monkeypatch.setattr(guard_mod, "MIN_TOTAL_CHARS", 300)
+        monkeypatch.setattr(guard_mod, "REPEAT_HITS", 2)
+        paragraphs = [
+            "我应该先验证本地网页是否正常，再验证本地 websocket，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题而没有新的证据。",
+            "我应该先检查本地页面，再检查本地 websocket，最后和公网连接做对比，不能一直重复猜认证、网络或配置问题却没有获得新的证据。",
+            "下一步仍然应该验证本地页面和 websocket，再与公网路径比较，而不是继续换一种说法猜认证、网络和配置，因为这并没有增加新的证据。",
+        ]
+        guard = DegenerateResponseGuard()
+        for paragraph in paragraphs:
+            guard.feed(paragraph + "\n\n")
+
+        assert guard.tripped is True
 
     def test_short_repetition_stays_fail_open(self):
         from agent.degenerate_response_guard import is_degenerate_response
