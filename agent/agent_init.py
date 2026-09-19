@@ -1328,6 +1328,13 @@ def _apply_agent_section(agent, _agent_cfg):
         agent._empty_guard_enabled, agent._empty_guard_cost_threshold_usd
     ) = resolve_guard_settings(_agent_section.get("empty_response_guard"))
 
+    # Degenerate-response guard: local deterministic detection only; malformed config
+    # keeps the conservative default enabled.
+    from agent.degenerate_response_guard import resolve_guard_enabled
+    agent._degenerate_guard_enabled = resolve_guard_enabled(
+        _agent_section.get("degenerate_response_guard")
+    )
+
     # "auto" (codex_responses only), true (all api_modes), false, or model substrings.
     agent._intent_ack_continuation = _agent_section.get("intent_ack_continuation", "auto")
 
