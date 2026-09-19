@@ -327,6 +327,16 @@ class TestDegenerateRecoveryBound:
 
         assert loop_agent.client.chat.completions.create.call_count == 2
         assert "repeated the same analysis twice" in (result["final_response"] or "")
+
+        second_call = loop_agent.client.chat.completions.create.call_args_list[1]
+        sent = second_call.kwargs.get("messages") or second_call.args[0].get("messages")
+        from agent.degenerate_response_guard import RECOVERY_PLACEHOLDER
+        assert any(
+            message.get("role") == "assistant" and message.get("content") == RECOVERY_PLACEHOLDER
+            for message in sent
+        )
+        assert bad[:160] not in str(sent)
+
         assert not any(
             isinstance(message, dict) and message.get("_degenerate_guard_nudge")
             for message in result["messages"]
