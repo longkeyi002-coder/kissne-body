@@ -40,6 +40,7 @@ TOKEN_JACCARD = 0.50
 _SPLIT_RE = re.compile(r"\n\s*\n")
 _NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 _NON_WORD_RE = re.compile(r"[^0-9a-z_<>一-鿿]+")
+_TOKEN_RE = re.compile(r"[0-9a-z_<>]+|[一-鿿]+")
 _LISTISH_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|\|)")
 _LOGISH_RE = re.compile(
     r"^\s*(?:\d{4}-\d{2}-\d{2}[T\s]|\d{2}:\d{2}:\d{2}\b|"
@@ -70,6 +71,21 @@ def _normalize_block(text: str) -> str:
     return " ".join(text.split())[:MAX_COMPARE_CHARS]
 
 
+def _tokenize(normalized: str) -> frozenset[str]:
+    """Word tokens for Latin text plus CJK bigrams so Chinese prose is not one token."""
+    tokens: list[str] = []
+    for match in _TOKEN_RE.finditer(normalized):
+        value = match.group(0)
+        if value and all("一" <= ch <= "鿿" for ch in value):
+            if len(value) == 1:
+                tokens.append(value)
+            else:
+                tokens.extend(value[i : i + 2] for i in range(len(value) - 1))
+        else:
+            tokens.append(value)
+    return frozenset(tokens)
+
+
 def _looks_structured(text: str) -> bool:
     """Skip code, tables, enumerations and log dumps; repeated structure can be legitimate."""
     stripped = text.strip()
@@ -78,6 +94,10 @@ def _looks_structured(text: str) -> bool:
     if "```" in stripped or "~~~" in stripped:
         return True
     lines = [line for line in stripped.splitlines() if line.strip()]
+    # A single numbered/bulleted/log paragraph may be separated by blank lines in a
+    # perfectly legitimate report. Treat its leading marker as structured too.
+    if lines and (_LISTISH_RE.search(lines[0]) or _LOGISH_RE.search(lines[0])):
+        return True
     if len(lines) >= 3:
         structured = sum(
             bool(_LISTISH_RE.search(line) or _LOGISH_RE.search(line)) for line in lines
@@ -136,7 +156,7 @@ class DegenerateResponseGuard:
         normalized = _normalize_block(raw)
         if len(normalized) < MIN_BLOCK_CHARS:
             return False
-        tokens = frozenset(normalized.split())
+        tokens = _tokenize(normalized)
         if len(tokens) < 10:
             return False
 
