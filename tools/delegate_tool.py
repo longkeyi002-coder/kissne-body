@@ -536,18 +536,14 @@ def _build_top_level_description(*, independent_completions=None) -> str:
     return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + _DESCRIPTION_TAIL
 
 _DESCRIPTION_HEAD = (
-    "Spawn isolated subagents for reasoning-heavy or parallel work; tasks[] may run in parallel.\n"
-    "With a later-result consumer, runs in background and results return between turns ({delivery}); never wait or poll. "
-    "Use action=list/steer/stop to control children.\n"
-    "Use execute_code for mechanical work or call a single tool directly. Children cannot ask the user; use clarify "
-    "yourself. Durable work belongs in cronjob or terminal(background=True, notify=True); /stop, /new, or process exit "
-    "discards children.\n"
-    "Children see no parent history: put all needed context, including language (e.g. \"respond in Chinese\"), in each "
-    "task. Child summaries are SELF-REPORTS; verify external side effects.\n"
+    "Spawn isolated subagents for reasoning-heavy or parallel work. With a later-result consumer, runs in background; "
+    "results return between turns ({delivery}); never wait or poll. action=list/steer/stop controls children.\n"
+    "Use execute_code for mechanical work. Children cannot ask; use clarify yourself. Durable work: cronjob or "
+    "terminal(background=True, notify=True); /stop, /new, or process exit discards children.\n"
+    "Children see no parent history: pass needed context, including language (e.g. \"respond in Chinese\"). "
+    "Child summaries are SELF-REPORTS; verify external side effects.\n"
 )
-_DESCRIPTION_TAIL = (
-    "Children inherit the parent model unless pinned via delegation.provider / delegation.model."
-)
+_DESCRIPTION_TAIL = "Model inherits parent unless pinned by delegation.provider / delegation.model."
 
 def _build_tasks_param_description() -> str:
     """Compose the 'tasks' parameter description with current concurrency limit."""
