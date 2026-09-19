@@ -1,0 +1,5 @@
+请执行当前目录 WORKBUDDY_HANDOFF/00_给WorkBuddy的任务说明.md。
+
+只做本地素材整理、预览、清单和 Android UI 规格准备，不修改 GitHub、Soul、Body、gateway 或生产配置，不提交最终 Android UI。
+
+优先使用已上传的叶青栩和用户小羊原图，保留原图，禁止改脸、改角色或用临时头像冒充成品。完成后输出素材 manifest、contact sheet、缺失/待确认清单和 zip 路径。

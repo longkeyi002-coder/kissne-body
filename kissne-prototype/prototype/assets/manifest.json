@@ -1,0 +1,342 @@
+{
+  "version": "20260919k",
+  "note": "统一素材目录占位实现。正式素材确认后按此路径替换同名文件即可，页面结构不变。",
+  "tree": {
+    "characters": {
+      "yeqingxu": [
+        "avatar",
+        "expressions",
+        "actions",
+        "notifications"
+      ],
+      "sheep": [
+        "avatar",
+        "expressions",
+        "actions"
+      ],
+      "duo": [
+        "(avatar/duo 单文件)"
+      ]
+    },
+    "animations": [
+      "entry",
+      "chat",
+      "aiworld",
+      "memory",
+      "transitions"
+    ],
+    "backgrounds": [
+      "room-living",
+      "room-study",
+      "room-kitchen",
+      "room-bedroom",
+      "room-bath",
+      "outdoor-yard",
+      "outdoor-street",
+      "outdoor-park",
+      "scene-room",
+      "scene-outdoor",
+      "earth",
+      "aiworld"
+    ],
+    "icons": [
+      "home",
+      "chat",
+      "planet",
+      "memory",
+      "back",
+      "chevron",
+      "gear",
+      "plus",
+      "search",
+      "sync",
+      "check",
+      "alert",
+      "close",
+      "trash",
+      "edit",
+      "wifioff",
+      "refresh",
+      "clock",
+      "user",
+      "server",
+      "cpu",
+      "info",
+      "bell",
+      "link",
+      "send",
+      "image",
+      "file",
+      "smile",
+      "call",
+      "mic",
+      "micoff",
+      "speaker",
+      "screen",
+      "plug",
+      "off",
+      "box",
+      "paw",
+      "hoof"
+    ],
+    "effects": [
+      "glow",
+      "ripple",
+      "pulse",
+      "shimmer"
+    ],
+    "placeholders": [
+      "memory-empty",
+      "connection-success",
+      "offline",
+      "sticker"
+    ]
+  },
+  "mappings": {
+    "chars": {
+      "FOX_SPLASH_CHARACTER": "characters/yeqingxu/avatar/splash.svg",
+      "SHEEP_SPLASH_CHARACTER": "characters/sheep/avatar/splash.svg",
+      "FOX_CHAT_AVATAR": "real/fox-chat-avatar.png",
+      "USER_AVATAR": "real/user-avatar.png",
+      "FOX_HOME_CHARACTER": "characters/yeqingxu/avatar/home-card.svg",
+      "FOX_NOTIFICATION_AVATAR": "characters/yeqingxu/notifications/avatar.svg",
+      "FOX_STATE_EMOTION": "characters/yeqingxu/expressions/state.svg",
+      "EARTH_STATE": "backgrounds/earth.svg",
+      "AI_WORLD_STATE": "backgrounds/aiworld.svg",
+      "FOX_PIXEL_SPRITE": "characters/yeqingxu/actions/pixel.svg",
+      "MEMORY_EMPTY_ILLUSTRATION": "placeholders/memory-empty.svg",
+      "CONNECTION_SUCCESS_ILLUSTRATION": "placeholders/connection-success.svg",
+      "OFFLINE_ILLUSTRATION": "placeholders/offline.svg",
+      "SHEEP_CHARACTER_RESERVED": "characters/sheep/avatar/home-card.svg",
+      "STICKER_PACK": "placeholders/sticker.svg"
+    },
+    "backgrounds": {
+      "room-living": "backgrounds/room-living.svg",
+      "room-study": "backgrounds/room-study.svg",
+      "room-kitchen": "backgrounds/room-kitchen.svg",
+      "room-bedroom": "backgrounds/room-bedroom.svg",
+      "room-bath": "backgrounds/room-bath.svg",
+      "outdoor-yard": "backgrounds/outdoor-yard.svg",
+      "outdoor-street": "backgrounds/outdoor-street.svg",
+      "outdoor-park": "backgrounds/outdoor-park.svg",
+      "scene-room": "backgrounds/scene-room.svg",
+      "scene-outdoor": "backgrounds/scene-outdoor.svg",
+      "earth": "backgrounds/earth.svg",
+      "aiworld": "backgrounds/aiworld.svg"
+    },
+    "animations": {
+      "entry/logo-morph": "animations/entry/logo-morph.svg",
+      "entry/duo-reveal": "animations/entry/duo-reveal.svg",
+      "chat/typing": "animations/chat/typing.svg",
+      "chat/sending": "animations/chat/sending.svg",
+      "aiworld/orbit": "animations/aiworld/orbit.svg",
+      "memory/sync": "animations/memory/sync.svg",
+      "transitions/page-fade": "animations/transitions/page-fade.svg",
+      "transitions/route-push": "animations/transitions/route-push.svg"
+    },
+    "effects": {
+      "glow": "effects/glow.svg",
+      "ripple": "effects/ripple.svg",
+      "pulse": "effects/pulse.svg",
+      "shimmer": "effects/shimmer.svg"
+    }
+  },
+  "charStates": {
+    "FOX_CHAT_AVATAR": {
+      "confused": "real/fox-chat-avatar-confused.png",
+      "happy": "real/fox-chat-avatar-happy.png",
+      "panic": "real/fox-chat-avatar-panic.png",
+      "sad": "real/fox-chat-avatar-sad.png",
+      "sleep": "real/fox-chat-avatar-sleep.png",
+      "think": "real/fox-chat-avatar-think.png",
+      "work": "real/fox-chat-avatar-work.png"
+    },
+    "USER_AVATAR": {
+      "confused": "real/user-avatar-confused.png",
+      "happy": "real/user-avatar-happy.png",
+      "panic": "real/user-avatar-panic.png",
+      "sad": "real/user-avatar-sad.png",
+      "sleep": "real/user-avatar-sleep.png",
+      "think": "real/user-avatar-think.png"
+    },
+    "FOX_HOME_CHARACTER": {
+      "day": "real/fox-home-card-day.jpg",
+      "night": "real/fox-home-card-night.jpg"
+    },
+    "SHEEP_CHARACTER_RESERVED": {
+      "day": "real/sheep-home-card-day.jpg",
+      "night": "real/sheep-home-card-night.jpg"
+    }
+  },
+  "stickers": {
+    "cap-goodnight": {
+      "path": "real/stickers/cap-goodnight.png",
+      "label": "叶青栩 · 晚安",
+      "group": "配文"
+    },
+    "cap-hard-work": {
+      "path": "real/stickers/cap-hard-work.png",
+      "label": "小羊 · 辛苦了",
+      "group": "配文"
+    },
+    "cap-help": {
+      "path": "real/stickers/cap-help.png",
+      "label": "叶青栩 · 救命",
+      "group": "配文"
+    },
+    "cap-laugh": {
+      "path": "real/stickers/cap-laugh.png",
+      "label": "叶青栩 · 哈哈",
+      "group": "配文"
+    },
+    "cap-let-me-see": {
+      "path": "real/stickers/cap-let-me-see.png",
+      "label": "小羊 · 让我看看",
+      "group": "配文"
+    },
+    "cap-no-thanks": {
+      "path": "real/stickers/cap-no-thanks.png",
+      "label": "小羊 · 不约",
+      "group": "配文"
+    },
+    "cap-no-way": {
+      "path": "real/stickers/cap-no-way.png",
+      "label": "小羊 · 不是吧",
+      "group": "配文"
+    },
+    "cap-okay": {
+      "path": "real/stickers/cap-okay.png",
+      "label": "叶青栩 · 好的",
+      "group": "配文"
+    },
+    "cap-received": {
+      "path": "real/stickers/cap-received.png",
+      "label": "叶青栩 · 收到",
+      "group": "配文"
+    },
+    "cap-speechless": {
+      "path": "real/stickers/cap-speechless.png",
+      "label": "叶青栩 · 无语",
+      "group": "配文"
+    },
+    "cap-thanks": {
+      "path": "real/stickers/cap-thanks.png",
+      "label": "小羊 · 谢谢",
+      "group": "配文"
+    },
+    "cap-you-continue": {
+      "path": "real/stickers/cap-you-continue.png",
+      "label": "小羊 · 你继续",
+      "group": "配文"
+    },
+    "duo-beg-ignore": {
+      "path": "real/stickers/duo-beg-ignore.png",
+      "label": "叶青栩求 · 小羊不理",
+      "group": "双人"
+    },
+    "duo-cry-laugh": {
+      "path": "real/stickers/duo-cry-laugh.png",
+      "label": "叶青栩哭 · 小羊笑",
+      "group": "双人"
+    },
+    "duo-dance-deadpan": {
+      "path": "real/stickers/duo-dance-deadpan.png",
+      "label": "叶青栩嗨 · 小羊面无表情",
+      "group": "双人"
+    },
+    "duo-hide-protect": {
+      "path": "real/stickers/duo-hide-protect.png",
+      "label": "叶青栩躲 · 小羊罩着",
+      "group": "双人"
+    },
+    "duo-hungry-snack": {
+      "path": "real/stickers/duo-hungry-snack.png",
+      "label": "叶青栩饿 · 小羊投喂",
+      "group": "双人"
+    },
+    "duo-panic-tea": {
+      "path": "real/stickers/duo-panic-tea.png",
+      "label": "叶青栩慌 · 小羊递茶",
+      "group": "双人"
+    },
+    "duo-sleep-alarm": {
+      "path": "real/stickers/duo-sleep-alarm.png",
+      "label": "叶青栩睡 · 小羊叫早",
+      "group": "双人"
+    },
+    "duo-smug-facepalm": {
+      "path": "real/stickers/duo-smug-facepalm.png",
+      "label": "叶青栩得意 · 小羊捂脸",
+      "group": "双人"
+    },
+    "fox-cheer": {
+      "path": "real/stickers/fox-cheer.png",
+      "label": "叶青栩 · 欢呼",
+      "group": "叶青栩"
+    },
+    "fox-confused": {
+      "path": "real/stickers/fox-confused.png",
+      "label": "叶青栩 · 疑惑",
+      "group": "叶青栩"
+    },
+    "fox-ok": {
+      "path": "real/stickers/fox-ok.png",
+      "label": "叶青栩 · 没问题",
+      "group": "叶青栩"
+    },
+    "fox-speechless": {
+      "path": "real/stickers/fox-speechless.png",
+      "label": "叶青栩 · 无语",
+      "group": "叶青栩"
+    },
+    "fox-surprised": {
+      "path": "real/stickers/fox-surprised.png",
+      "label": "叶青栩 · 惊讶",
+      "group": "叶青栩"
+    },
+    "fox-wave": {
+      "path": "real/stickers/fox-wave.png",
+      "label": "叶青栩 · 挥手",
+      "group": "叶青栩"
+    },
+    "lamb-cheer": {
+      "path": "real/stickers/lamb-cheer.png",
+      "label": "小羊 · 欢呼",
+      "group": "小羊"
+    },
+    "lamb-confused": {
+      "path": "real/stickers/lamb-confused.png",
+      "label": "小羊 · 疑惑",
+      "group": "小羊"
+    },
+    "lamb-ok": {
+      "path": "real/stickers/lamb-ok.png",
+      "label": "小羊 · 没问题",
+      "group": "小羊"
+    },
+    "lamb-speechless": {
+      "path": "real/stickers/lamb-speechless.png",
+      "label": "小羊 · 无语",
+      "group": "小羊"
+    },
+    "lamb-surprised": {
+      "path": "real/stickers/lamb-surprised.png",
+      "label": "小羊 · 惊讶",
+      "group": "小羊"
+    },
+    "lamb-wave": {
+      "path": "real/stickers/lamb-wave.png",
+      "label": "小羊 · 挥手",
+      "group": "小羊"
+    }
+  },
+  "rules": [
+    "动画占位一律带 prefers-reduced-motion 静态降级（关动画即静态首帧）。",
+    "角色 / 插画用灰阶标签盒，不重绘正式角色。",
+    "背景占位半透明，透出底层 CSS 色块。",
+    "头像 / 角色按状态换图：_inbox/<基础名>-<state>.png；缺该状态自动回落 <基础名>.png。",
+    "透明底素材接入时先做防黑边处理再缩放（见 tools/gen-assets.py 的 _normalize）。",
+    "头像不切圆形：狐狸耳朵是尖的，切圆会吃掉耳朵和蝴蝶结。",
+    "表情包源图是白底无 alpha，接入时**只抠与四边相连的白底**（见 _cut_white_bg）—— 角色身体本身就是白的，不能全局抠白。"
+  ]
+}
