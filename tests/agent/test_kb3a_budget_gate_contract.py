@@ -6,6 +6,12 @@ has not been implemented yet. They must remain offline and must not call a provi
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
 
 def _contract():
     from agent.budget_gate import BudgetDecision, BudgetLedger, BudgetPolicy, RatePolicy
@@ -13,7 +19,7 @@ def _contract():
     return BudgetDecision, BudgetLedger, BudgetPolicy, RatePolicy
 
 
-def _policy(**overrides):
+def _policy(*, max_attempts=2, window_seconds=60, **overrides):
     _, _, BudgetPolicy, RatePolicy = _contract()
     values = {
         "work": 100,
@@ -23,7 +29,10 @@ def _policy(**overrides):
         "repair": 100,
     }
     values.update(overrides)
-    return BudgetPolicy.from_mapping(values, rate=RatePolicy(max_attempts=2, window_seconds=60))
+    return BudgetPolicy.from_mapping(
+        values,
+        rate=RatePolicy(max_attempts=max_attempts, window_seconds=window_seconds),
+    )
 
 
 def _ledger():
@@ -36,6 +45,23 @@ def test_budget_exhaustion_is_structured():
     gate = _ledger().gate(policy=_policy(work=0))
     decision = gate.admit(category="work", units=1, action_id="turn-1")
     assert decision == BudgetDecision.denied("budget_exhausted")
+
+
+def test_settled_usage_accumulates_toward_positive_budget():
+    BudgetDecision, _, _, _ = _contract()
+    ledger = _ledger()
+    gate = ledger.gate(policy=_policy(work=2, max_attempts=10))
+    first = gate.admit(category="work", units=1, action_id="turn-1")
+    assert first.allowed
+    ledger.settle(first.reservation_id, outcome="success", actual_units=1)
+
+    second = gate.admit(category="work", units=1, action_id="turn-2")
+    assert second.allowed
+    ledger.settle(second.reservation_id, outcome="success", actual_units=1)
+
+    assert gate.admit(
+        category="work", units=1, action_id="turn-3"
+    ) == BudgetDecision.denied("budget_exhausted")
 
 
 def test_rate_gate_denies_then_recovers_after_window():
@@ -94,6 +120,95 @@ def test_unknown_usage_survives_reopen_from_dedicated_store(tmp_path):
 
     assert restored is not ledger
     assert restored.outstanding(category="work") == 1
+
+
+def test_unknown_usage_survives_fresh_process_reopen(tmp_path):
+    ledger_path = tmp_path / "budget-ledger.sqlite3"
+    repo_root = Path(__file__).resolve().parents[2]
+    writer = """
+import sys
+from agent.budget_gate import BudgetLedger, BudgetPolicy, RatePolicy
+
+path = sys.argv[1]
+policy = BudgetPolicy.from_mapping(
+    {
+        "work": 100,
+        "learning": 100,
+        "life_exploration": 100,
+        "social": 100,
+        "repair": 100,
+    },
+    rate=RatePolicy(max_attempts=10, window_seconds=60),
+)
+ledger = BudgetLedger.open(path)
+decision = ledger.gate(policy=policy).admit(
+    category="work", units=1, action_id="turn-process"
+)
+ledger.settle(decision.reservation_id, outcome="unknown", actual_units=1)
+"""
+    reader = """
+import sys
+from agent.budget_gate import BudgetLedger
+
+ledger = BudgetLedger.open(sys.argv[1])
+print(ledger.outstanding(category="work"))
+"""
+    subprocess.run(
+        [sys.executable, "-c", writer, str(ledger_path)],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    restored = subprocess.run(
+        [sys.executable, "-c", reader, str(ledger_path)],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert restored.stdout.strip() == "1"
+
+
+def test_conflicting_reconciliation_replay_fails_closed_without_mutation():
+    ledger = _ledger()
+    gate = ledger.gate(policy=_policy(work=10, max_attempts=10))
+    first = gate.admit(category="work", units=1, action_id="turn-conflict")
+    assert first.allowed
+    ledger.settle(first.reservation_id, outcome="unknown", actual_units=1)
+    settled = ledger.reconcile(
+        first.reservation_id, outcome="success", actual_units=1
+    )
+
+    with pytest.raises(ValueError, match="reconciliation_conflict"):
+        ledger.reconcile(
+            first.reservation_id, outcome="failure", actual_units=2
+        )
+
+    assert ledger.reconcile(
+        first.reservation_id, outcome="success", actual_units=1
+    ) == settled
+    assert ledger.outstanding(category="work") == 0
+
+
+def test_audit_query_covers_successful_reservation_lifecycle():
+    ledger = _ledger()
+    gate = ledger.gate(policy=_policy(work=10, max_attempts=10))
+    first = gate.admit(category="work", units=1, action_id="turn-lifecycle")
+    assert first.allowed
+    ledger.settle(first.reservation_id, outcome="unknown", actual_units=1)
+    ledger.reconcile(first.reservation_id, outcome="success", actual_units=1)
+
+    records = ledger.audit_records(reservation_id=first.reservation_id)
+    events = {record.get("event") for record in records}
+
+    assert {"admit", "reserve", "settle", "reconcile"} <= events
+    for record in records:
+        if record.get("event") in {"admit", "reserve", "settle", "reconcile"}:
+            assert record.get("action_id") == "turn-lifecycle"
+            assert record.get("reservation_id") == first.reservation_id
+            assert record.get("category") == "work"
 
 
 def test_audit_query_exposes_required_denial_fields():
