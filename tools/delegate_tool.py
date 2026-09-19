@@ -536,36 +536,14 @@ def _build_top_level_description(*, independent_completions=None) -> str:
     return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + _DESCRIPTION_TAIL
 
 _DESCRIPTION_HEAD = (
-    "Spawn subagents in isolated contexts; each gets its own conversation, terminal session, and toolset, and only its "
-    "final summary returns to you. Pass every task in `tasks` — one entry spawns one subagent, several run in parallel "
-    "(limit in the tasks description).\n\n"
-    "Sessions without a later-result consumer (including one-shot CLI and cron) join parallel children "
-    "and return results in this tool call. "
-    "Otherwise runs in the background: dispatch returns live transcript paths and results re-enter "
-    "as a new message when subagents finish ({delivery}). Background results are delivered only "
-    "BETWEEN your turns: finish whatever does not depend on them, then give a one-line status and END YOUR TURN. Never "
-    "wait or poll on transcripts, artifact files, or CI for a child. "
-    "While children run, `action` (list/steer/stop) controls them live — steer when a transcript shows a "
-    "child drifting.\n\n"
-    "USE FOR: reasoning-heavy subtasks, work that would flood your context with intermediate data, or independent "
-    "parallel workstreams.\n"
-    "DO NOT USE FOR (use these instead):\n"
-    "- Mechanical multi-step work with no reasoning needed -> execute_code\n"
-    "- A single tool call -> call the tool directly\n"
-    "- Tasks needing user interaction -> subagents cannot ask questions\n"
-    "- Durable work that must survive this session -> cronjob or terminal(background=True, notify=True); /stop, /new, "
-    "or process exit discards running subagents.\n\n"
-    "RULES:\n"
-    "- Children know nothing of this conversation: pass everything needed via 'context', including any required "
-    "output language, tone, or style (e.g. \"respond in Chinese\").\n"
-    "- Child summaries are SELF-REPORTS, not verified facts: a child claiming \"uploaded successfully\" or "
-    "\"file written\" may be wrong. For external side effects (uploads, remote writes, publishing), require a "
-    "verifiable handle (URL, ID, absolute path) and verify it yourself before telling the user the operation "
-    "succeeded.\n"
+    "Spawn isolated subagents for reasoning-heavy or parallel work. With a later-result consumer, runs in background; "
+    "results return between turns ({delivery}); never wait or poll. action=list/steer/stop controls children.\n"
+    "Use execute_code for mechanical work. Children cannot ask; use clarify yourself. Durable work: cronjob or "
+    "terminal(background=True, notify=True); /stop, /new, or process exit discards children.\n"
+    "Children see no parent history: pass needed context, including language (e.g. \"respond in Chinese\"). "
+    "Child summaries are SELF-REPORTS; verify external side effects.\n"
 )
-_DESCRIPTION_TAIL = (
-    "- Children inherit the parent model unless pinned via delegation.provider / delegation.model in config.yaml."
-)
+_DESCRIPTION_TAIL = "Model inherits parent unless pinned by delegation.provider / delegation.model."
 
 def _build_tasks_param_description() -> str:
     """Compose the 'tasks' parameter description with current concurrency limit."""
@@ -574,10 +552,8 @@ def _build_tasks_param_description() -> str:
     except Exception:
         max_children = _DEFAULT_MAX_CONCURRENT_CHILDREN
     return (
-        f"The task(s), up to {max_children} in parallel for this user (set "
-        "via delegation.max_concurrent_children). Each entry spawns one "
-        "subagent with isolated context and terminal session; a single task "
-        "is a one-entry array. Required when spawning."
+        f"Tasks to spawn, up to {max_children} in parallel; each child has isolated context. "
+        "Required when spawning."
     )
 
 def _build_dynamic_schema_overrides() -> dict:
@@ -629,35 +605,24 @@ DELEGATE_TASK_SCHEMA = {
                     "properties": {
                         "goal": _p(
                             "string",
-                            "What this subagent should accomplish. Be specific and self-contained — it knows "
-                            "nothing about your conversation history.",
+                            "Self-contained task goal; the child has no parent conversation.",
                         ),
                         "context": _p(
                             "string",
-                            "Background THIS child needs: file paths, error messages, constraints. Each child "
-                            "sees only its own context — repeat shared background in every task that needs it.",
+                            "Context this child needs: paths, errors, constraints, and relevant background.",
                         ),
                         "output_schema": _p(
                             "object",
-                            "Optional JSON Schema this child's final answer must validate against (told to the "
-                            "child up front; parent validates with one bounded correction retry; result gains "
-                            "schema_valid, plus schema_errors on failure). Keep it forgiving — require only "
-                            "fields you will read.",
+                            "Optional JSON Schema for the child's final answer.",
                         ),
                         "images": _p(
                             "array",
-                            "Optional images this child must SEE (max 8): local file paths or http(s) URLs — e.g. a "
-                            "screenshot the user sent, a design mock, a chart. Vision-capable children receive the "
-                            "pixels on their first turn; non-vision children get path hints for vision_analyze. Text "
-                            "files do NOT belong here — put paths in 'context' instead.",
+                            "Up to 8 images for this child: local paths or http(s) URLs.",
                             items={"type": "string"},
                         ),
                         "group": _p(
                             "string",
-                            "Optional result-delivery bucket within this call (only when delegation.independent_completions "
-                            "is enabled; otherwise the whole call returns as one message). Tasks sharing a group return "
-                            "together in ONE message; ungrouped tasks return individually as each finishes. This does not "
-                            "order execution; if B needs A's output, dispatch B after A returns.",
+                            "Optional delivery group; tasks in the same group return together.",
                         ),
                     },
                     "required": ["goal"],
@@ -668,19 +633,13 @@ DELEGATE_TASK_SCHEMA = {
             # delegations always run in the background. Unadvertised; do not re-add.
             "action": _p(
                 "string",
-                "Default 'spawn'. Live control of running children: "
-                "'list' = ids/goals/status/transcripts; 'steer' = queue "
-                "course-correction text into one child (subagent_id + "
-                "message) without stopping it; 'stop' = end one child "
-                "early (subagent_id; partial result still returns). "
-                "Control actions return immediately; goal/tasks are ignored unless spawning.",
+                "Default 'spawn'; use list/steer/stop to control running children.",
                 enum=["spawn", "list", "steer", "stop"],
             ),
-            "subagent_id": _p("string", "Target for action='steer'/'stop' (ids from the spawn response or action='list')."),
+            "subagent_id": _p("string", "Child id for steer/stop."),
             "message": _p(
                 "string",
-                "For action='steer': the course correction, appended to "
-                "the child's next tool result mid-run. Be directive and specific.",
+                "Course correction for action='steer'.",
             ),
         },
         "required": [],

@@ -1023,13 +1023,13 @@ READ_FILE_SCHEMA = {
     # route we trust (_read_file_schema_overrides). Scanned-page coverage
     # teaching lives in the response-time NEEDS-OCR warning
     # (read_extract.py); the schema doesn't pre-teach it.
-    "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are truncated on a line boundary and return a next_offset; continue with offset to read the rest. Documents auto-extract to readable text: .ipynb, Office (.docx/.xlsx/.pptx and legacy .doc/.ppt/.xls), PDF (text layer), OpenDocument, RTF, EPUB. Cannot read images/binary — use vision_analyze for images.",
+    "description": "Read text/documents with line-numbered pagination. Continue large reads with returned next_offset. Formats: .ipynb, Office (.docx/.xlsx/.pptx and legacy .doc/.ppt/.xls), PDF (text layer), OpenDocument, RTF, EPUB. Cannot read images/binary; use vision_analyze.",
     "parameters": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the file to read (absolute, relative, or ~/path)"},
-            "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed, default: 1)", "default": 1, "minimum": 1},
-            "limit": {"type": "integer", "description": "Maximum number of lines to read (default: 2000, max: 2000). Reads are additionally capped at a ~100K-character budget with a next_offset continuation.", "default": DEFAULT_READ_LIMIT, "maximum": 2000}
+            "path": {"type": "string", "description": "File path."},
+            "offset": {"type": "integer", "description": "1-based start line.", "default": 1, "minimum": 1},
+            "limit": {"type": "integer", "description": "Max lines (up to 2000).", "default": DEFAULT_READ_LIMIT, "maximum": 2000}
         },
         "required": ["path"]
     }
@@ -1037,12 +1037,12 @@ READ_FILE_SCHEMA = {
 
 WRITE_FILE_SCHEMA = {
     "name": "write_file",
-    "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits. Auto-runs syntax checks on .py/.json/.yaml/.toml and other linted languages; only NEW errors introduced by this write are surfaced (pre-existing errors are filtered out). The result's verified:true means the on-disk content hash was confirmed — do NOT re-read the file to check the write landed.",
+    "description": "Write a whole file (OVERWRITES existing content) and create parent directories. Use patch for targeted edits. verified:true means on-disk content was confirmed.",
     "parameters": {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"},
-            "content": {"type": "string", "description": "Complete content to write to the file"},
+            "path": {"type": "string", "description": "File path."},
+            "content": {"type": "string", "description": "Complete file content."},
             # NOTE: the handler still accepts `cross_profile` (bool) — it now
             # bypasses only the #32049 sandbox-mirror lost-write guards, whose
             # rejection error teaches it. Unadvertised: the cross-PROFILE
@@ -1063,30 +1063,25 @@ PATCH_SCHEMA = {
     # (_patch_schema_overrides below). The handler accepts BOTH shapes
     # from any model regardless (replay compat + strong models that know
     # V4A anyway): mode defaults to 'replace' when omitted.
-    "description": (
-        "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
-        "Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. "
-        "Returns a unified diff. Auto-runs syntax checks after editing. "
-        "Finds a unique string and replaces it."
-    ),
+    "description": "Targeted fuzzy find-and-replace; returns a diff and runs syntax checks.",
     "parameters": {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "File path to edit.",
+                "description": "File path.",
             },
             "old_string": {
                 "type": "string",
-                "description": "Exact text to find and replace. Must be unique in the file unless replace_all=true. Include surrounding context lines to ensure uniqueness.",
+                "description": "Text to replace; include enough context to make it unique unless replace_all=true.",
             },
             "new_string": {
                 "type": "string",
-                "description": "Changed replacement text; it must differ from old_string. Pass empty string '' to delete the matched text.",
+                "description": "Replacement; must differ from old_string; empty string deletes.",
             },
             "replace_all": {
                 "type": "boolean",
-                "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                "description": "Replace all matches (default false)",
                 "default": False,
             },
             # NOTE: handler still accepts `cross_profile` — see write_file's
@@ -1102,25 +1097,21 @@ PATCH_SCHEMA = {
 # V4A layer, rendered only for OpenAI-family main models (see PATCH_SCHEMA
 # comment). Kept as data so the override composes it deterministically.
 _PATCH_V4A_DESCRIPTION = (
-    "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
-    "Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. "
-    "Returns a unified diff. Auto-runs syntax checks after editing.\n\n"
-    "REPLACE MODE (mode='replace', default): find a unique string and replace it. "
-    "REQUIRED PARAMETERS: mode, path, old_string, new_string.\n"
-    "PATCH MODE (mode='patch'): apply V4A multi-file patches for bulk changes. "
-    "REQUIRED PARAMETERS: mode, patch."
+    "Edit files with replace or V4A patch mode. "
+    "REPLACE MODE: REQUIRED PARAMETERS: mode, path, old_string, new_string. "
+    "PATCH MODE: REQUIRED PARAMETERS: mode, patch."
 )
 
 _PATCH_V4A_PARAMS = {
     "mode": {
         "type": "string",
         "enum": ["replace", "patch"],
-        "description": "Edit mode. 'replace' (default): requires path + old_string + new_string. 'patch': requires patch content only.",
+        "description": "Edit mode: replace or patch.",
         "default": "replace",
     },
     "patch": {
         "type": "string",
-        "description": "REQUIRED when mode='patch'. V4A format patch content. Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch",
+        "description": "V4A patch content.",
     },
 }
 
@@ -1152,19 +1143,19 @@ def _is_openai_family_main() -> bool:
 
 SEARCH_FILES_SCHEMA = {
     "name": "search_files",
-    "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents. On macOS, broad searches above the user home automatically skip TCC-protected folders (Desktop, Documents, Downloads, Library, Movies, Music, Pictures); target one directly when access is intentional.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls. Discovery order is the fast bounded default; exact global newest-first order is an explicit opt-in and may scan the full tree.",
+    "description": "Search file contents or names. target='content' uses regex; target='files' uses globs. order='modified' requests exact newest-first ordering.",
     "parameters": {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"},
-            "target": {"type": "string", "enum": ["content", "files"], "description": "'content' searches inside file contents, 'files' searches for files by name", "default": "content"},
-            "path": {"type": "string", "description": "Directory or file to search in (default: current working directory)", "default": "."},
-            "file_glob": {"type": "string", "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"},
-            "limit": {"type": "integer", "description": "Maximum number of results to return (default: 50)", "default": 50},
-            "offset": {"type": "integer", "description": "Skip first N results for pagination (default: 0)", "default": 0},
-            "order": {"type": "string", "enum": ["discovery", "modified"], "description": "File-search order: 'discovery' is fast bounded traversal order; 'modified' is exact global newest-first and may scan the full tree; ignored for content", "default": "discovery"},
-            "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file", "default": "content"},
-            "context": {"type": "integer", "description": "Number of context lines before and after each match (grep mode only)", "default": 0}
+            "pattern": {"type": "string", "description": "Regex (content) or glob (files)."},
+            "target": {"type": "string", "enum": ["content", "files"], "default": "content"},
+            "path": {"type": "string", "default": "."},
+            "file_glob": {"type": "string", "description": "Optional file glob filter."},
+            "limit": {"type": "integer", "default": 50},
+            "offset": {"type": "integer", "default": 0},
+            "order": {"type": "string", "enum": ["discovery", "modified"], "description": "File search: discovery = fast bounded traversal order; modified = exact global newest-first; ignored for content.", "default": "discovery"},
+            "output_mode": {"type": "string", "enum": ["content", "files_only", "count"], "default": "content"},
+            "context": {"type": "integer", "default": 0}
         },
         "required": ["pattern"]
     }
