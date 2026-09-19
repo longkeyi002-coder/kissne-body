@@ -134,8 +134,8 @@ _DEFAULT_DEFERRED_TOOLS = frozenset({
     "computer_use", "session_search", "image_generate",
     "todo_list", "process_manage", "cronjob_manage",
     # Low-frequency core capabilities: keep the basic browser/file/web working
-    # set ambient, but disclose diagnostic, credential-vault, speech, and skill
-    # administration schemas only when the model searches for those capabilities.
+    # set ambient, but disclose only diagnostic/image-helper and speech schemas
+    # when searched; credential-vault and skill administration stay eager.
     "browser_get_images", "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
     "text_to_speech",
     # Desktop GUI surface (desktop_ui + project toolsets)
