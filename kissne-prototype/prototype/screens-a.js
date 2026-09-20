@@ -127,6 +127,57 @@
         </div>
         <div class="screen__foot">${foot}</div>
       </div>`;
+    },
+
+    mount: function (root) {
+      var T = window.KissneTransport;
+      if (!T) return null;
+      var inputs = root.querySelectorAll('.field__input');
+      if (inputs.length < 3) return null;
+      var code = inputs[0], key = inputs[1], address = inputs[2];
+      code.readOnly = false;
+      key.readOnly = false;
+      address.readOnly = false;
+      code.value = '';
+      key.value = T.sessionKey() || '';
+      address.value = T.base() || '';
+
+      var action = root.querySelector('[data-action="connect"]');
+      if (!action) return null;
+
+      async function onConnect(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var pairingCode = (code.value || '').trim();
+        var sessionKey = (key.value || '').trim();
+        var apiBase = (address.value || '').trim();
+        if (!pairingCode || !sessionKey) {
+          (pairingCode ? key : code).focus();
+          return;
+        }
+        action.disabled = true;
+        try {
+          T.setSessionKey(sessionKey);
+          if (apiBase) T.setBase(apiBase);
+          var paired = await T.pair({ pairingCode: pairingCode, sessionKey: sessionKey, apiBase: apiBase });
+          if (!paired || !paired.device_token) throw new Error('pairing_failed');
+          var boot = await T.bootstrap();
+          location.hash = boot && boot.bound ? '#/connect?state=success' : '#/connect?state=key-error';
+        } catch (err) {
+          var name = err && err.payload && err.payload.error;
+          if (name === 'invalid_pairing_code' || name === 'pairing_code_expired' || name === 'pairing_code_replayed') {
+            location.hash = '#/connect?state=code-error';
+          } else if (name === 'conversation_not_bound' || name === 'installation_not_bound_to_a_runtime_conversation') {
+            location.hash = '#/connect?state=key-error';
+          } else {
+            location.hash = '#/connect?state=network-error';
+          }
+        } finally {
+          action.disabled = false;
+        }
+      }
+      action.addEventListener('click', onConnect);
+      return function () { action.removeEventListener('click', onConnect); };
     }
   });
 
@@ -894,6 +945,144 @@
         list.insertAdjacentHTML('beforeend', html);
         jumpTo(list.scrollHeight);
       }
+      var T = window.KissneTransport;
+      var live = !!(T && T.hasToken());
+      var liveStopped = false;
+      var livePollTimer = null;
+      var liveTurns = Object.create(null);
+      var liveCompleted = Object.create(null);
+      var liveCovered = Object.create(null);
+      var liveCurrentTurn = '';
+
+      function historyClock(raw) {
+        if (typeof raw !== 'number' || !isFinite(raw)) return '';
+        var ms = raw < 100000000000 ? raw * 1000 : raw;
+        var d = new Date(ms);
+        if (isNaN(d.getTime())) return '';
+        return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+      }
+      function liveEmpty() {
+        return '<div class="chatempty">' + ph('FOX_STATE_EMOTION', { size: 132 })
+          + '<div class="chatempty__t">还没有消息</div>'
+          + '<div class="chatempty__s">发一条消息，开始和叶青栩对话。</div></div>';
+      }
+      function hydrateHistory(history) {
+        CHAT_LOG.length = 0;
+        (history || []).forEach(function (item) {
+          if (!item || (item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string') return;
+          CHAT_LOG.push({
+            who: item.role === 'user' ? 'me' : 'ai',
+            html: esc(item.text),
+            time: historyClock(item.created_at)
+          });
+        });
+        list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
+        jumpTo(list.scrollHeight);
+      }
+      function liveSetCancel(on) {
+        send.setAttribute('data-live-cancel', on ? '1' : '0');
+        send.setAttribute('aria-label', on ? '停止回复' : '发送');
+        send.innerHTML = on ? icon('close', 18) : icon('send', 18);
+      }
+      function liveEnsure(turnId) {
+        var id = String(turnId || '');
+        if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
+        append(aiMsg('正在思考' + dots(), 'is-pending', clockNow(), '思考', 'think'));
+        var el = list.lastElementChild;
+        if (id) liveTurns[id] = el;
+        return el;
+      }
+      function liveAvatar(el, state) {
+        if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
+      }
+      function liveText(el, text, pending) {
+        if (!el) return;
+        var box = el.querySelector('.msg__text');
+        if (!box) return;
+        box.classList.toggle('is-pending', !!pending);
+        box.textContent = String(text || '');
+      }
+      function applyLiveEvent(event) {
+        if (!event || typeof event !== 'object') return;
+        var type = String(event.type || '');
+        var turnId = String(event.turn_id || '');
+        if (type === 'notice') {
+          append(sysMsg(esc(event.text || '系统通知'), clockNow()));
+          return;
+        }
+        var el = liveEnsure(turnId);
+        if (type === 'pending') {
+          liveText(el, '正在思考…', true);
+          liveAvatar(el, 'think');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          liveSetCancel(!!liveCurrentTurn);
+        } else if (type === 'delta') {
+          liveText(el, event.text || '', true);
+          liveAvatar(el, 'talk');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          liveSetCancel(!!liveCurrentTurn);
+        } else if (type === 'completed') {
+          var finalText = String(event.text || '');
+          liveText(el, finalText, false);
+          liveAvatar(el, 'happy');
+          if (turnId && !liveCompleted[turnId]) {
+            liveCompleted[turnId] = true;
+            CHAT_LOG.push({ who: 'ai', html: esc(finalText), time: clockNow() });
+          }
+          if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+        } else if (type === 'cancelled') {
+          liveText(el, '已停止回复', false);
+          liveAvatar(el, 'idle');
+          if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+        }
+      }
+      function scheduleLivePoll(ms) {
+        clearTimeout(livePollTimer);
+        if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
+      }
+      async function livePoll() {
+        if (!live || liveStopped) return;
+        try {
+          var payload = await T.poll();
+          var events = (payload && payload.events) || [];
+          for (var ei = 0; ei < events.length; ei++) {
+            var ev = events[ei], seq = Number(ev && ev.seq);
+            if (isFinite(seq) && liveCovered[seq]) delete liveCovered[seq];
+            else applyLiveEvent(ev);
+          }
+          if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
+          scheduleLivePoll(payload && payload.has_more ? 30 : 850);
+        } catch (err) {
+          if (err && err.status === 401) { live = false; location.hash = '#/connect'; return; }
+          scheduleLivePoll(1800);
+        }
+      }
+      async function liveBootstrap() {
+        if (!live) return;
+        try {
+          var boot = await T.bootstrap();
+          if (!boot || !boot.bound) { live = false; location.hash = '#/connect'; return; }
+          hydrateHistory(boot.history || []);
+          (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
+          liveCurrentTurn = String(boot.pending_turn_id || '');
+          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          else liveSetCancel(false);
+          scheduleLivePoll(0);
+        } catch (err) {
+          if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
+          else scheduleLivePoll(1200);
+        }
+      }
+      async function liveCancel() {
+        if (!liveCurrentTurn) return;
+        var id = liveCurrentTurn;
+        try {
+          await T.cancel(id);
+          applyLiveEvent({ type: 'cancelled', turn_id: id });
+        } catch (err) {
+          if (err && err.status === 409) { liveCurrentTurn = ''; liveSetCancel(false); }
+        }
+      }
       /* ===== 发一条消息后，**现场演一遍**叶青栩这一回合 =====
          ① 思考过程：正在思考… → 已深度思考 + 内容
          ② 工具调用：调用中… → 已完成
@@ -996,12 +1185,31 @@
             + toolCardFor(t, v) + replyText(v) });
         paintPill();
       }
-      function push() {
+      async function push() {
+        if (live && send.getAttribute('data-live-cancel') === '1') {
+          await liveCancel();
+          return;
+        }
         var v = (input.value || '').trim();
         if (!v) return;
         input.value = '';
         append(meMsg(esc(v), '', clockNow()));
         pushLog({ who: 'me', html: esc(v), time: clockNow() });
+
+        if (live) {
+          try {
+            var accepted = await T.sendText(v);
+            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            scheduleLivePoll(0);
+          } catch (err) {
+            append(aiMsg(icon('alert', 15) + '<span>消息发送失败，请重试。</span>',
+              'is-failed', clockNow(), '没连上', 'sad'));
+            if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
+          }
+          return;
+        }
+
         for (var st = 0; st < seqTs.length; st++) clearTimeout(seqTs[st]);
         seqTs = [];
         runTurn(v);
@@ -1108,6 +1316,8 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
       }
 
+      if (live) liveBootstrap();
+
       function onKey(e) { if (e.key === 'Enter') push(); }
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
@@ -1120,6 +1330,8 @@
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
         send.removeEventListener('click', push);
+        liveStopped = true;
+        clearTimeout(livePollTimer);
         /* 演出用的一串定时器：切页/重渲染时必须全清，
            否则会在已经销毁的 DOM 上继续改东西 */
         for (var sq = 0; sq < seqTs.length; sq++) clearTimeout(seqTs[sq]);

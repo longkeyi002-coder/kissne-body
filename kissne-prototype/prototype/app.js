@@ -24,7 +24,20 @@
   var COLD = true;
   var splashTimer = null;
   var SPLASH_MS = 3600;          /* 动画 2.9s + 停留 0.7s */
-  var SPLASH_NEXT = '#/connect';  /* 动画播完的落点 */
+  var SPLASH_NEXT = '#/connect';  /* 无凭据 / bootstrap 失败时的落点 */
+  var splashTarget = null;
+  function resolveSplashTarget() {
+    if (splashTarget) return splashTarget;
+    var T = window.KissneTransport;
+    if (!T || !T.hasToken()) {
+      splashTarget = Promise.resolve(SPLASH_NEXT);
+      return splashTarget;
+    }
+    splashTarget = T.bootstrap().then(function (payload) {
+      return payload && payload.bound ? '#/chat' : SPLASH_NEXT;
+    }).catch(function () { return SPLASH_NEXT; });
+    return splashTarget;
+  }
 
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {
@@ -187,9 +200,10 @@
       /* 冷启动：开屏动画播完自动进下一页；此后不再重播 */
       clearTimeout(splashTimer);
       if (screen.id === 'welcome' && state === 'animate' && COLD) {
+        var target = resolveSplashTarget();
         splashTimer = setTimeout(function () {
           COLD = false;
-          nav(SPLASH_NEXT);
+          target.then(function (to) { nav(to || SPLASH_NEXT); });
         }, SPLASH_MS);
       }
     }
