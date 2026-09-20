@@ -499,6 +499,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
             except OSError:
                 pass
 
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        """Persist attachment metadata only when Runtime actually starts this event."""
+        pending = getattr(event, "_kissne_attachment_metadata", None)
+        if not pending:
+            return
+        installation, turn_id, text, attachments = pending
+        await asyncio.to_thread(
+            self.device_store().record_attachment_message,
+            installation, turn_id, text, attachments,
+        )
+        event._kissne_attachment_metadata = None
+
     async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
         """BasePlatformAdapter calls this only when background processing is actually finished."""
         self._cleanup_inbound_media(event)
@@ -823,10 +835,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             await self.handle_message(event)
             accepted = bool(getattr(event, "_gateway_accepted", False))
             if accepted and attachments:
-                await asyncio.to_thread(
-                    store.record_attachment_message, installation, turn_id, text,
+                # Accepted may only mean queued. Persist when this exact event starts processing.
+                event._kissne_attachment_metadata = (
+                    installation, turn_id, text,
                     [{"type": item["type"], "mime_type": item["mime_type"],
-                      "label": str(item.get("label") or "")} for item in attachments])
+                      "label": str(item.get("label") or "")} for item in attachments],
+                )
             # Accepted events are owned by BasePlatformAdapter's background task; its
             # on_processing_complete hook removes media only after the Runtime is done reading it.
             # Test doubles / refused events have no background owner, so clean them here.
