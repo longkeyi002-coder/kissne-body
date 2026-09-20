@@ -1280,6 +1280,13 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
+          if (event.presentation === 'session_reset') {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+            append('<div class="sessionreset" data-session-reset><pre>' + esc(finalText) + '</pre></div>');
+            CHAT_LOG.push({ who: 'system', html: esc(finalText), time: clockNow(), presentation: 'session_reset' });
+            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+            return;
+          }
           function presentReply(text) {
             var clean = String(text || '').trim();
             /* Hermes owns /new and /reset notices. Never rebuild model/provider/context here:
