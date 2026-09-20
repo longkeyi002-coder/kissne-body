@@ -878,6 +878,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # Runtime identity, so the persisted user row can be reconciled with outbound frames.
                 message_id=turn_id,
                 user_id=installation,
+                # Mobile approvals have a dedicated authenticated /approval endpoint. Ordinary chat
+                # text must never become a gateway control command or a bare yes/no approval reply.
+                allow_gateway_control=False,
             )
             if attachments:
                 # Attach before admission: an immediately spawned background task may reach
