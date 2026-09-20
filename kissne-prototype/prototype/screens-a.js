@@ -1349,9 +1349,13 @@
       var filePicker = root.querySelector('.chat-file-picker');
       var fileBtn = root.querySelector('[data-chat-action="pick-file"]');
       function onPickImage() { if (imagePicker) imagePicker.click(); }
+      async function flushTextBeforeAttachment() {
+        if (composeBatch.length) await flushComposeBatch();
+      }
       async function onImagesChosen() {
         if (!imagePicker || !imagePicker.files || !imagePicker.files.length) return;
         if (!live) { append(sysMsg('尚未连接 Kissne 设备，图片未发送。', clockNow())); return; }
+        await flushTextBeforeAttachment();
         var files = Array.prototype.slice.call(imagePicker.files, 0, 4);
         try {
           var attachments = [];
@@ -1379,6 +1383,7 @@
       async function onFilesChosen() {
         if (!filePicker || !filePicker.files || !filePicker.files.length) return;
         if (!live) { append(sysMsg('尚未连接 Kissne 设备，文件未发送。', clockNow())); return; }
+        await flushTextBeforeAttachment();
         var files = Array.prototype.slice.call(filePicker.files, 0, 4);
         try {
           var attachments = [];
@@ -1418,6 +1423,7 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
         /* 真连接：把表情包原图作为 sticker attachment 交给 Mobile Transport。 */
         if (live) {
+          flushTextBeforeAttachment().then(function () {
           var stickerUrl = K.stickerPath ? K.stickerPath(s2.k) : '';
           T.sendAsset(stickerUrl, 'sticker', s2.label).then(function (accepted) {
             liveCurrentTurn = String((accepted && accepted.turn_id) || '');
@@ -1425,6 +1431,9 @@
             scheduleLivePoll(0);
           }).catch(function () {
             append(sysMsg('表情包发送失败，请重试。', clockNow()));
+          });
+          }).catch(function () {
+            append(sysMsg('前一批文字发送失败，表情包暂未发送。', clockNow()));
           });
         }
         location.hash = '#/chat?state=' + stkState;      /* 收起面板 */
@@ -1451,7 +1460,6 @@
         var msg = e.target.closest && e.target.closest('.msg');
         if (!msg) return;
         clearTimeout(holdTimer);
-        clearTimeout(composeTimer);
         holdTimer = setTimeout(function () { openMsgActions(msg); }, 520);
       }
       function onMsgPointerEnd() { clearTimeout(holdTimer); }
@@ -1614,6 +1622,8 @@
         send.removeEventListener('click', push);
         liveStopped = true;
         clearTimeout(livePollTimer);
+        clearTimeout(composeTimer);
+        composeBatch.length = 0;
         clearTimeout(hitT);
         clearTimeout(bootT);
       };
