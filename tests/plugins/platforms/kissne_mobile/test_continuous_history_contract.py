@@ -141,6 +141,7 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
     assert kwargs["target_turn_id"] == "kbm_turn_reset"
     assert kwargs["extra"]["presentation"] == "session_reset"
     assert kwargs["extra"]["notice_id"].startswith("kbn_")
+    assert kwargs["extra"]["message_ref"] == "notice:" + kwargs["extra"]["notice_id"]
     assert len(notices) == 1
     assert notices[0]["presentation"] == "session_reset"
     assert notices[0]["text"] == kwargs["content"]
