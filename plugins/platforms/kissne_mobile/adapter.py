@@ -187,6 +187,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Transport only, and only for the throttle: recent pairing attempts per client address. Queued
         # replies are NOT kept in memory — they are rows (see ``device_store``), so a restart loses none.
         self._pair_attempts: Dict[str, Deque[float]] = {}
+        # Presentation-only marker for canonical Hermes /new or /reset replies. The command handler
+        # replies inline, so this flag is consumed by send(); reply text itself is never parsed.
+        self._session_reset_pending: set[str] = set()
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -454,24 +457,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
         reconstruct, or pin model/provider/context fields.  The lightweight presentation hint only
         tells the client that this exact text is a session-boundary notice.
         """
-        # Keep the response byte-for-byte at the presentation boundary.  We deliberately do not
+        # Keep the response byte-for-byte at the presentation boundary. We deliberately do not
         # infer model/provider/context from the text: those values belong to Hermes and may change.
-        # A Mobile-only hint is derived from the inbound command, never from reply contents.
+        # The hint comes from the actual inbound slash command, never from reply contents.
         extra: Dict[str, Any] = {}
-        turn_id = await asyncio.to_thread(self.device_store().pending_turn_id, chat_id)
-        if turn_id:
-            try:
-                rows = await asyncio.to_thread(self._mobile_history_rows, chat_id)
-                inbound_row = next(
-                    (row for row in reversed(rows)
-                     if str(row.get("message_ref") or "").startswith(str(turn_id))),
-                    None,
-                )
-            except Exception:
-                inbound_row = None
-            inbound = str((inbound_row or {}).get("text") or "").strip().lower()
-            if inbound == "/new" or inbound == "/reset" or inbound.startswith("/new ") or inbound.startswith("/reset "):
-                extra["presentation"] = "session_reset"
+        if chat_id in self._session_reset_pending:
+            self._session_reset_pending.discard(chat_id)
+            extra["presentation"] = "session_reset"
         message_id = await self._queue_event(
             chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
         if message_id is None:
@@ -889,6 +881,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
+        command_name = text.lstrip().split(maxsplit=1)[0].lower() if text.lstrip().startswith("/") else ""
+        if command_name in {"/new", "/reset"}:
+            self._session_reset_pending.add(installation)
         # Approval callbacks are session-scoped and synchronous on the agent thread. Register the
         # mobile bridge immediately before this installation injects work into that session.
         self._install_mobile_approval_notify(installation)
