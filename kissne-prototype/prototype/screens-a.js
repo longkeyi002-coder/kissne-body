@@ -647,6 +647,12 @@
     return '<div class="msg msg--sys"><div class="msg__sysline">' + html + '</div>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
+  function sessionResetMsg(text, time, ref) {
+    return '<div class="msg msg--sys msg--session-reset" data-session-reset'
+      + (ref ? ' data-history-ref="' + esc(ref) + '"' : '') + '>'
+      + '<div class="msg__sysline"><pre>' + esc(String(text || '')) + '</pre></div>'
+      + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
+  }
   function pushLog(m) {
     CHAT_LOG.push(m);
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
@@ -690,6 +696,7 @@
   }
   function logRender() {
     return CHAT_LOG.map(function (m) {
+      if (m.presentation === 'session_reset') return sessionResetMsg(m.text || '', m.time, m.ref);
       if (m.who === 'sys') return sysMsg(m.html, m.time);
       return m.who === 'ai' ? aiMsg(m.html, m.cls || '', m.time, '', '', m.ref) : meMsg(m.html, m.meta || '', m.time, '', m.ref);
     }).join('');
@@ -1267,9 +1274,9 @@
         }
         if (type === 'completed' && event.presentation === 'session_reset') {
           var resetText = String(event.text || '');
-          append('<div class="msg msg--sys msg--session-reset" data-session-reset>'
-            + '<div class="msg__sysline"><pre>' + esc(resetText) + '</pre></div>'
-            + '<span class="msg__time is-center">' + clockNow() + '</span></div>');
+          append(sessionResetMsg(resetText, clockNow(), event.message_ref || ''));
+          CHAT_LOG.push({ who: 'sys', text: resetText, time: clockNow(),
+            presentation: 'session_reset', ref: event.message_ref || '' });
           if (turnId) liveCompleted[turnId] = true;
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           return;
@@ -1289,23 +1296,9 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
-          if (event.presentation === 'session_reset') {
-            if (el && el.parentNode) el.parentNode.removeChild(el);
-            append('<div class="sessionreset" data-session-reset><pre>' + esc(finalText) + '</pre></div>');
-            CHAT_LOG.push({ who: 'system', html: esc(finalText), time: clockNow(), presentation: 'session_reset' });
-            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-            return;
-          }
-          function presentReply(text) {
+           function presentReply(text) {
             var clean = String(text || '').trim();
-            /* Hermes owns /new and /reset notices. Never rebuild model/provider/context here:
-               render the exact backend-authored payload as one lightweight system boundary. */
-            if (/^(?:✨\s*)?Session reset!|^Session reset\b|^Starting fresh\b/i.test(clean)) {
-              if (el && el.parentNode) el.parentNode.removeChild(el);
-              append('<div class="sessionreset" role="note"><pre>' + esc(clean) + '</pre></div>');
-              return;
-            }
-            if (clean.length > 1800) {
+             if (clean.length > 1800) {
               var paras = clean.split(/\n\s*\n/).filter(Boolean);
               var summary = (paras[0] || clean).slice(0, 320) + ((paras[0] || clean).length > 320 ? '…' : '');
               liveText(el, summary, false);
