@@ -343,3 +343,40 @@ def test_attachment_retry_does_not_inject_or_materialize_twice(tmp_path):
     assert retry_payload["turn_id"] == first_payload["turn_id"]
     assert len(injected) == 1
     assert len(materialized) == 1
+
+
+def test_admitted_attachment_is_not_persisted_until_runtime_starts(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            captured = []
+
+            async def admitted_only(event):
+                event._gateway_accepted = True
+                captured.append(event)
+
+            adapter.handle_message = admitted_only
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                status, payload, _ = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "queued-media-1", "attachments": [_attachment()]},
+                )
+                before = adapter.device_store().attachment_messages("inst-1")
+                assert captured and getattr(captured[0], "_kissne_attachment_metadata", None)
+                await adapter.on_processing_start(captured[0])
+                after = adapter.device_store().attachment_messages("inst-1")
+            finally:
+                adapter._cleanup_inbound_media(captured[0]) if captured else None
+                await stop(adapter)
+        return status, payload, before, after
+
+    status, payload, before, after = run(scenario())
+    assert status == 202, (status, payload)
+    assert before == []
+    assert len(after) == 1
+    assert after[0]["turn_id"] == payload["turn_id"]
