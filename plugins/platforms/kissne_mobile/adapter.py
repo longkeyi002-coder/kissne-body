@@ -190,6 +190,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Presentation-only marker for canonical Hermes /new or /reset replies. The command handler
         # replies inline, so this flag is consumed by send(); reply text itself is never parsed.
         self._session_reset_pending: set[str] = set()
+        # Keep the originating turn so only that /new or /reset reply can consume the marker.
+        # A concurrent ordinary turn must never be mislabeled as a session reset.
+        self._session_reset_turns: Dict[str, str] = {}
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -461,8 +464,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # infer model/provider/context from the text: those values belong to Hermes and may change.
         # The hint comes from the actual inbound slash command, never from reply contents.
         extra: Dict[str, Any] = {}
-        if chat_id in self._session_reset_pending:
+        pending_reset_turn = self._session_reset_turns.get(chat_id, "")
+        current_turn = await asyncio.to_thread(self.device_store().pending_turn_id, chat_id)
+        if chat_id in self._session_reset_pending and pending_reset_turn and current_turn == pending_reset_turn:
             self._session_reset_pending.discard(chat_id)
+            self._session_reset_turns.pop(chat_id, None)
             extra["presentation"] = "session_reset"
             # Persist the exact Hermes-authored reply, not reconstructed model/provider/context data.
             # This sidecar survives /new session boundaries and Runtime restarts.
@@ -895,6 +901,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         command_name = text.lstrip().split(maxsplit=1)[0].lower() if text.lstrip().startswith("/") else ""
         if command_name in {"/new", "/reset"}:
             self._session_reset_pending.add(installation)
+            self._session_reset_turns[installation] = turn_id
         # Approval callbacks are session-scoped and synchronous on the agent thread. Register the
         # mobile bridge immediately before this installation injects work into that session.
         self._install_mobile_approval_notify(installation)
