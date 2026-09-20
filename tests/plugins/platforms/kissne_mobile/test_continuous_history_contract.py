@@ -116,7 +116,9 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
                 return "out-reset"
 
             adapter._queue_event = capture
+            adapter.device_store().open_turn("kbm_turn_reset", "phone-a")
             adapter._session_reset_pending.add("phone-a")
+            adapter._session_reset_turns["phone-a"] = "kbm_turn_reset"
             backend_text = (
                 "✨ Session reset! Starting fresh.\n\n"
                 "◆ Model: `future-model-from-hermes`\n"
@@ -141,3 +143,74 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
     assert notices[0]["presentation"] == "session_reset"
     assert notices[0]["text"] == kwargs["content"]
     assert notices[0]["notice_id"] == kwargs["extra"]["notice_id"]
+
+def test_session_reset_marker_is_not_consumed_by_an_unrelated_newer_turn(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path):
+            adapter = make_adapter()
+            sent = []
+
+            async def capture(installation_id, event_type, **kwargs):
+                sent.append((event_type, kwargs))
+                return "out"
+
+            adapter._queue_event = capture
+            store = adapter.device_store()
+            store.open_turn("kbm_turn_reset", "phone-a")
+            adapter._session_reset_pending.add("phone-a")
+            adapter._session_reset_turns["phone-a"] = "kbm_turn_reset"
+
+            # A newer ordinary turn is now the pending turn. Its reply must not consume /new's marker.
+            store.open_turn("kbm_turn_plain", "phone-a")
+            await adapter.send("phone-a", "ordinary reply")
+            marker_after_plain = (
+                "phone-a" in adapter._session_reset_pending,
+                adapter._session_reset_turns.get("phone-a"),
+            )
+
+            store.close_turn("kbm_turn_plain", "completed")
+            await adapter.send("phone-a", "canonical reset reply")
+            return sent, marker_after_plain, adapter._session_reset_turns.get("phone-a")
+
+    sent, marker_after_plain, remaining = run(scenario())
+    assert marker_after_plain == (True, "kbm_turn_reset")
+    assert sent[0][1].get("extra") in (None, {})
+    assert sent[1][1]["extra"]["presentation"] == "session_reset"
+    assert sent[1][1]["extra"]["notice_id"].startswith("kbn_")
+    assert remaining is None
+
+
+def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_path):
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+        turn_id = "kbm_turn_quote"
+        target_ref = "legacy-session:0"
+
+        class TranscriptStore:
+            @staticmethod
+            def load_transcript(_session_id):
+                return [
+                    {"role": "assistant", "content": "被引用的旧回复", "created_at": 1.0},
+                    {"role": "user", "content": "这个继续处理", "message_id": turn_id, "created_at": 2.0},
+                    {"role": "assistant", "content": "继续处理完成", "created_at": 3.0},
+                ]
+
+        adapter._session_store = TranscriptStore()
+        adapter._mobile_history_sessions = lambda _installation: [{"id": "legacy-session"}]
+        adapter.device_store().record_reply_link(
+            "phone-a", turn_id, target_ref, "assistant", "被引用的旧回复"
+        )
+        adapter.device_store().record_attachment_message(
+            "phone-a", turn_id, "这个继续处理",
+            [{"type": "file", "mime_type": "text/plain", "label": "notes.txt"}],
+        )
+
+        rows = adapter._mobile_history_rows("phone-a")
+
+    assert rows[0]["message_ref"] == target_ref
+    assert rows[1]["message_ref"] == "turn:kbm_turn_quote:user"
+    assert rows[1]["reply_to"] == target_ref
+    assert rows[1]["reply_preview"] == {"role": "assistant", "text": "被引用的旧回复"}
+    assert rows[1]["attachments"][0]["label"] == "notes.txt"
+    assert rows[2]["message_ref"] == "turn:kbm_turn_quote:assistant"
+
