@@ -610,6 +610,9 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .msg__sysline{font-size:10.5px;color:var(--ink-3);background:var(--g2);
   border-radius:999px;padding:3px 10px}
 .msg__time.is-center{text-align:center}
+.msg--session-reset{margin:10px 0}
+.msg--session-reset .msg__sysline{max-width:min(88%,560px);border-radius:12px;padding:8px 11px;text-align:left}
+.msg--session-reset pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.55;color:inherit}
 .msg__text.is-pending{color:var(--ink-3);display:flex;align-items:center;gap:6px}
 .msg__text.is-failed{
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
