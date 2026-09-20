@@ -520,7 +520,7 @@
   function plusPopLayer(origin) {
     var items = [
       { ic: 'image', t: '照片',        d: '从相册选择图片', action: 'pick-image' },
-      { ic: 'file',  t: '文件',        d: '文件发送稍后接入', action: 'file-unavailable' }
+      { ic: 'file',  t: '文件',        d: '发送 PDF / 文本 / CSV / JSON / ZIP', action: 'pick-file' }
     ];
     return '<div class="pop">'
       + items.map(function (it) {
@@ -881,6 +881,7 @@
         + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入">' + icon('mic', 19) + '</button>'
         + '<button class="sendbtn"' + dis + ' aria-label="发送">' + icon('send', 18) + '</button>'
         + '<input class="chat-image-picker" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>'
+        + '<input class="chat-file-picker" type="file" accept=".pdf,.txt,.md,.csv,.json,.zip,application/pdf,text/plain,text/markdown,text/csv,application/json,application/zip" multiple hidden>'
         + '</div>';
 
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
@@ -1201,7 +1202,8 @@
       /* 照片：使用系统相册选择器，直接按真实 attachment 合同发送。 */
       var imagePicker = root.querySelector('.chat-image-picker');
       var pickImageBtn = root.querySelector('[data-chat-action="pick-image"]');
-      var fileBtn = root.querySelector('[data-chat-action="file-unavailable"]');
+      var filePicker = root.querySelector('.chat-file-picker');
+      var fileBtn = root.querySelector('[data-chat-action="pick-file"]');
       function onPickImage() { if (imagePicker) imagePicker.click(); }
       async function onImagesChosen() {
         if (!imagePicker || !imagePicker.files || !imagePicker.files.length) return;
@@ -1229,10 +1231,37 @@
           imagePicker.value = '';
         }
       }
-      function onFileUnavailable() { append(sysMsg('文件发送还没有接入真实 Transport。', clockNow())); }
+      function onPickFile() { if (filePicker) filePicker.click(); }
+      async function onFilesChosen() {
+        if (!filePicker || !filePicker.files || !filePicker.files.length) return;
+        if (!live) { append(sysMsg('尚未连接 Kissne 设备，文件未发送。', clockNow())); return; }
+        var files = Array.prototype.slice.call(filePicker.files, 0, 4);
+        try {
+          var attachments = [];
+          for (var fi = 0; fi < files.length; fi++) {
+            var file = files[fi];
+            attachments.push({
+              type: 'file',
+              mime_type: file.type || 'text/plain',
+              data: await T.blobToBase64(file),
+              label: file.name || 'file'
+            });
+          }
+          append(meMsg(icon('file', 15) + '<span>' + esc(files.map(function (x) { return x.name; }).join('、')) + '</span>', '', clockNow()));
+          var accepted = await T.sendMessage({ attachments: attachments });
+          liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          scheduleLivePoll(0);
+        } catch (err) {
+          append(sysMsg((err && err.status === 413) ? '文件过大，请选择更小的文件。' : '文件发送失败或格式不受支持。', clockNow()));
+        } finally {
+          filePicker.value = '';
+        }
+      }
       if (pickImageBtn) pickImageBtn.addEventListener('click', onPickImage);
       if (imagePicker) imagePicker.addEventListener('change', onImagesChosen);
-      if (fileBtn) fileBtn.addEventListener('click', onFileUnavailable);
+      if (fileBtn) fileBtn.addEventListener('click', onPickFile);
+      if (filePicker) filePicker.addEventListener('change', onFilesChosen);
 
       /* 表情面板里的贴图：点一张就发出去，然后收起面板（不跳页） */
       var stkState = (ctx && ctx.state && ctx.state !== 'empty' && ctx.state !== 'keyboard')
@@ -1339,7 +1368,8 @@
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (pickImageBtn) pickImageBtn.removeEventListener('click', onPickImage);
         if (imagePicker) imagePicker.removeEventListener('change', onImagesChosen);
-        if (fileBtn) fileBtn.removeEventListener('click', onFileUnavailable);
+        if (fileBtn) fileBtn.removeEventListener('click', onPickFile);
+        if (filePicker) filePicker.removeEventListener('change', onFilesChosen);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
