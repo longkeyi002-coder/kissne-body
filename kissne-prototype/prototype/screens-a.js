@@ -1741,6 +1741,7 @@
         if (filePicker) filePicker.removeEventListener('change', onFilesChosen);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
+        list.removeEventListener('scroll', onHistoryScroll);
         list.removeEventListener('click', onTlogTap);
         list.removeEventListener('click', onApprovalClick);
         list.removeEventListener('pointerdown', onMsgPointerDown);
