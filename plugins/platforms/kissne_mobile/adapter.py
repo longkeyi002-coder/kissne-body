@@ -410,7 +410,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
-                           extra: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                           extra: Optional[Dict[str, Any]] = None,
+                           target_turn_id: Optional[str] = None) -> Optional[str]:
         """Append one typed event to the installation's durable stream; returns its transport message id.
 
         The row is committed *before* the device is told anything, so nothing between "reply produced"
@@ -434,15 +435,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
-        turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
+        turn_id = str(target_turn_id or "").strip()
+        if turn_id:
+            target = await asyncio.to_thread(store.turn, turn_id)
+            if not target or str(target.get("installation_id") or "") != installation:
+                logger.error("[kissne_mobile] refusing outbound with foreign/missing turn %s",
+                             _fingerprint(turn_id))
+                return None
+        else:
+            turn_id = await asyncio.to_thread(store.pending_turn_id, installation) or ""
         try:
             seq = await asyncio.to_thread(
-                store.enqueue_event, installation, event_type, payload, turn_id,
+                store.enqueue_event, installation, event_type, payload, turn_id or None,
                 cap=max(1, self._outbound_cap),
             )
             if event_type == EVENT_COMPLETED and turn_id:
-                # The reply closes the turn it answers — but only from ``pending``: a late reply must not
-                # resurrect a turn the user already cancelled.
+                # Close the exact originating turn when the gateway supplied its message id.
+                # Falling back to newest-pending is only for non-final/status sends that lack one.
                 await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
@@ -464,9 +473,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # infer model/provider/context from the text: those values belong to Hermes and may change.
         # The hint comes from the actual inbound slash command, never from reply contents.
         extra: Dict[str, Any] = {}
+        store = self.device_store()
+        target_turn = ""
+        reply_anchor = str(reply_to or "").strip()
+        if reply_anchor:
+            candidate = await asyncio.to_thread(store.turn, reply_anchor)
+            if candidate and str(candidate.get("installation_id") or "") == str(chat_id or "").strip():
+                target_turn = reply_anchor
+        if not target_turn:
+            # Legacy/direct sends do not always carry an event reply anchor. This fallback is safe
+            # for ordinary status traffic, but canonical final replies from BasePlatformAdapter do.
+            target_turn = await asyncio.to_thread(store.pending_turn_id, chat_id) or ""
+
         pending_reset_turn = self._session_reset_turns.get(chat_id, "")
-        current_turn = await asyncio.to_thread(self.device_store().pending_turn_id, chat_id)
-        if chat_id in self._session_reset_pending and pending_reset_turn and current_turn == pending_reset_turn:
+        if chat_id in self._session_reset_pending and pending_reset_turn and target_turn == pending_reset_turn:
             self._session_reset_pending.discard(chat_id)
             self._session_reset_turns.pop(chat_id, None)
             extra["presentation"] = "session_reset"
@@ -482,7 +502,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             except Exception:
                 logger.exception("[kissne_mobile] failed to persist session reset notice")
         message_id = await self._queue_event(
-            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
+            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to,
+            extra=extra or None, target_turn_id=target_turn or None)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
