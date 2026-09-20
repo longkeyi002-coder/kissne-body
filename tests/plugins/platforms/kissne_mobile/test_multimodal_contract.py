@@ -380,3 +380,90 @@ def test_admitted_attachment_is_not_persisted_until_runtime_starts(tmp_path):
     assert before == []
     assert len(after) == 1
     assert after[0]["turn_id"] == payload["turn_id"]
+
+
+def test_approval_endpoint_rejects_forged_id(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                return await http(port, "POST", "/approval", token=token,
+                                  body={"approval_id": "forged", "decision": "allow", "scope": "once"})
+            finally:
+                await stop(adapter)
+    status, payload, _ = run(scenario())
+    assert status == 404
+    assert payload["error"] == "unknown_approval"
+
+
+def test_approval_endpoint_resolves_exact_live_request_and_duplicate_fails(tmp_path):
+    async def scenario():
+        from tools import approval
+        from tools.approval_gateway_wait import _ApprovalEntry
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                key = adapter.mobile_session_key("inst-1")
+                entry = _ApprovalEntry({"request_id": "approval-1", "command": "echo ok",
+                                        "description": "test", "allow_session": True,
+                                        "allow_permanent": False})
+                with approval._lock:
+                    approval._gateway_queues[key] = [entry]
+                first = await http(port, "POST", "/approval", token=token,
+                                   body={"approval_id": "approval-1", "decision": "allow",
+                                         "scope": "session"})
+                second = await http(port, "POST", "/approval", token=token,
+                                    body={"approval_id": "approval-1", "decision": "allow",
+                                          "scope": "session"})
+                return first, second, entry.result
+            finally:
+                with approval._lock:
+                    approval._gateway_queues.pop(adapter.mobile_session_key("inst-1"), None)
+                await stop(adapter)
+    first, second, result = run(scenario())
+    assert first[0] == 200
+    assert first[1]["status"] == "approved"
+    assert result == "session"
+    assert second[0] == 404
+
+
+def test_approval_endpoint_enforces_scope_capability(tmp_path):
+    async def scenario():
+        from tools import approval
+        from tools.approval_gateway_wait import _ApprovalEntry
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                key = adapter.mobile_session_key("inst-1")
+                entry = _ApprovalEntry({"request_id": "approval-scope", "command": "echo ok",
+                                        "description": "test", "allow_session": True,
+                                        "allow_permanent": False})
+                with approval._lock:
+                    approval._gateway_queues[key] = [entry]
+                response = await http(port, "POST", "/approval", token=token,
+                                      body={"approval_id": "approval-scope", "decision": "allow",
+                                            "scope": "always"})
+                return response, entry.result
+            finally:
+                with approval._lock:
+                    approval._gateway_queues.pop(adapter.mobile_session_key("inst-1"), None)
+                await stop(adapter)
+    response, result = run(scenario())
+    assert response[0] == 409
+    assert response[1]["error"] == "approval_scope_not_allowed"
+    assert result is None
