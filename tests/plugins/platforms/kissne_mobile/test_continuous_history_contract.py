@@ -102,3 +102,36 @@ def test_new_remains_a_real_hermes_command_but_chat_yes_is_not_approval(tmp_path
             finally:
                 await stop(adapter)
     assert run(scenario()) == [("/new", True), ("yes", False), ("/approve", False)]
+
+
+def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path):
+            adapter = make_adapter()
+            sent = []
+            original_queue = adapter._queue_event
+
+            async def capture(installation_id, event_type, **kwargs):
+                sent.append((event_type, kwargs))
+                return "out-reset"
+
+            adapter._queue_event = capture
+            adapter._session_reset_pending.add("phone-a")
+            backend_text = (
+                "✨ Session reset! Starting fresh.\n\n"
+                "◆ Model: `future-model-from-hermes`\n"
+                "◆ Provider: future-provider\n"
+                "◆ Context: 2.0M tokens (detected)\n"
+                "✦ Tip: backend-owned text"
+            )
+            result = await adapter.send("phone-a", backend_text)
+            adapter._queue_event = original_queue
+            return result, sent
+
+    result, sent = run(scenario())
+    assert result.success is True
+    assert len(sent) == 1
+    event_type, kwargs = sent[0]
+    assert kwargs["content"].endswith("✦ Tip: backend-owned text")
+    assert "future-model-from-hermes" in kwargs["content"]
+    assert kwargs["extra"] == {"presentation": "session_reset"}
