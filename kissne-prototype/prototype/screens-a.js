@@ -15,7 +15,7 @@
      ===================================================================== */
   K.registerScreen({
     no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
-    purpose: '全新连续开屏动画：Logo 变化、叶青栩与小羊入场、双人贴贴；冷启动播放结束后自动进入下一页。',
+    purpose: '按真实素材对象编排的连续开屏：Logo、胶囊、球、带球角色、动作帧、双人贴贴。',
     out: ['#/connect'],
     states: [
       { key: 'final',   label: '定格 · 双人贴贴' },
@@ -27,7 +27,6 @@
       <div class="screen screen--splash">
         <div class="splash-redesign" data-splash-redesign>
           <canvas class="splash-redesign__canvas" aria-label="Kissne 开屏动画"></canvas>
-          <div class="splash-redesign__hint">Kissne</div>
         </div>
       </div>`;
     },
@@ -37,88 +36,116 @@
       if (!stage || !canvas) return null;
       var g = canvas.getContext('2d');
       var state = ctx.state || 'final';
-      var disposed = false;
-      var raf = 0;
+      var disposed = false, raf = 0, dpr = 1;
       var started = performance.now();
-      var dpr = Math.min(window.devicePixelRatio || 1, 2);
-      var files = { logo: 4, fox: 8, sheep: 8, duo: 8 };
-      var images = { logo: [], fox: [], sheep: [], duo: [] };
-      var loaded = 0;
-      var total = 0;
-
+      var v = '20260920f';
+      var manifest = {
+        logo: ['logo/frame-0.png','logo/frame-1.png','logo/frame-2.png','logo/frame-3.png'],
+        fox: [], sheep: [], duo: [],
+        pills: ['orbs/blue-pill.png','orbs/green-pill.png'],
+        orbs: ['orbs/orb-pair.png','orbs/orb-pair-stands.png'],
+        foxOrb: ['characters/fox-with-orb.png'],
+        sheepOrb: ['characters/sheep-with-orb.png'],
+        duoFinal: ['characters/duo-final.png']
+      };
+      for (var n = 0; n < 8; n++) {
+        manifest.fox.push('frames/fox/frame-' + n + '.png');
+        manifest.sheep.push('frames/sheep/frame-' + n + '.png');
+        manifest.duo.push('frames/duo/frame-' + n + '.png');
+      }
+      var images = {};
+      var loadCount = 0, total = 0;
       function resize() {
-        var box = stage.getBoundingClientRect();
+        var r = stage.getBoundingClientRect();
         dpr = Math.min(window.devicePixelRatio || 1, 2);
-        canvas.width = Math.max(1, Math.round(box.width * dpr));
-        canvas.height = Math.max(1, Math.round(box.height * dpr));
-        canvas.style.width = box.width + 'px';
-        canvas.style.height = box.height + 'px';
+        canvas.width = Math.max(1, Math.round(r.width * dpr));
+        canvas.height = Math.max(1, Math.round(r.height * dpr));
+        canvas.style.width = r.width + 'px';
+        canvas.style.height = r.height + 'px';
         g.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       function loadAll() {
-        Object.keys(files).forEach(function (kind) {
-          for (var i = 0; i < files[kind]; i++) {
+        Object.keys(manifest).forEach(function (group) {
+          images[group] = [];
+          manifest[group].forEach(function (path, i) {
             total++;
             var img = new Image();
-            img.onload = function () { loaded++; };
-            img.src = 'assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png?v=20260920d';
-            images[kind][i] = img;
-          }
+            img.onload = function () { loadCount++; };
+            img.src = 'assets/real/splash-generated/' + path + '?v=' + v;
+            images[group][i] = img;
+          });
         });
       }
-      function fit(img, x, y, w, h, alpha) {
-        if (!img || !img.naturalWidth) return;
-        var scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-        var dw = img.naturalWidth * scale;
-        var dh = img.naturalHeight * scale;
-        g.globalAlpha = alpha == null ? 1 : alpha;
-        g.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-        g.globalAlpha = 1;
+      function img(group, i) {
+        var list = images[group] || [];
+        return list[Math.max(0, Math.min(list.length - 1, i))];
       }
       function ease(t) {
         return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       }
-      function frame(kind, index) {
-        var list = images[kind] || [];
-        return list[Math.max(0, Math.min(list.length - 1, index))];
+      function fit(source, x, y, w, h, alpha) {
+        if (!source || !source.naturalWidth) return;
+        var s = Math.min(w / source.naturalWidth, h / source.naturalHeight);
+        var dw = source.naturalWidth * s, dh = source.naturalHeight * s;
+        g.globalAlpha = alpha == null ? 1 : alpha;
+        g.drawImage(source, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+        g.globalAlpha = 1;
+      }
+      function cross(p) {
+        return Math.max(0, Math.min(1, p < .5 ? p * 2 : (1 - p) * 2));
       }
       function drawLogo(t, w, h) {
-        var p = Math.min(1, t / 1900);
+        var p = Math.min(1, t / 2200);
         var i = Math.min(3, Math.floor(p * 4));
-        var fade = p < .12 ? p / .12 : 1;
-        fit(frame('logo', i), w * .18, h * .28, w * .64, h * .22, fade);
+        fit(img('logo', i), w * .12, h * .28, w * .76, h * .22, 1);
+      }
+      function drawPills(t, w, h) {
+        var p = Math.max(0, Math.min(1, (t - 1900) / 1100));
+        var q = ease(p);
+        var size = Math.min(120, w * .28);
+        fit(img('pills', 0), w * .16 - (1 - q) * 55, h * .43, size, size * .48, p);
+        fit(img('pills', 1), w * .56 + (1 - q) * 55, h * .43, size, size * .48, p);
+      }
+      function drawOrbs(t, w, h) {
+        var p = Math.max(0, Math.min(1, (t - 2800) / 1300));
+        var q = ease(p);
+        fit(img('orbs', p < .58 ? 0 : 1), w * .16, h * .40 - q * 5, w * .68, h * .25, p);
+      }
+      function drawOrbCharacters(t, w, h) {
+        var p = Math.max(0, Math.min(1, (t - 3900) / 1500));
+        var q = ease(p);
+        var size = Math.min(165, w * .43);
+        fit(img('foxOrb', 0), -size * .62 + q * (w * .18), h * .48, size, size * .62, p);
+        fit(img('sheepOrb', 0), w - size * .38 - q * (w * .18), h * .48, size, size * .62, p);
       }
       function drawActors(t, w, h) {
-        var p = Math.min(1, Math.max(0, (t - 1800) / 2300));
+        var p = Math.max(0, Math.min(1, (t - 5000) / 1900));
         var q = ease(p);
         var i = Math.min(7, Math.floor(p * 8));
-        var size = Math.min(170, w * .39);
-        var y = h * .47;
-        var foxX = -size * .7 + (w * .5 - size * 1.05) * q;
-        var sheepX = w + size * .7 - (w * .5 - size * 1.05) * q;
-        var alpha = Math.min(1, p * 5) * (p > .86 ? (1 - p) / .14 : 1);
-        fit(frame('fox', i), foxX, y, size, size, alpha);
-        fit(frame('sheep', i), sheepX, y, size, size, alpha);
+        var size = Math.min(155, w * .39);
+        fit(img('fox', i), -size * .65 + q * (w * .43), h * .42, size, size, 1);
+        fit(img('sheep', i), w - size * .35 - q * (w * .43), h * .42, size, size, 1);
       }
       function drawDuo(t, w, h) {
-        var p = Math.min(1, Math.max(0, (t - 4000) / 2400));
+        var p = Math.max(0, Math.min(1, (t - 6800) / 1900));
         var i = Math.min(7, Math.floor(p * 8));
-        var alpha = Math.min(1, p * 5);
-        fit(frame('duo', i), w * .08, h * .43, w * .84, h * .30, alpha);
+        fit(img('duo', i), w * .08, h * .43, w * .84, h * .30, Math.min(1, p * 4));
       }
       function draw(now) {
         if (disposed) return;
-        var box = stage.getBoundingClientRect();
-        var w = box.width, h = box.height;
+        var r = stage.getBoundingClientRect(), w = r.width, h = r.height;
         if (!canvas.width || canvas.width !== Math.round(w * dpr)) resize();
         g.clearRect(0, 0, w, h);
-        g.fillStyle = '#ffffff';
+        g.fillStyle = '#fff';
         g.fillRect(0, 0, w, h);
         var t = now - started;
-        if (state === 'intro') drawLogo(1200, w, h);
-        else if (state === 'final') drawDuo(6200, w, h);
+        if (state === 'intro') drawLogo(800, w, h);
+        else if (state === 'final') fit(img('duoFinal', 0), w * .08, h * .42, w * .84, h * .32, 1);
         else {
           drawLogo(t, w, h);
+          drawPills(t, w, h);
+          drawOrbs(t, w, h);
+          drawOrbCharacters(t, w, h);
           drawActors(t, w, h);
           drawDuo(t, w, h);
         }
