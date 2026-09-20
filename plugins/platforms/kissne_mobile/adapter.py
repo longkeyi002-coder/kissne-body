@@ -488,6 +488,21 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "installation_id": installation,
         }
 
+    @staticmethod
+    def _cleanup_inbound_media(event: MessageEvent) -> None:
+        """Remove plugin-owned inbound temp files after Runtime has finished with the event."""
+        for path in list(getattr(event, "media_urls", None) or []):
+            if not os.path.basename(path).startswith("kissne-mobile-"):
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
+        """BasePlatformAdapter calls this only when background processing is actually finished."""
+        self._cleanup_inbound_media(event)
+
     # -- HTTP handlers -----------------------------------------------------------------------------
 
     async def _payload(self, request: web.Request) -> Any:
@@ -806,20 +821,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 user_id=installation,
             )
             await self.handle_message(event)
-            if getattr(event, "_gateway_accepted", False) and attachments:
+            accepted = bool(getattr(event, "_gateway_accepted", False))
+            if accepted and attachments:
                 await asyncio.to_thread(
                     store.record_attachment_message, installation, turn_id, text,
                     [{"type": item["type"], "mime_type": item["mime_type"],
                       "label": str(item.get("label") or "")} for item in attachments])
+            # Accepted events are owned by BasePlatformAdapter's background task; its
+            # on_processing_complete hook removes media only after the Runtime is done reading it.
+            # Test doubles / refused events have no background owner, so clean them here.
+            if not accepted:
+                self._cleanup_inbound_media(event)
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
-            return _error_response("inbound_injection_failed", 503)
-        finally:
             for path in media_paths:
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
+            return _error_response("inbound_injection_failed", 503)
         return _json_response(
             {"ok": True, "message_id": message_id, "turn_id": turn_id}, status=202)
 
