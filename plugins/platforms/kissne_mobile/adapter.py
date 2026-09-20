@@ -1219,11 +1219,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # must speak this installation's own routing key (an alias, not the Conversation's canonical key —
         # using the canonical key would stop another entry point's turn on the same Conversation).
         session_key = self.mobile_session_key(installation)
+        # Snapshot before interrupt: unregister/cancellation wakes and removes the live queue.
+        from tools.approval import list_gateway_approvals
+        cancelled_approvals = await asyncio.to_thread(list_gateway_approvals, session_key)
         try:
             await self.interrupt_session_activity(session_key, installation, None)
         except Exception:
             logger.warning("[kissne_mobile] cancel could not interrupt turn %s",
                            _fingerprint(turn_id), exc_info=True)
+        for approval in cancelled_approvals:
+            approval_id = str(approval.get("request_id") or "")
+            if approval_id:
+                await asyncio.to_thread(
+                    store.enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
+                    {"approval_id": approval_id, "decision": "denied",
+                     "scope": None, "reason": "turn_cancelled"},
+                    turn_id, cap=max(1, self._outbound_cap))
         logger.info("[kissne_mobile] cancelled turn %s for installation %s",
                     _fingerprint(turn_id), _fingerprint(installation))
         return _json_response({
