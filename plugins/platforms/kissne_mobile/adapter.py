@@ -1241,10 +1241,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         models = []
         for provider in providers:
             slug = str(provider.get("slug") or "")
+            provider_label = str(provider.get("name") or slug)
             for item in provider.get("models") or []:
                 model_id = str(item.get("id") if isinstance(item, dict) else item)
                 if model_id:
-                    models.append({"provider": slug, "model": model_id, "label": model_id})
+                    models.append({"provider": slug, "model": model_id, "label": model_id,
+                                   "provider_label": provider_label})
         labels = {"none": "关闭思考", "xhigh": "Extra High"}
         efforts = [{"value": value, "label": labels.get(value, value.title())}
                    for value in EFFORT_LADDER]
