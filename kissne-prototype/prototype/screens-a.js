@@ -1743,7 +1743,10 @@
       async function locateHistoryRef(ref) {
         ref = String(ref || '');
         if (!ref) return false;
-        var selector = '[data-history-ref="' + CSS.escape(ref) + '"]';
+        var safeRef = (window.CSS && typeof window.CSS.escape === 'function')
+          ? window.CSS.escape(ref)
+          : ref.replace(/([\\"'\[\]#.:>+~*=() ])/g, '\\$1');
+        var selector = '[data-history-ref="' + safeRef + '"]';
         var hit = list.querySelector(selector);
         var pages = 0;
         while (!hit && live && historyHasMore && historyBefore && pages < 40) {
