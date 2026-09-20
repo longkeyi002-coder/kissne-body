@@ -467,3 +467,39 @@ def test_approval_endpoint_enforces_scope_capability(tmp_path):
     assert response[0] == 409
     assert response[1]["error"] == "approval_scope_not_allowed"
     assert result is None
+
+
+def test_multiple_approvals_resolve_by_exact_id(tmp_path):
+    async def scenario():
+        from tools import approval
+        from tools.approval_gateway_wait import _ApprovalEntry
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                key = adapter.mobile_session_key("inst-1")
+                first = _ApprovalEntry({"request_id": "approval-a", "command": "a",
+                                        "description": "a", "allow_session": True})
+                second = _ApprovalEntry({"request_id": "approval-b", "command": "b",
+                                         "description": "b", "allow_session": True})
+                with approval._lock:
+                    approval._gateway_queues[key] = [first, second]
+                response = await http(port, "POST", "/approval", token=token,
+                                      body={"approval_id": "approval-b", "decision": "deny",
+                                            "reason": "not now"})
+                remaining = approval.list_gateway_approvals(key)
+                return response, first.result, second.result, second.reason, remaining
+            finally:
+                with approval._lock:
+                    approval._gateway_queues.pop(adapter.mobile_session_key("inst-1"), None)
+                await stop(adapter)
+    response, first_result, second_result, reason, remaining = run(scenario())
+    assert response[0] == 200
+    assert first_result is None
+    assert second_result == "deny"
+    assert reason == "not now"
+    assert [item["request_id"] for item in remaining] == ["approval-a"]
