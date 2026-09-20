@@ -53,7 +53,11 @@ Out of scope for this ticket: the Android client itself (``KB1-ANDROID-CHAT``).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
+import os
+import tempfile
 import importlib.util
 import json
 import logging
@@ -98,7 +102,10 @@ logger = logging.getLogger(__name__)
 PLATFORM_NAME = "kissne_mobile"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 0  # ephemeral by default: the Android side is told the port it must reach
-DEFAULT_MAX_BODY_BYTES = 64 * 1024
+DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_ATTACHMENTS = 4
+MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
 
 # This platform has NO external credential, so enablement needs an explicit per-profile opt-in:
@@ -607,9 +614,70 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }, status=201)
 
     @staticmethod
-    def _payload_fingerprint(text: str) -> str:
-        """Digest of an inbound payload — the thing that separates a retry from a rewrite."""
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    def _payload_fingerprint(text: str, attachments: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Digest text plus attachment identity so idempotency also covers media changes."""
+        items = [{
+            "type": item["type"], "mime_type": item["mime_type"],
+            "label": item.get("label", ""),
+            "sha256": hashlib.sha256(item["bytes"]).hexdigest(),
+        } for item in (attachments or [])]
+        canonical = json.dumps({"text": text, "attachments": items}, ensure_ascii=False,
+                               sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _decode_attachments(body: Dict[str, Any]) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        raw = body.get("attachments", [])
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            return None, "attachments_must_be_an_array"
+        if len(raw) > MAX_ATTACHMENTS:
+            return None, "too_many_attachments"
+        decoded: List[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                return None, "attachment_must_be_an_object"
+            kind = str(item.get("type") or "").strip().lower()
+            mime = str(item.get("mime_type") or "").strip().lower()
+            data = item.get("data")
+            if kind not in {"image", "sticker"}:
+                return None, "unsupported_attachment_type"
+            if mime not in ALLOWED_IMAGE_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if not isinstance(data, str) or not data:
+                return None, "attachment_data_required"
+            try:
+                blob = base64.b64decode(data, validate=True)
+            except (binascii.Error, ValueError):
+                return None, "invalid_attachment_data"
+            if not blob:
+                return None, "attachment_data_required"
+            if len(blob) > MAX_ATTACHMENT_BYTES:
+                return None, "attachment_too_large"
+            decoded.append({"type": kind, "mime_type": mime,
+                            "label": str(item.get("label") or "").strip(), "bytes": blob})
+        return decoded, None
+
+    @staticmethod
+    def _materialize_attachments(attachments: List[Dict[str, Any]]) -> List[str]:
+        suffixes = {"image/jpeg": ".jpg", "image/png": ".png",
+                    "image/webp": ".webp", "image/gif": ".gif"}
+        paths: List[str] = []
+        try:
+            for item in attachments:
+                fd, path = tempfile.mkstemp(prefix="kissne-mobile-", suffix=suffixes[item["mime_type"]])
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(item["bytes"])
+                paths.append(path)
+            return paths
+        except Exception:
+            for path in paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
 
     async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
         """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
@@ -643,12 +711,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return error
         body = payload or {}
         if "ack" in body:
-            if str(body.get("text") or "").strip():
-                return _error_response("text_and_ack_are_mutually_exclusive", 400)
+            if str(body.get("text") or "").strip() or body.get("attachments"):
+                return _error_response("message_and_ack_are_mutually_exclusive", 400)
             return await self._handle_ack(installation, body)
         text = str(body.get("text") or "")
-        if not text.strip():
-            return _error_response("text_required", 400)
+        attachments, attachment_error = self._decode_attachments(body)
+        if attachment_error:
+            return _error_response(attachment_error, 400)
+        attachments = attachments or []
+        if not text.strip() and not attachments:
+            return _error_response("text_or_attachment_required", 400)
 
         conversation_key = str(body.get("session_key") or "").strip()
         if conversation_key:
@@ -665,7 +737,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
-        fingerprint = self._payload_fingerprint(text)
+        fingerprint = self._payload_fingerprint(text, attachments)
         if client_message_id:
             existing = await asyncio.to_thread(
                 store.inbound_record, installation, client_message_id)
@@ -693,21 +765,37 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
-        event = MessageEvent(
-            text=text,
-            message_type=MessageType.TEXT,
-            source=source,
-            raw_message=body,
-            # The client message_id is only an HTTP retry/idempotency key.  The server turn_id is
-            # Runtime identity, so the persisted user row can be reconciled with outbound frames.
-            message_id=turn_id,
-            user_id=installation,
-        )
+        media_paths: List[str] = []
         try:
+            if attachments:
+                media_paths = self._materialize_attachments(attachments)
+            message_type = MessageType.TEXT
+            if attachments:
+                message_type = (MessageType.STICKER
+                                if all(item["type"] == "sticker" for item in attachments)
+                                else MessageType.PHOTO)
+            event = MessageEvent(
+                text=text,
+                message_type=message_type,
+                source=source,
+                raw_message=body,
+                media_urls=media_paths,
+                media_types=[item["mime_type"] for item in attachments],
+                # The client message_id is only an HTTP retry/idempotency key.  The server turn_id is
+                # Runtime identity, so the persisted user row can be reconciled with outbound frames.
+                message_id=turn_id,
+                user_id=installation,
+            )
             await self.handle_message(event)
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
             return _error_response("inbound_injection_failed", 503)
+        finally:
+            for path in media_paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
         return _json_response(
             {"ok": True, "message_id": message_id, "turn_id": turn_id}, status=202)
 
