@@ -503,3 +503,36 @@ def test_multiple_approvals_resolve_by_exact_id(tmp_path):
     assert second_result == "deny"
     assert reason == "not now"
     assert [item["request_id"] for item in remaining] == ["approval-a"]
+
+
+def test_post_approval_timeout_carries_exact_request_id(monkeypatch):
+    import tools.approval_gateway_wait as waitmod
+    observed = []
+
+    monkeypatch.setattr(waitmod, "_poll_event", lambda *args, **kwargs: "timeout")
+    monkeypatch.setattr(waitmod, "_fire_approval_hook",
+                        lambda hook, **kwargs: observed.append((hook, kwargs)))
+    result = waitmod._await_gateway_decision(
+        "kissne_mobile:dm:inst-timeout", {"request_id": "approval-timeout-a",
+        "command": "danger", "description": "test"}, timeout=0.01)
+    posts = [payload for hook, payload in observed if hook == "post_approval_response"]
+    assert posts
+    assert posts[-1]["choice"] == "timeout"
+    assert posts[-1]["request_id"] == "approval-timeout-a"
+
+
+def test_timeout_identity_does_not_alias_concurrent_approval(monkeypatch):
+    import tools.approval_gateway_wait as waitmod
+    observed = []
+
+    monkeypatch.setattr(waitmod, "_poll_event", lambda *args, **kwargs: "timeout")
+    monkeypatch.setattr(waitmod, "_fire_approval_hook",
+                        lambda hook, **kwargs: observed.append((hook, kwargs)))
+    for request_id in ("approval-a", "approval-b"):
+        waitmod._await_gateway_decision(
+            "kissne_mobile:dm:inst-concurrent",
+            {"request_id": request_id, "command": request_id, "description": "test"},
+            timeout=0.01)
+    posts = [payload for hook, payload in observed if hook == "post_approval_response"]
+    assert [item["request_id"] for item in posts] == ["approval-a", "approval-b"]
+    assert all(item["choice"] == "timeout" for item in posts)
