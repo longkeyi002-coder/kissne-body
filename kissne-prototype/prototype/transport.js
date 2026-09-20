@@ -109,11 +109,46 @@
     if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
     return 'web-' + r;
   }
-  function sendText(text, messageId) {
-    var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
+  function sendMessage(opts, messageId) {
+    opts = opts || {};
+    var body = {
+      text: String(opts.text || ''),
+      message_id: messageId || opts.messageId || makeMessageId()
+    };
+    var attachments = Array.isArray(opts.attachments) ? opts.attachments : [];
+    if (attachments.length) body.attachments = attachments;
     var sk = sessionKey();
     if (sk) body.session_key = sk;
     return request('/mobile/messages', { method: 'POST', body: body });
+  }
+  function sendText(text, messageId) {
+    return sendMessage({ text: text }, messageId);
+  }
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var raw = String(reader.result || '');
+        resolve(raw.indexOf(',') >= 0 ? raw.slice(raw.indexOf(',') + 1) : raw);
+      };
+      reader.onerror = function () { reject(reader.error || new Error('attachment_read_failed')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+  async function attachmentFromUrl(url, type, label) {
+    var res = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+    if (!res.ok) throw new ApiError(res.status, null, 'attachment_load_failed');
+    var blob = await res.blob();
+    return {
+      type: type || 'image',
+      mime_type: blob.type || 'image/png',
+      data: await blobToBase64(blob),
+      label: label || undefined
+    };
+  }
+  async function sendAsset(url, type, label, messageId) {
+    var attachment = await attachmentFromUrl(url, type, label);
+    return sendMessage({ attachments: [attachment] }, messageId);
   }
   function poll() { return request('/mobile/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
   async function ack(nextCursor) {
@@ -140,7 +175,10 @@
     cursor: cursor,
     pair: pair,
     bootstrap: bootstrap,
+    sendMessage: sendMessage,
     sendText: sendText,
+    attachmentFromUrl: attachmentFromUrl,
+    sendAsset: sendAsset,
     poll: poll,
     ack: ack,
     cancel: cancel
