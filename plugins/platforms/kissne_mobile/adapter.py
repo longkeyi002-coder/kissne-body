@@ -806,6 +806,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 user_id=installation,
             )
             await self.handle_message(event)
+            if getattr(event, "_gateway_accepted", False) and attachments:
+                await asyncio.to_thread(
+                    store.record_attachment_message, installation, turn_id, text,
+                    [{"type": item["type"], "mime_type": item["mime_type"],
+                      "label": str(item.get("label") or "")} for item in attachments])
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
             return _error_response("inbound_injection_failed", 503)
@@ -1026,6 +1031,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
             })
         history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
             identity["session_id"])
+        attachment_messages = await asyncio.to_thread(
+            self.device_store().attachment_messages, installation, self._history_cap)
+        if attachment_messages:
+            by_turn = {str(item.get("_turn_id") or ""): item for item in history if item.get("_turn_id")}
+            for saved in attachment_messages:
+                turn = str(saved.get("turn_id") or "")
+                if turn and turn in by_turn:
+                    by_turn[turn]["attachments"] = list(saved.get("attachments") or [])
+                elif turn:
+                    history.append({"role": "user", "text": str(saved.get("text") or ""),
+                                    "attachments": list(saved.get("attachments") or []),
+                                    "_turn_id": turn,
+                                    "created_at": float(saved.get("created_at") or 0)})
+            history.sort(key=lambda item: float(item.get("created_at") or 0))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
