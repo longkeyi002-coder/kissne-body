@@ -519,7 +519,8 @@
       + '</div>'
       + '<div class="dd__list">' + items.map(function (it) {
           return '<a class="dd__item' + (it.k === curKey ? ' is-active' : '') + '"'
-            + ' data-nav="#/chat?state=' + origin + '&' + param + '=' + it.k + '">'
+            + ' href="#/chat?state=' + origin + '&' + param + '=' + encodeURIComponent(it.k) + '"'
+            + ' data-model-choice="' + param + '" data-model-value="' + esc(it.k) + '">'
             + '<span class="dd__main"><span class="dd__v">' + esc(it.v) + '</span>'
             + '<span class="dd__d">' + esc(it.d) + '</span></span>'
             + (it.k === curKey ? icon('check', 16) : '') + '</a>';
@@ -1008,6 +1009,39 @@
       var list  = root.querySelector('.chatbody');
       if (!input || !send || !list) return null;
       var p = ctx && ctx.params;      /* 放在最前面：下面的 find / sticker 都要用 */
+
+      async function onModelChoice(e) {
+        var a = e.target && e.target.closest ? e.target.closest('[data-model-choice]') : null;
+        if (!a) return;
+        e.preventDefault();
+        var kind = a.getAttribute('data-model-choice');
+        var value = a.getAttribute('data-model-value') || 'auto';
+        var T0 = window.KissneTransport;
+        if (!T0 || !T0.hasToken || !T0.hasToken()) { location.hash = '#/connect'; return; }
+        var currentModel = 'auto', currentEffort = 'auto';
+        try {
+          currentModel = sessionStorage.getItem('kissne.current_model') || 'auto';
+          currentEffort = sessionStorage.getItem('kissne.current_effort') || 'auto';
+        } catch (ignore) {}
+        var model = kind === 'model' ? value : currentModel;
+        var effort = kind === 'effort' ? value : currentEffort;
+        a.classList.add('is-loading');
+        try {
+          await T0.setModel(model, effort);
+          try {
+            if (kind === 'model') sessionStorage.setItem('kissne.current_model', value);
+            else sessionStorage.setItem('kissne.current_effort', value);
+          } catch (ignore2) {}
+          var href = a.getAttribute('href');
+          if (href) location.hash = href.slice(href.indexOf('#') + 1);
+          refreshModelOptions();
+        } catch (err) {
+          a.classList.remove('is-loading');
+          a.setAttribute('title', (err && err.message) || '切换失败');
+          if (err && err.status === 401) location.hash = '#/connect';
+        }
+      }
+      root.addEventListener('click', onModelChoice);
 
       /* 我们自己的"程序化滚动"（打开就到底 / 发完消息 / 点胶囊跳过去）**不算已读**，
          否则一进聊天页就自动把未读清掉了。400ms 内的滚动事件一律忽略。 */
@@ -1637,6 +1671,7 @@
         list.removeEventListener('pointercancel', onMsgPointerEnd);
         list.removeEventListener('contextmenu', onMsgContext);
         root.removeEventListener('click', onMsgAction);
+        root.removeEventListener('click', onModelChoice);
         clearTimeout(holdTimer);
         send.removeEventListener('click', push);
         liveStopped = true;
