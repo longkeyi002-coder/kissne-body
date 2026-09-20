@@ -454,14 +454,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         reconstruct, or pin model/provider/context fields.  The lightweight presentation hint only
         tells the client that this exact text is a session-boundary notice.
         """
-        extra: Dict[str, Any] = {}
-        pending = await asyncio.to_thread(self.device_store().pending_turn, chat_id)
-        if isinstance(pending, dict):
-            inbound = str(pending.get("text") or "").strip().lower()
-            if inbound == "/new" or inbound == "/reset" or inbound.startswith("/new ") or inbound.startswith("/reset "):
-                extra["presentation"] = "session_reset"
+        # Keep the response byte-for-byte at the presentation boundary.  We deliberately do not
+        # infer model/provider/context from the text: those values belong to Hermes and may change.
         message_id = await self._queue_event(
-            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
+            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
