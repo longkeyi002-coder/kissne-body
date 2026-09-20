@@ -1352,11 +1352,15 @@
           var assistantRef = turnId ? ('turn:' + turnId + ':assistant') : String(event.message_ref || '');
           if (el && assistantRef) el.setAttribute('data-history-ref', assistantRef);
           function presentReply(text) {
-            var clean = String(text || '').trim();
+            // Presentation may split/collapse a long reply, but canonicalText remains the exact
+            // Hermes completion used by history, copy/retry and future re-rendering.
+            var canonicalText = String(text || '');
+            var clean = canonicalText.trim();
             if (clean.length > 1800) {
               var paras = clean.split(/\n\s*\n/).filter(Boolean);
               var summary = (paras[0] || clean).slice(0, 320) + ((paras[0] || clean).length > 320 ? '…' : '');
               liveText(el, summary, false);
+              if (el) el.setAttribute('data-canonical-reply', encodeURIComponent(canonicalText));
               var doc = '<button type="button" class="replydoc" data-full-reply="' + encodeURIComponent(clean) + '">'
                 + icon('file',15) + '<span><b>完整回复</b><small>' + clean.length + ' 字 · 点击查看</small></span></button>';
               append(aiMsg(doc, '', clockNow(), '', 'happy', assistantRef));
@@ -1365,8 +1369,13 @@
             var pieces = clean.length <= 420
               ? clean.split(/(?<=[。！？!?])\s*/).filter(Boolean)
               : clean.split(/\n\s*\n/).filter(Boolean);
-            if (pieces.length <= 1) { liveText(el, clean, false); return; }
+            if (pieces.length <= 1) {
+              liveText(el, clean, false);
+              if (el) el.setAttribute('data-canonical-reply', encodeURIComponent(canonicalText));
+              return;
+            }
             liveText(el, pieces.shift(), false);
+            if (el) el.setAttribute('data-canonical-reply', encodeURIComponent(canonicalText));
             pieces.forEach(function (part) {
               if (!part.trim()) return;
               append(aiMsg(esc(part.trim()), '', clockNow(), '', 'happy', assistantRef));
