@@ -456,8 +456,24 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """
         # Keep the response byte-for-byte at the presentation boundary.  We deliberately do not
         # infer model/provider/context from the text: those values belong to Hermes and may change.
+        # A Mobile-only hint is derived from the inbound command, never from reply contents.
+        extra: Dict[str, Any] = {}
+        turn_id = await asyncio.to_thread(self.device_store().pending_turn_id, chat_id)
+        if turn_id:
+            try:
+                rows = await asyncio.to_thread(self._mobile_history_rows, chat_id)
+                inbound_row = next(
+                    (row for row in reversed(rows)
+                     if str(row.get("message_ref") or "").startswith(str(turn_id))),
+                    None,
+                )
+            except Exception:
+                inbound_row = None
+            inbound = str((inbound_row or {}).get("text") or "").strip().lower()
+            if inbound == "/new" or inbound == "/reset" or inbound.startswith("/new ") or inbound.startswith("/reset "):
+                extra["presentation"] = "session_reset"
         message_id = await self._queue_event(
-            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
+            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
