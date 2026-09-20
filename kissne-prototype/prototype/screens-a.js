@@ -622,21 +622,7 @@
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
      之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
-  var CHAT_LOG = [
-    { who: 'ai', html: '连接已建立，我在。', time: '09:36' },
-    { who: 'me', html: '在吗？',            time: '09:40' },
-    { who: 'ai', html: '在的。',            time: '09:41' },
-    { who: 'me', html: '之前说的周末计划，你还记得吗？', time: '09:44' },
-    { who: 'ai', html: '记得：周六去美术馆，周日下午收拾房间。', time: '09:44' },
-    { who: 'ai', html: '今天想聊点什么？', time: '09:45' },
-    { who: 'me', html: '先看看记忆库写了什么。', time: '09:46' },
-    { who: 'ai', html: '记忆库里 12 条，最近一条就是「周末计划」。', time: '09:46' },
-    { who: 'me', html: '好，那就按这个来。', time: '09:47' },
-    { who: 'me', html: '晚点我还想出去走走。', time: '09:48' },
-    { who: 'ai', html: '好，我记着。要去公园吗？', time: '09:48' },
-    { who: 'me', html: '看情况吧。', time: '09:49' },
-    { who: 'ai', html: '行，随时叫我。', time: '09:49' }
-  ];
+  var CHAT_LOG = [];
   function clockNow() {
     var d = new Date();
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
@@ -663,15 +649,6 @@
     var list = document.querySelector('.chatbody');
     if (!list) return false;
     return list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
-  }
-  /* 演示用：塞两条"你没看见的"AI 消息，落到未读里 */
-  function seedUnread() {
-    ['顺便说一句，「美术馆」周六上午人少，我记下了。',
-     '你上次问的那个展，票根我放进记忆库了。'].forEach(function (t) {
-      CHAT_LOG.push({ who: 'ai', html: t, time: clockNow() });
-      if (!UNREAD.n) UNREAD.first = CHAT_LOG.length - 1;
-      UNREAD.n++;
-    });
   }
   K.unreadBadge = function () { return UNREAD.n; };
   /* 最近一次「通话记录行」写进聊天记录的时间，防止切状态重渲染时重复写 */
@@ -712,9 +689,6 @@
 
       /* 「我」这一侧的小羊头像换表情：离线/断网=睡着，上一条没发出去=委屈 */
       MY_AVA = (offline || netlost) ? 'sleep' : (bs === 'failed' ? 'sad' : 'idle');
-
-      /* 演示态：塞两条"你没看见的"AI 消息，让未读胶囊有东西可跳（只塞一次） */
-      if (s === 'unread' && !UNREAD_SEEDED) { UNREAD_SEEDED = true; seedUnread(); }
 
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
@@ -1317,9 +1291,9 @@
           return;
         }
 
-        for (var st = 0; st < seqTs.length; st++) clearTimeout(seqTs[st]);
-        seqTs = [];
-        runTurn(v);
+        /* 未连接时不伪造 AI 回复：保留用户输入并明确要求先连接真实设备。 */
+        append(sysMsg('尚未连接 Kissne 设备，消息未发送。', clockNow()));
+        location.hash = '#/connect';
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
@@ -1352,14 +1326,16 @@
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         pushLog({ who: 'me', html: html, time: clockNow() });
-        /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
-           先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
+        /* 真连接：把表情包原图作为 sticker attachment 交给 Mobile Transport。 */
         if (live) {
-          T.sendText('[表情包：' + s2.label + ']').then(function (accepted) {
+          var stickerUrl = K.stickerPath ? K.stickerPath(s2.k) : '';
+          T.sendAsset(stickerUrl, 'sticker', s2.label).then(function (accepted) {
             liveCurrentTurn = String((accepted && accepted.turn_id) || '');
             if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
             scheduleLivePoll(0);
-          }).catch(function () {});
+          }).catch(function () {
+            append(sysMsg('表情包发送失败，请重试。', clockNow()));
+          });
         }
         location.hash = '#/chat?state=' + stkState;      /* 收起面板 */
       }
