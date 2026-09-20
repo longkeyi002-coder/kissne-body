@@ -1239,55 +1239,15 @@
       }
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
-      /* 打字时**只有输入框自己抬起来**，打完字（失焦）自动落回。
-         聊天记录一动不动 —— 所以这里既不改聊天区的高度、也不主动滚动，
-         否则消息会被"推"上去。 */
+      /* 输入区保持在聊天页 flex 文档流底部。
+         真机软键盘出现/收起时由浏览器 visual viewport 调整可视区域，
+         不再手动写 bottom / transform / padding，避免 Android 收键盘后残留在半屏。 */
       var scr = root.querySelector('.screen--chat');
       var cwrap = root.querySelector('.composerwrap');
       function onFocus() { if (scr) scr.classList.add('is-typing'); }
-      function resetKbdStyles() {
-        if (scr) scr.classList.remove('is-real-kbd');
-        if (cwrap) cwrap.style.bottom = '';
-        list.style.paddingBottom = '';
-      }
-      function onBlur()  { if (scr) scr.classList.remove('is-typing'); resetKbdStyles(); }
+      function onBlur()  { if (scr) scr.classList.remove('is-typing'); }
       input.addEventListener('focus', onFocus);
       input.addEventListener('blur', onBlur);
-
-      /* —— 真实键盘检测 ——
-         Android 上 visualViewport 在键盘收起动画末尾可能不再派发可靠的 resize/scroll，
-         所以记录“无键盘”基准高度，并在每次 viewport 变化后做延迟二次校验。
-         14px 安全余量让输入框再高约 1–2mm，避免被键盘顶边遮住。 —— */
-      var vp = window.visualViewport;
-      var kbdBaseH = vp ? Math.max(window.innerHeight, vp.height) : window.innerHeight;
-      var kbdCheckT = null;
-      function syncKbd() {
-        if (!vp) return;
-        /* viewport 恢复时更新基准；键盘打开时基准保持为打开前的高度。 */
-        var visibleH = vp.height;
-        if (visibleH > kbdBaseH - 50) kbdBaseH = Math.max(kbdBaseH, visibleH, window.innerHeight);
-        var diff = Math.max(0, kbdBaseH - visibleH);
-        if (diff > 50) {
-          if (scr) scr.classList.add('is-real-kbd');
-          var lift = diff + 14;
-          if (cwrap) cwrap.style.bottom = lift + 'px';
-          list.style.paddingBottom = 'calc(16px + var(--composer-h) + ' + lift + 'px)';
-        } else {
-          resetKbdStyles();
-        }
-      }
-      function onVpResize() {
-        syncKbd();
-        clearTimeout(kbdCheckT);
-        /* 等 Android 键盘收起动画结束，再按最终 viewport 强制复位一次。 */
-        kbdCheckT = setTimeout(syncKbd, 180);
-        setTimeout(syncKbd, 420);
-      }
-      if (vp) {
-        vp.addEventListener('resize', onVpResize);
-        vp.addEventListener('scroll', onVpResize);
-        window.addEventListener('resize', onVpResize);
-      }
 
       /* —— 未读胶囊：显示 / 点击跳到最早那条未读 / 滚到底自动清掉 —— */
       var upill = root.querySelector('[data-unread]');
@@ -1356,13 +1316,7 @@
         input.removeEventListener('keydown', onKey);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
-        if (vp) {
-          vp.removeEventListener('resize', onVpResize);
-          vp.removeEventListener('scroll', onVpResize);
-          window.removeEventListener('resize', onVpResize);
-        }
-        clearTimeout(kbdCheckT);
-        resetKbdStyles();
+
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
