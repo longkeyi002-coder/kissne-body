@@ -832,15 +832,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 message_id=turn_id,
                 user_id=installation,
             )
-            await self.handle_message(event)
-            accepted = bool(getattr(event, "_gateway_accepted", False))
-            if accepted and attachments:
-                # Accepted may only mean queued. Persist when this exact event starts processing.
+            if attachments:
+                # Attach before admission: an immediately spawned background task may reach
+                # on_processing_start before handle_message() returns.
                 event._kissne_attachment_metadata = (
                     installation, turn_id, text,
                     [{"type": item["type"], "mime_type": item["mime_type"],
                       "label": str(item.get("label") or "")} for item in attachments],
                 )
+            await self.handle_message(event)
+            accepted = bool(getattr(event, "_gateway_accepted", False))
             # Accepted events are owned by BasePlatformAdapter's background task; its
             # on_processing_complete hook removes media only after the Runtime is done reading it.
             # Test doubles / refused events have no background owner, so clean them here.
