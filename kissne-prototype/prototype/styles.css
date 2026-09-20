@@ -1513,3 +1513,18 @@ body.is-shot .phone{
 }
 .composerquote span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .composerquote button{border:0;background:transparent;color:var(--ink-3);font-size:18px;line-height:1;padding:2px 4px}
+
+/* Durable reply preview. The target ref is canonical; this card is presentation only. */
+.msgquote{
+  display:flex;width:100%;min-width:0;flex-direction:column;align-items:flex-start;gap:2px;
+  margin:0 0 7px;padding:6px 8px;border:0;border-left:3px solid var(--blue-line);
+  border-radius:7px;background:rgba(255,255,255,.48);color:inherit;text-align:left;
+  font:inherit;cursor:pointer
+}
+.msg--ai .msgquote{max-width:100%;background:var(--g1)}
+.msgquote__author{font-size:10px;font-weight:700;color:var(--ink-2)}
+.msgquote__text{
+  display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11px;line-height:1.35;color:var(--ink-3)
+}
+.msgquote:active{opacity:.72}
