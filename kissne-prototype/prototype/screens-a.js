@@ -15,32 +15,87 @@
      ===================================================================== */
   K.registerScreen({
     no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
-    purpose: '开屏页：正中央 Kissne（Kiss 蓝 / ne 绿，莫兰迪）。进入后 logo 先出现，两个动物角色素材随后出现；冷启动才播放 morph 动画，播完自动进下一页；无解释文字、无底部入口。',
+    purpose: '开屏页：真实 Logo 分镜、叶青栩与小羊连续动作、最后双人贴贴；冷启动播放后自动进入下一页。',
     out: ['#/connect'],
     states: [
-      { key: 'final',   label: 'logo → 素材（默认）' },
-      { key: 'animate', label: '播放动画（冷启动）' },
-      { key: 'intro',   label: '定格 · 只有 logo' }
+      { key: 'final',   label: '定格 · 双人贴贴' },
+      { key: 'animate', label: '播放完整开屏动画' },
+      { key: 'intro',   label: '定格 · 只有 Logo' }
     ],
     render: function (ctx) {
       var s = ctx.state || 'final';
       var cls = 'splash' + (s === 'intro' ? ' is-intro' : (s === 'animate' ? ' is-animate' : ' is-final'));
+      function film(kind, count) {
+        var out = '';
+        for (var i = 0; i < count; i++) {
+          out += '<img src="assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png" alt=""' +
+            (i ? ' hidden' : '') + '>';
+        }
+        return '<div class="splash__film splash__film--' + kind + '" data-splash-film="' + kind + '">' + out + '</div>';
+      }
       return `
       <div class="screen screen--splash">
-        <!-- 冷启动开屏：真实 Kissne Logo → 叶青栩与小羊动作帧 → 双人贴贴定格 -->
         <div class="${cls}" data-nav="#/welcome?state=animate">
           <div class="splash__layer splash__logo">
-            <img src="assets/real/splash-generated/splash-logo.png" alt="Kissne">
+            ${film('logo', 4)}
           </div>
           <div class="splash__layer splash__actors" aria-hidden="true">
-            <span class="splash__sprite splash__sprite--fox"></span>
-            <span class="splash__sprite splash__sprite--sheep"></span>
+            ${film('fox', 8)}
+            ${film('sheep', 8)}
           </div>
-          <div class="splash__layer splash__duo">
-            <span class="splash__sprite splash__sprite--duo"></span>
+          <div class="splash__layer splash__duo" aria-hidden="true">
+            ${film('duo', 8)}
           </div>
         </div>
       </div>`;
+    },
+    mount: function (root, ctx) {
+      var state = ctx.state || 'final';
+      var timers = [];
+      function film(name) {
+        return root.querySelector('[data-splash-film="' + name + '"]');
+      }
+      function show(name, index) {
+        var box = film(name);
+        if (!box) return;
+        var imgs = box.querySelectorAll('img');
+        for (var i = 0; i < imgs.length; i++) imgs[i].hidden = i !== index;
+      }
+      function play(name, delay, every, count) {
+        var timer = setTimeout(function () {
+          var i = 0;
+          show(name, 0);
+          var interval = setInterval(function () {
+            i += 1;
+            if (i >= count) { clearInterval(interval); return; }
+            show(name, i);
+          }, every);
+          timers.push(interval);
+        }, delay);
+        timers.push(timer);
+      }
+      if (state === 'intro') {
+        show('logo', 0);
+        show('duo', 0);
+      } else if (state === 'final') {
+        show('logo', 0);
+        show('duo', 7);
+      } else {
+        show('logo', 0);
+        show('fox', 0);
+        show('sheep', 0);
+        show('duo', 0);
+        play('logo', 80, 170, 4);
+        play('fox', 920, 125, 8);
+        play('sheep', 920, 125, 8);
+        play('duo', 2140, 135, 8);
+      }
+      return function () {
+        for (var i = 0; i < timers.length; i++) {
+          clearTimeout(timers[i]);
+          clearInterval(timers[i]);
+        }
+      };
     }
   });
 
