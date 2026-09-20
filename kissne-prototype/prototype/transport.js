@@ -117,6 +117,7 @@
     };
     var attachments = Array.isArray(opts.attachments) ? opts.attachments : [];
     if (attachments.length) body.attachments = attachments;
+    if (opts.replyTo) body.reply_to = String(opts.replyTo);
     var sk = sessionKey();
     if (sk) body.session_key = sk;
     return request('/mobile/messages', { method: 'POST', body: body });
@@ -149,6 +150,15 @@
   async function sendAsset(url, type, label, messageId) {
     var attachment = await attachmentFromUrl(url, type, label);
     return sendMessage({ attachments: [attachment] }, messageId);
+  }
+  function history(before, limit) {
+    var q = '?limit=' + encodeURIComponent(limit || 50);
+    if (before) q += '&before=' + encodeURIComponent(before);
+    return request('/mobile/history' + q, { method: 'GET' });
+  }
+  function searchHistory(query, limit) {
+    return request('/mobile/search?q=' + encodeURIComponent(String(query || ''))
+      + '&limit=' + encodeURIComponent(limit || 20), { method: 'GET' });
   }
   function poll() { return request('/mobile/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
   async function ack(nextCursor) {
@@ -198,6 +208,8 @@
     blobToBase64: blobToBase64,
     attachmentFromUrl: attachmentFromUrl,
     sendAsset: sendAsset,
+    history: history,
+    searchHistory: searchHistory,
     poll: poll,
     ack: ack,
     cancel: cancel,
