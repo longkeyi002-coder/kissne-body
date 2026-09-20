@@ -1167,8 +1167,16 @@
       function hydrateHistory(history) {
         CHAT_LOG.length = 0;
         (history || []).forEach(function (item) {
-          if (!item || (item.role !== 'user' && item.role !== 'assistant')) return;
+          if (!item || !['user', 'assistant', 'system'].includes(item.role)) return;
           var text = typeof item.text === 'string' ? item.text : '';
+          if (item.role === 'system' && item.presentation === 'session_reset') {
+            if (!text.trim()) return;
+            CHAT_LOG.push({
+              who: 'sys', presentation: 'session_reset', text: text,
+              time: historyClock(item.created_at), ref: item.message_ref || ''
+            });
+            return;
+          }
           var attachments = Array.isArray(item.attachments) ? item.attachments : [];
           if (!text.trim() && !attachments.length) return;
           var parts = [];
@@ -1296,6 +1304,16 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
+          if (event.presentation === 'session_reset') {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+            append(sessionResetMsg(finalText, clockNow(), event.notice_id ? 'notice:' + event.notice_id : ''));
+            CHAT_LOG.push({
+              who: 'sys', presentation: 'session_reset', text: finalText,
+              time: clockNow(), ref: event.notice_id ? 'notice:' + event.notice_id : ''
+            });
+            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+            return;
+          }
            function presentReply(text) {
             var clean = String(text || '').trim();
              if (clean.length > 1800) {
@@ -1667,7 +1685,10 @@
           var page = await T.history(historyBefore, 50);
           var rows = (page && page.messages) || [];
           var html = rows.map(function (item) {
-            var text = esc(String(item.text || ''));
+            var raw = String(item.text || '');
+            if (item.role === 'system' && item.presentation === 'session_reset')
+              return sessionResetMsg(raw, historyClock(item.created_at), item.message_ref);
+            var text = esc(raw);
             return item.role === 'assistant'
               ? aiMsg(text, '', historyClock(item.created_at), '', '', item.message_ref)
               : meMsg(text, '', historyClock(item.created_at), '', item.message_ref);
