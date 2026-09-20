@@ -23,8 +23,8 @@
      在应用内切回 #/welcome 不会重播。 */
   var COLD = true;
   var splashTimer = null;
-  var SPLASH_MS = 3000;          /* 动画 2.9s + 停留 0.7s */
-  var SPLASH_NEXT = '#/chat';     /* 本轮先完成开屏 + 人人星，动画后直接进入人人星 */
+  var SPLASH_MS = 3600;          /* 动画 2.9s + 停留 0.7s */
+  var SPLASH_NEXT = '#/connect';  /* 动画播完的落点 */
 
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {

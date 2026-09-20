@@ -14,30 +14,31 @@
      01 欢迎 / 入口页
      ===================================================================== */
   K.registerScreen({
-    no: '01', id: 'welcome', name: 'Kissne 开屏', route: '#/welcome', tab: null,
-    purpose: 'Kissne 冷启动开屏。使用已经确认的 8 帧开屏素材，播放结束后进入人人星。',
-    out: ['#/chat'],
+    no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
+    purpose: '开屏页：正中央 Kissne（Kiss 蓝 / ne 绿，莫兰迪）。进入后 logo 先出现，两个动物角色素材随后出现；冷启动才播放 morph 动画，播完自动进下一页；无解释文字、无底部入口。',
+    out: ['#/connect'],
     states: [
-      { key: 'final',   label: '定格 · 最后一帧' },
-      { key: 'animate', label: '播放 8 帧开屏' }
+      { key: 'final',   label: 'logo → 素材（默认）' },
+      { key: 'animate', label: '播放动画（冷启动）' },
+      { key: 'intro',   label: '定格 · 只有 logo' }
     ],
     render: function (ctx) {
       var s = ctx.state || 'final';
-      var frames = '';
-      for (var i = 0; i < 8; i++) {
-        var n = (i < 10 ? '0' : '') + i;
-        frames += '<img class="splashframe splashframe--' + i + '"'
-          + ' src="assets/real/splash/frame-' + n + '.png"'
-          + ' alt="" aria-hidden="true" draggable="false">';
-      }
+      var cls = 'splash' + (s === 'intro' ? ' is-intro' : (s === 'animate' ? ' is-animate' : ' is-final'));
       return `
       <div class="screen screen--splash">
-        <div class="splashv2 ${s === 'animate' ? 'is-animate' : 'is-final'}" data-nav="#/chat">
-          <div class="splashv2__fallback" aria-hidden="true">
+        <!-- 默认态无需点击：logo 先淡入，素材随后淡入。
+             点击整屏只是「重播 morph 动画」，不是看到 logo 的前提。 -->
+        <div class="${cls}" data-nav="#/welcome?state=animate">
+          <div class="splash__layer splash__logo">
             <span class="lg-kiss">Kiss</span><span class="lg-ne">ne</span>
           </div>
-          <div class="splashseq">${frames}</div>
-          <div class="splashv2__skip">轻触进入</div>
+          <div class="splash__layer splash__duo">
+            <div class="duo__pair">
+              <div class="duo__item duo__item--fox">${ph('FOX_SPLASH_CHARACTER', { size: 118 })}</div>
+              <div class="duo__item duo__item--sheep">${ph('SHEEP_SPLASH_CHARACTER', { size: 118 })}</div>
+            </div>
+          </div>
         </div>
       </div>`;
     }
@@ -308,8 +309,12 @@
      本阶段按占位示例摆放：模型名用 Hermes 风格的示例名（非真实模型表），
      真实列表由 Hermes 返回后整体替换。 */
   var MODELS = [
-    { k: 'auto',    v: '跟随主模型',   d: '与 Hermes Dashboard 当前主模型保持一致' },
-    { k: 'current', v: '当前会话模型', d: '接入后显示本会话实际模型' }
+    { k: 'auto',  v: '自动',             d: '跟随 Hermes 当前可用模型' },
+    { k: 'lite',  v: 'Hermes-Lite',      d: '示例模型 · 轻快档' },
+    { k: 'std',   v: 'Hermes-Standard',  d: '示例模型 · 均衡档' },
+    { k: 'pro',   v: 'Hermes-Pro',       d: '示例模型 · 能力档' },
+    { k: 'max',   v: 'Hermes-Max',       d: '示例模型 · 满血档' },
+    { k: 'local', v: '本地模型（示例）',  d: '跑在设备本地，不联网' }
   ];
   var EFFORTS = [
     { k: 'auto', v: '自动', d: '按问题难度由 Hermes 决定' },
@@ -330,7 +335,7 @@
   function dropdown(title, items, curKey, param, origin) {
     return '<div class="dd">'
       + '<div class="dd__head"><span>' + esc(title) + '</span>'
-      + '</div>'
+      + '<span class="dd__tag">占位示例</span></div>'
       + '<div class="dd__list">' + items.map(function (it) {
           return '<a class="dd__item' + (it.k === curKey ? ' is-active' : '') + '"'
             + ' data-nav="#/chat?state=' + origin + '&' + param + '=' + it.k + '">'
@@ -338,7 +343,7 @@
             + '<span class="dd__d">' + esc(it.d) + '</span></span>'
             + (it.k === curKey ? icon('check', 16) : '') + '</a>';
         }).join('') + '</div>'
-      + '<div class="dd__foot">与 Hermes 模型设置同步</div>'
+      + '<div class="dd__foot">以上为占位示例，真实供应商 / 档位列表由 Hermes 返回</div>'
       + '</div>';
   }
 
@@ -518,7 +523,7 @@
     { k: '语音通话',   t: '09:31', g: '更早 · 09-15' }
   ];
   function logRender() {
-    return '<div class="chatdate"><span>今天</span></div>' + CHAT_LOG.map(function (m) {
+    return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
       return m.who === 'ai' ? aiMsg(m.html, m.cls || '', m.time) : meMsg(m.html, m.meta || '', m.time);
     }).join('');
@@ -530,7 +535,7 @@
     out: ['#/home', '#/connect', '#/device'],
     states: CHAT_STATES,
     render: function (ctx) {
-      var s = ctx.state || 'normal';
+      var s = ctx.state || 'empty';
       var offline = s === 'device-offline';
       var netlost = s === 'network-lost';
       /* 下拉展开态：底下照常显示一段对话，菜单浮在上面 */
@@ -598,7 +603,7 @@
       /* 菜单是从哪个状态点开的：选中后回到那里（从侧栏直接切到菜单态时兜底到空态） */
       var origin = (q && q.get('from')) || '';
       if (!origin || origin === 'model-menu' || origin === 'effort-menu') {
-        origin = menu ? 'normal' : s;
+        origin = menu ? 'empty' : s;
       }
 
       /* --- 消息列表：来自模块级聊天记录（切页不丢）--- */
@@ -759,36 +764,17 @@
       <div class="screen screen--chat${typing ? ' is-typing' : ''}">
         <!-- 顶端：左=叶青栩，中=模型 / 思考强度（都可点开下拉，列表由 Hermes 提供）。
              不放头像与右上角表情。字号刻意压小，不要抢消息区的视觉。 -->
-        <div class="chatnavscrim" data-chat-close></div>
-        <aside class="chatnav" aria-label="人人星会话列表">
-          <div class="chatnav__top">
-            <div><b>人人星</b><span>对话</span></div>
-            <button class="iconbtn" type="button" data-chat-close aria-label="关闭">×</button>
-          </div>
-          <div class="chatnav__actions">
-            <button type="button" data-nav="#/chat?state=empty">${icon('plus', 16)}<span>新建对话</span></button>
-            <button type="button" data-nav="#/chat?state=search">${icon('search', 16)}<span>搜索对话</span></button>
-          </div>
-          <div class="chatnav__group">今天</div>
-          <a class="chatnav__item is-active" data-nav="#/chat"><b>周末计划</b><span>刚刚</span></a>
-          <a class="chatnav__item" data-nav="#/chat"><b>原型 UI 讨论</b><span>07:10</span></a>
-          <div class="chatnav__group">昨天</div>
-          <a class="chatnav__item" data-nav="#/chat"><b>记忆库整理</b><span>昨天</span></a>
-          <a class="chatnav__item" data-nav="#/chat"><b>小机星</b><span>昨天</span></a>
-        </aside>
         <header class="chathead">
-          <button class="iconbtn chathead__menu" type="button" data-chat-open aria-label="会话列表"><span class="chatmenu-glyph">☰</span></button>
-          <div class="chathead__identity">
-            <span class="chathead__name">人人星</span>
-            <span class="chathead__who">叶青栩</span>
-          </div>
+          <button class="iconbtn chathead__back" data-nav="#/home" aria-label="返回">${icon('back')}</button>
+          <span class="chathead__name">叶青栩</span>
+          <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
             <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-nav="#/chat?state=model-menu&from=${origin}">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-nav="#/chat?state=effort-menu&from=${origin}">
-              <span class="hsel__k">思考</span><span class="hsel__v">${esc(curEffort.v)}</span>${icon('chevron', 11, 'hsel__car')}
+              <span class="hsel__k">思考强度</span><span class="hsel__v">${esc(curEffort.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
           </div>
         </header>
@@ -880,19 +866,6 @@
           if (clr) clr.removeEventListener('click', onClear);
         };
       }
-
-      var navPanel = root.querySelector('.chatnav');
-      var navScrim = root.querySelector('.chatnavscrim');
-      var navBtn = root.querySelector('[data-chat-open]');
-      var navClose = root.querySelectorAll('[data-chat-close]');
-      function setChatNav(open) {
-        if (navPanel) navPanel.classList.toggle('is-open', !!open);
-        if (navScrim) navScrim.classList.toggle('is-open', !!open);
-      }
-      function openChatNav() { setChatNav(true); }
-      function closeChatNav() { setChatNav(false); }
-      if (navBtn) navBtn.addEventListener('click', openChatNav);
-      for (var nc = 0; nc < navClose.length; nc++) navClose[nc].addEventListener('click', closeChatNav);
 
       var input = root.querySelector('input.composer__input');
       var send  = root.querySelector('.sendbtn');
@@ -1147,8 +1120,6 @@
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
         send.removeEventListener('click', push);
-        if (navBtn) navBtn.removeEventListener('click', openChatNav);
-        for (var nk = 0; nk < navClose.length; nk++) navClose[nk].removeEventListener('click', closeChatNav);
         /* 演出用的一串定时器：切页/重渲染时必须全清，
            否则会在已经销毁的 DOM 上继续改东西 */
         for (var sq = 0; sq < seqTs.length; sq++) clearTimeout(seqTs[sq]);
