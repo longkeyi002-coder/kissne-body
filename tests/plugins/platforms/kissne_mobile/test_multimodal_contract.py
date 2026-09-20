@@ -267,3 +267,79 @@ def test_bootstrap_restores_attachment_presentation_metadata(tmp_path):
     ]
     # Presentation persistence must never put the original base64/binary payload into bootstrap.
     assert "data" not in restored[0]["attachments"][0]
+
+
+def test_cancelled_attachment_turn_is_not_restored_by_bootstrap(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+
+            async def accepted(event):
+                event._gateway_accepted = True
+
+            adapter.handle_message = accepted
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                sent, sent_payload, _ = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "cancel-media-1", "attachments": [_attachment()]},
+                )
+                turn_id = sent_payload["turn_id"]
+                cancelled, _, _ = await http(
+                    port, "POST", "/cancel", token=token, body={"turn_id": turn_id},
+                )
+                boot_status, boot, _ = await http(
+                    port, "POST", "/bootstrap", token=token, body={"cursor": 0},
+                )
+            finally:
+                await stop(adapter)
+        return sent, cancelled, boot_status, turn_id, boot
+
+    sent, cancelled, boot_status, turn_id, boot = run(scenario())
+    assert sent == 202
+    assert cancelled == 200
+    assert boot_status == 200
+    assert all(row.get("_turn_id") != turn_id for row in boot["history"])
+
+
+def test_attachment_retry_does_not_inject_or_materialize_twice(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            injected = []
+            materialized = []
+            original = adapter._materialize_attachments
+
+            def track(items):
+                materialized.append(1)
+                return original(items)
+
+            async def accepted(event):
+                injected.append(event.message_id)
+                event._gateway_accepted = False
+
+            adapter._materialize_attachments = track
+            adapter.handle_message = accepted
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                body = {"message_id": "retry-media-1", "attachments": [_attachment()]}
+                first, first_payload, _ = await http(port, "POST", "/messages", token=token, body=body)
+                retry, retry_payload, _ = await http(port, "POST", "/messages", token=token, body=body)
+            finally:
+                await stop(adapter)
+        return first, first_payload, retry, retry_payload, injected, materialized
+
+    first, first_payload, retry, retry_payload, injected, materialized = run(scenario())
+    assert first == 202
+    assert retry == 200 and retry_payload.get("duplicate") is True
+    assert retry_payload["turn_id"] == first_payload["turn_id"]
+    assert len(injected) == 1
+    assert len(materialized) == 1
