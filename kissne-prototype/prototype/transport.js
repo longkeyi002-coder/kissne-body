@@ -177,6 +177,7 @@
     bootstrap: bootstrap,
     sendMessage: sendMessage,
     sendText: sendText,
+    blobToBase64: blobToBase64,
     attachmentFromUrl: attachmentFromUrl,
     sendAsset: sendAsset,
     poll: poll,
