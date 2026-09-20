@@ -577,6 +577,20 @@ class DeviceStore:
                 (installation, handle, str(text or ""), json.dumps(safe, ensure_ascii=False), time.time()))
             conn.commit()
 
+    def delete_attachment_message(self, installation_id: str, turn_id: str) -> None:
+        """Remove presentation metadata for a turn that will never be part of history."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "DELETE FROM attachment_messages WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            )
+            conn.commit()
+
     def attachment_messages(self, installation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         installation = self._installation(installation_id)
         with self._lock:
