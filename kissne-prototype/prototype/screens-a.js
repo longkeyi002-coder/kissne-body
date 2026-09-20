@@ -1027,7 +1027,7 @@
 
       async function flushComposeBatch() {
         clearTimeout(composeTimer);
-        if (composeBatch.length && live) { flushComposeBatch(); } composeTimer = null;
+        composeTimer = null;
         if (!composeBatch.length || !live) return;
         var batch = composeBatch.splice(0);
         var merged = batch.map(function (x) { return x.text; }).join('\n');
@@ -1232,7 +1232,6 @@
       }
       function scheduleLivePoll(ms) {
         clearTimeout(livePollTimer);
-        list.removeEventListener('click', onApprovalClick);
         if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
       }
       async function livePoll() {
@@ -1588,6 +1587,7 @@
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
+        list.removeEventListener('click', onApprovalClick);
         list.removeEventListener('pointerdown', onMsgPointerDown);
         list.removeEventListener('pointerup', onMsgPointerEnd);
         list.removeEventListener('pointercancel', onMsgPointerEnd);
