@@ -907,6 +907,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._install_mobile_approval_notify(installation)
         media_paths: List[str] = []
         try:
+            if quoted is not None and reply_ref:
+                await asyncio.to_thread(
+                    store.record_reply_link, installation, turn_id, reply_ref,
+                    str(quoted.get("role") or ""), str(quoted.get("text") or ""),
+                )
             if attachments:
                 media_paths = self._materialize_attachments(attachments)
             message_type = MessageType.TEXT
@@ -938,6 +943,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 reply_to_text=str(quoted.get("text") or "") if quoted else None,
                 reply_to_author_name=(
                     "叶青栩" if quoted and quoted.get("role") == "assistant" else
+                    "系统" if quoted and quoted.get("role") == "system" else
                     "用户" if quoted else None
                 ),
                 reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
@@ -959,6 +965,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 self._cleanup_inbound_media(event)
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
+            if reply_ref:
+                try:
+                    await asyncio.to_thread(store.delete_reply_link, installation, turn_id)
+                except Exception:
+                    logger.warning("[kissne_mobile] failed to clean reply link", exc_info=True)
             for path in media_paths:
                 try:
                     os.unlink(path)
@@ -1160,10 +1171,35 @@ class KissneMobileAdapter(BasePlatformAdapter):
         )
 
     def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
-        """Flatten this installation's /new-separated transcripts into one chronological timeline."""
+        """Flatten /new-separated transcripts into one canonical Mobile timeline.
+
+        New Mobile turns use a stable public turn:<turn_id>:user|assistant reference, so a live
+        message can be quoted immediately and keep the same reference after reload. Foreign/legacy
+        transcript rows fall back to the historical session/index reference.
+        """
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
+
+        try:
+            saved_attachments = self.device_store().attachment_messages(installation, 500)
+        except Exception:
+            logger.warning("[kissne_mobile] attachment history read failed", exc_info=True)
+            saved_attachments = []
+        attachments_by_turn = {
+            str(item.get("turn_id") or ""): list(item.get("attachments") or [])
+            for item in saved_attachments if str(item.get("turn_id") or "")
+        }
+        try:
+            saved_replies = self.device_store().reply_links(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] reply-link history read failed", exc_info=True)
+            saved_replies = []
+        replies_by_turn = {
+            str(item.get("turn_id") or ""): item
+            for item in saved_replies if str(item.get("turn_id") or "")
+        }
+
         rows: List[Dict[str, Any]] = []
         seen: set[tuple[str, int]] = set()
         for session in self._mobile_history_sessions(installation):
@@ -1175,24 +1211,60 @@ class KissneMobileAdapter(BasePlatformAdapter):
             except Exception:
                 logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
                 continue
+
+            active_mobile_turn = ""
             for index, row in enumerate(transcript):
                 if not isinstance(row, dict):
                     continue
                 role = str(row.get("role") or "").strip().lower()
-                text = row.get("content", row.get("text"))
-                if role not in {"user", "assistant"} or not isinstance(text, str) or not text.strip():
+                if role not in {"user", "assistant"}:
                     continue
+
+                mobile_turn = ""
+                if role == "user":
+                    candidate = str(row.get("message_id") or "").strip()
+                    active_mobile_turn = candidate if candidate.startswith("kbm_turn_") else ""
+                    mobile_turn = active_mobile_turn
+                else:
+                    mobile_turn = active_mobile_turn
+                    active_mobile_turn = ""
+
+                text = row.get("content", row.get("text"))
+                if not isinstance(text, str):
+                    text = ""
+                attachments = attachments_by_turn.get(mobile_turn, []) if role == "user" else []
+                if not text.strip() and not attachments:
+                    continue
+
                 stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
                 stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
                 dedupe = (session_id, index)
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
-                rows.append({
-                    "message_ref": f"{session_id}:{index}",
-                    "role": role, "text": text, "created_at": stamp,
-                    # Session identity is intentionally omitted from the public presentation.
-                })
+
+                message_ref = (
+                    f"turn:{mobile_turn}:{role}"
+                    if mobile_turn else f"{session_id}:{index}"
+                )
+                item: Dict[str, Any] = {
+                    "message_ref": message_ref,
+                    "role": role,
+                    "text": text,
+                    "created_at": stamp,
+                }
+                if attachments:
+                    item["attachments"] = attachments
+                if role == "user" and mobile_turn:
+                    link = replies_by_turn.get(mobile_turn)
+                    if link:
+                        item["reply_to"] = str(link.get("reply_to") or "")
+                        item["reply_preview"] = {
+                            "role": str(link.get("quoted_role") or ""),
+                            "text": str(link.get("quoted_text") or ""),
+                        }
+                rows.append(item)
+
         # Command replies such as /new are produced outside normal assistant transcript storage.
         # Merge their verbatim durable presentation rows into the same user-visible timeline.
         try:
