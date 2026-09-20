@@ -161,6 +161,15 @@
   function cancel(turnId) {
     return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
+  function modelOptions() {
+    return request('/mobile/model-options', { method: 'GET' });
+  }
+  function setModel(model, effort) {
+    var body = {};
+    if (model && model !== 'auto') body.model = String(model);
+    if (effort && effort !== 'auto') body.effort = String(effort);
+    return request('/mobile/set-model', { method: 'POST', body: body });
+  }
   function decideApproval(approvalId, decision, scope, reason) {
     var body = {
       approval_id: String(approvalId || ''),
@@ -192,6 +201,8 @@
     poll: poll,
     ack: ack,
     cancel: cancel,
+    modelOptions: modelOptions,
+    setModel: setModel,
     decideApproval: decideApproval
   };
 })();
