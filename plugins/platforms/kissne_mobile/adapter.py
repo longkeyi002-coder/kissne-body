@@ -481,6 +481,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             candidate = await asyncio.to_thread(store.turn, reply_anchor)
             if candidate and str(candidate.get("installation_id") or "") == str(chat_id or "").strip():
                 target_turn = reply_anchor
+        # Some BasePlatformAdapter/test paths do not pass reply_to back on final delivery. In that
+        # case the only pending mobile turn is still the canonical correlation target. This preserves
+        # the historical transport contract while exact reply_to remains preferred when available.
+        if not target_turn:
+            target_turn = await asyncio.to_thread(store.pending_turn_id, chat_id) or ""
 
         # BasePlatformAdapter final delivery replies to the triggering MessageEvent.message_id.
         # Mobile deliberately sets that id to its server turn_id, so an exact target proves this is
