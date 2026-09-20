@@ -188,6 +188,17 @@ class DeviceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_timeline_notices_installation
                 ON timeline_notices (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS reply_links (
+                installation_id TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                reply_to        TEXT NOT NULL,
+                quoted_role     TEXT NOT NULL,
+                quoted_text     TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                PRIMARY KEY (installation_id, turn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reply_links_installation
+                ON reply_links (installation_id, created_at);
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
@@ -650,6 +661,53 @@ class DeviceStore:
         return [
             {"notice_id": str(row["notice_id"]), "presentation": str(row["presentation"] or ""),
              "text": str(row["text"] or ""), "created_at": float(row["created_at"])}
+            for row in rows
+        ]
+
+    def record_reply_link(self, installation_id: str, turn_id: str, reply_to: str,
+                          quoted_role: str, quoted_text: str) -> None:
+        """Persist one Mobile reply relation without copying Runtime conversation ownership."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        target = str(reply_to or "").strip()
+        if not handle or not target:
+            raise ValueError("turn_id and reply_to are required")
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO reply_links "
+                "(installation_id, turn_id, reply_to, quoted_role, quoted_text, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (installation, handle, target, str(quoted_role or ""),
+                 str(quoted_text or ""), time.time()),
+            )
+            conn.commit()
+
+    def delete_reply_link(self, installation_id: str, turn_id: str) -> None:
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "DELETE FROM reply_links WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            )
+            conn.commit()
+
+    def reply_links(self, installation_id: str) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT turn_id, reply_to, quoted_role, quoted_text, created_at FROM reply_links "
+                "WHERE installation_id = ? ORDER BY created_at ASC",
+                (installation,),
+            ).fetchall()
+        return [
+            {"turn_id": str(row["turn_id"]), "reply_to": str(row["reply_to"]),
+             "quoted_role": str(row["quoted_role"] or ""), "quoted_text": str(row["quoted_text"] or ""),
+             "created_at": float(row["created_at"])}
             for row in rows
         ]
 
