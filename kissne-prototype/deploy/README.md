@@ -5,7 +5,7 @@
 部署后：
 
 - UI：`https://yeqingxu.cyou/kissne/`
-- API：同源根路径 `/pair`、`/bootstrap`、`/messages`、`/cancel`
+- API：同源根路径 `/mobile/pair`、`/mobile/bootstrap`、`/mobile/messages`、`/mobile/cancel`
 - `transport.js` 在 HTTPS 页面下默认使用 `location.origin`，因此不需要额外填写 API 域名。
 - 现有 Mobile Adapter 仍只负责四个公网接口；静态文件由 nginx 直接提供。
 
@@ -17,7 +17,7 @@
 include /etc/nginx/snippets/kissne-prototype.conf;
 ```
 
-不要创建第二个 `server_name yeqingxu.cyou`，也不要改已有四个 API 的反代 `location`。
+不要创建第二个 `server_name yeqingxu.cyou`，也不要改已有 `/mobile/*` API 的反代 `location`。
 
 然后在仓库根目录执行：
 
@@ -32,6 +32,6 @@ bash kissne-prototype/deploy/deploy.sh
 3. 检查 nginx 是否实际加载该 location；
 4. 执行 `nginx -t`；
 5. reload nginx；
-6. 回读 `/kissne/`，并验证 `/bootstrap /messages /cancel` 未认证请求仍为 401。
+6. 回读 `/kissne/`，并验证 `/mobile/bootstrap /mobile/messages /mobile/cancel` 未认证请求仍为 401。
 
 如果现网 nginx vhost 还没 include snippet，脚本会**停止在 reload 前**并输出需要加入的单行 include，不会猜配置文件或覆盖现有 vhost。

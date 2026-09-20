@@ -98,11 +98,11 @@
     if (sk) setSessionKey(sk);
     var body = { pairing_code: code, installation_id: installationId() };
     if (sk) body.session_key = sk;
-    var out = await request('/pair', { method: 'POST', body: body, auth: false, base: base });
+    var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) { set(KEY.token, out.device_token); set(KEY.cursor, '0'); }
     return out;
   }
-  function bootstrap() { return request('/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
+  function bootstrap() { return request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
   function makeMessageId() {
     var r = '';
     try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -113,18 +113,18 @@
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
     var sk = sessionKey();
     if (sk) body.session_key = sk;
-    return request('/messages', { method: 'POST', body: body });
+    return request('/mobile/messages', { method: 'POST', body: body });
   }
-  function poll() { return request('/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
+  function poll() { return request('/mobile/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
   async function ack(nextCursor) {
     var n = Number(nextCursor);
     if (!isFinite(n) || n < 0) return { ok: false };
-    var out = await request('/messages', { method: 'POST', body: { ack: { cursor: n } } });
+    var out = await request('/mobile/messages', { method: 'POST', body: { ack: { cursor: n } } });
     set(KEY.cursor, String(n));
     return out;
   }
   function cancel(turnId) {
-    return request('/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
+    return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
 
   window.KissneTransport = {

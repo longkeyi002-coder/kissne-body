@@ -38,7 +38,7 @@ Add this line INSIDE the existing HTTPS server block for yeqingxu.cyou:
     include ${SNIPPET_DEST};
 
 Do not create another server { } block and do not change the existing
-/pair /bootstrap /messages /cancel proxy locations.
+/mobile/pair /mobile/bootstrap /mobile/messages /mobile/cancel proxy locations.
 
 Then run this script again.
 EOF
@@ -54,7 +54,7 @@ curl -fsS -o /dev/null -w 'UI /kissne/: %{http_code}\n'   https://yeqingxu.cyou/
 
 # Token endpoints should be reachable on the SAME origin and reject unauthenticated
 # access with 401. /pair is POST-only; GET may be 405 and that is acceptable here.
-for path in bootstrap messages cancel; do
+for path in mobile/bootstrap mobile/messages mobile/cancel; do
   code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST     -H 'Content-Type: application/json' -d '{}'     "https://yeqingxu.cyou/${path}")"
   printf 'API /%s unauthenticated: %s\n' "${path}" "${code}"
   if [[ "${code}" != "401" ]]; then
