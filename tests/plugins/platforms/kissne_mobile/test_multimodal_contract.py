@@ -510,7 +510,7 @@ def test_post_approval_timeout_carries_exact_request_id(monkeypatch):
     observed = []
 
     monkeypatch.setattr(waitmod, "_poll_event", lambda *args, **kwargs: "timeout")
-    monkeypatch.setattr(waitmod, "_fire_approval_hook",
+    monkeypatch.setattr(waitmod._ctx, "_fire_approval_hook",
                         lambda hook, **kwargs: observed.append((hook, kwargs)))
     result = waitmod._await_gateway_decision(
         "kissne_mobile:dm:inst-timeout", {"request_id": "approval-timeout-a",
