@@ -1105,6 +1105,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
         if not moved:
             return _error_response("turn_not_cancellable", 409)
+        # A cancelled pending turn must not reappear as a synthetic attachment-only
+        # history row on the next bootstrap.
+        await asyncio.to_thread(store.delete_attachment_message, installation, turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_CANCELLED,
             {"turn_id": turn_id}, turn_id, cap=max(1, self._outbound_cap))
