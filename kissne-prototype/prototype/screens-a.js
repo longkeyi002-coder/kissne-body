@@ -575,8 +575,8 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
-  function aiMsg(html, cls, time, tag, state) {
-    return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
+  function aiMsg(html, cls, time, tag, state, ref) {
+    return '<div class="msg msg--ai"' + (ref ? ' data-history-ref="' + esc(ref) + '"' : '') + '>' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body"><div class="msg__text' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
@@ -589,9 +589,9 @@
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
   var MSG_SEQ = 0;
-  function meMsg(html, meta, time, state) {
+  function meMsg(html, meta, time, state, ref) {
     var mid = 'local-msg-' + (++MSG_SEQ);
-    return '<div class="msg msg--me" data-msg-id="' + mid + '" tabindex="0">' + ava('USER_AVATAR', '我', state || MY_AVA)
+    return '<div class="msg msg--me" data-msg-id="' + mid + '"' + (ref ? ' data-history-ref="' + esc(ref) + '"' : '') + ' tabindex="0">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
@@ -691,7 +691,7 @@
   function logRender() {
     return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
-      return m.who === 'ai' ? aiMsg(m.html, m.cls || '', m.time) : meMsg(m.html, m.meta || '', m.time);
+      return m.who === 'ai' ? aiMsg(m.html, m.cls || '', m.time, '', '', m.ref) : meMsg(m.html, m.meta || '', m.time, '', m.ref);
     }).join('');
   }
 
@@ -988,7 +988,7 @@
             var matches = data.results || [];
             listEl.innerHTML = matches.map(function (m) {
               var when = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : '';
-              return '<button class="srch__row" type="button" data-history-ref="' + esc(m.message_ref || '') + '">'
+              return '<button class="srch__row" type="button" data-nav="#/chat?ref=' + encodeURIComponent(m.message_ref || '') + '">'
                 + '<span class="srch__kw">' + esc(String(m.text || '').slice(0, 120)) + '</span>'
                 + '<span class="srch__t">' + esc(when) + '</span></button>';
             }).join('') || '<div class="srch__empty">没有找到相关消息</div>';
@@ -1067,7 +1067,7 @@
       /* 打开就停在最新一条（不然记录一长，进来先看到几十条之前的旧消息）。
          用 find 定位进来时不动，交给下面的定位逻辑滚。 */
       var bootT = null;
-      if (!(p && p.get('find'))) {
+      if (!(p && (p.get('find') || p.get('ref')))) {
         jumpTo(list.scrollHeight);
         bootT = setTimeout(function () { scrollGuard = Date.now() + 400; list.scrollTop = list.scrollHeight; }, 40);
       }
@@ -1092,6 +1092,10 @@
       var COMPOSE_IDLE_MS = 2500;
       var COMPOSE_MAX_WAIT_MS = 15000;
       var liveApprovals = Object.create(null);
+      var historyBefore = '';
+      var historyHasMore = false;
+      var historyLoading = false;
+      var pendingReply = null;
 
       async function flushComposeBatch() {
         clearTimeout(composeTimer);
@@ -1100,7 +1104,7 @@
         var batch = composeBatch.splice(0);
         var merged = batch.map(function (x) { return x.text; }).join('\n');
         try {
-          var accepted = await T.sendText(merged, batch[0].messageId);
+          var accepted = await T.sendMessage({ text: merged, replyTo: batch[0].replyTo || '' }, batch[0].messageId);
           batch.forEach(function (x) {
             if (x.node) { x.node.classList.remove('is-send-pending'); var m=x.node.querySelector('.msg__meta'); if(m)m.textContent=''; }
           });
@@ -1130,7 +1134,9 @@
       }
       function queueComposeText(text, node) {
         if (!composeBatch.length) composeBatchStartedAt = Date.now();
-        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length });
+        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length, replyTo: pendingReply && pendingReply.ref });
+        pendingReply = null;
+        var quoteNode = root.querySelector('.composerquote'); if (quoteNode) quoteNode.remove();
         if (composeBatch.length >= 12) { flushComposeBatch(); return; }
         scheduleComposeFlush();
       }
@@ -1170,7 +1176,8 @@
           CHAT_LOG.push({
             who: item.role === 'user' ? 'me' : 'ai',
             html: parts.join(''),
-            time: historyClock(item.created_at)
+            time: historyClock(item.created_at),
+            ref: item.message_ref || ''
           });
         });
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
@@ -1341,7 +1348,10 @@
         try {
           var boot = await T.bootstrap();
           if (!boot || !boot.bound) { live = false; location.hash = '#/connect'; return; }
-          hydrateHistory(boot.history || []);
+          var hp = await T.history('', 50);
+          hydrateHistory((hp && hp.messages) || boot.history || []);
+          historyBefore = String((hp && hp.next_before) || '');
+          historyHasMore = !!(hp && hp.has_more);
           (boot.pending_approvals || []).forEach(renderApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
@@ -1389,6 +1399,18 @@
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
+      var historyRef = (p && p.get('ref')) || '';
+      if (historyRef) {
+        setTimeout(function () {
+          var hit = list.querySelector('[data-history-ref="' + CSS.escape(historyRef) + '"]');
+          if (hit) {
+            jumpTo(Math.max(0, hit.offsetTop - 56));
+            hit.classList.add('is-hit');
+            setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
+          }
+        }, 80);
+      }
+
       var findKw = (p && p.get('find')) || '';
       var hitT = null;
       if (findKw) {
@@ -1519,6 +1541,7 @@
         var menu = document.createElement('div');
         menu.className = 'msgactions';
         menu.innerHTML = '<button type="button" data-msg-copy>复制</button>'
+          + (msg && msg.getAttribute('data-history-ref') ? '<button type="button" data-msg-reply>引用</button>' : '')
           + (msg && msg.getAttribute('data-retry-text') ? '<button type="button" data-msg-retry>重试</button>' : '');
         root.appendChild(menu);
       }
@@ -1572,6 +1595,25 @@
           try { await navigator.clipboard.writeText(text); } catch (_) {}
           closeMsgActions(); return;
         }
+        if (e.target.closest && e.target.closest('[data-msg-reply]') && actionTarget) {
+          pendingReply = {
+            ref: actionTarget.getAttribute('data-history-ref') || '',
+            text: ((actionTarget.querySelector('.bubble') || actionTarget.querySelector('.msg__text') || actionTarget).innerText || '').trim()
+          };
+          var oldQuote = root.querySelector('.composerquote');
+          if (oldQuote) oldQuote.remove();
+          var quote = document.createElement('div');
+          quote.className = 'composerquote';
+          quote.innerHTML = '<span>引用：' + esc(pendingReply.text.slice(0, 90)) + '</span><button type="button" data-clear-reply aria-label="取消引用">×</button>';
+          var wrap = root.querySelector('.composerwrap');
+          if (wrap) wrap.insertBefore(quote, wrap.querySelector('.composer'));
+          closeMsgActions(); input.focus(); return;
+        }
+        if (e.target.closest && e.target.closest('[data-clear-reply]')) {
+          pendingReply = null;
+          var quoteNode = root.querySelector('.composerquote'); if (quoteNode) quoteNode.remove();
+          return;
+        }
         if (e.target.closest && e.target.closest('[data-msg-retry]') && actionTarget) {
           var target = actionTarget; closeMsgActions(); await retryTextNode(target); return;
         }
@@ -1600,6 +1642,28 @@
       function onBlur()  { if (scr) scr.classList.remove('is-typing'); }
       input.addEventListener('focus', onFocus);
       input.addEventListener('blur', onBlur);
+
+      async function loadOlderHistory() {
+        if (!live || !historyHasMore || historyLoading || !historyBefore) return;
+        historyLoading = true;
+        var oldHeight = list.scrollHeight;
+        try {
+          var page = await T.history(historyBefore, 50);
+          var rows = (page && page.messages) || [];
+          var html = rows.map(function (item) {
+            var text = esc(String(item.text || ''));
+            return item.role === 'assistant'
+              ? aiMsg(text, '', historyClock(item.created_at), '', '', item.message_ref)
+              : meMsg(text, '', historyClock(item.created_at), '', item.message_ref);
+          }).join('');
+          if (html) list.insertAdjacentHTML('afterbegin', html);
+          historyBefore = String((page && page.next_before) || '');
+          historyHasMore = !!(page && page.has_more);
+          list.scrollTop = Math.max(0, list.scrollHeight - oldHeight);
+        } finally { historyLoading = false; }
+      }
+      function onHistoryScroll() { if (list.scrollTop < 72) loadOlderHistory(); }
+      list.addEventListener('scroll', onHistoryScroll);
 
       /* —— 未读胶囊：显示 / 点击跳到最早那条未读 / 滚到底自动清掉 —— */
       var upill = root.querySelector('[data-unread]');
