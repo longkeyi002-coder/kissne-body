@@ -106,6 +106,15 @@ DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_ATTACHMENTS = 4
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+ALLOWED_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/zip",
+}
+ALLOWED_ATTACHMENT_MIME_TYPES = ALLOWED_IMAGE_MIME_TYPES | ALLOWED_DOCUMENT_MIME_TYPES
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
 
 # This platform has NO external credential, so enablement needs an explicit per-profile opt-in:
@@ -641,9 +650,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
             kind = str(item.get("type") or "").strip().lower()
             mime = str(item.get("mime_type") or "").strip().lower()
             data = item.get("data")
-            if kind not in {"image", "sticker"}:
+            if kind not in {"image", "sticker", "file"}:
                 return None, "unsupported_attachment_type"
-            if mime not in ALLOWED_IMAGE_MIME_TYPES:
+            if mime not in ALLOWED_ATTACHMENT_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if kind in {"image", "sticker"} and mime not in ALLOWED_IMAGE_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if kind == "file" and mime not in ALLOWED_DOCUMENT_MIME_TYPES:
                 return None, "unsupported_attachment_mime_type"
             if not isinstance(data, str) or not data:
                 return None, "attachment_data_required"
@@ -661,8 +674,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _materialize_attachments(attachments: List[Dict[str, Any]]) -> List[str]:
-        suffixes = {"image/jpeg": ".jpg", "image/png": ".png",
-                    "image/webp": ".webp", "image/gif": ".gif"}
+        suffixes = {
+            "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+            "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
+            "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip",
+        }
         paths: List[str] = []
         try:
             for item in attachments:
@@ -771,9 +787,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 media_paths = self._materialize_attachments(attachments)
             message_type = MessageType.TEXT
             if attachments:
-                message_type = (MessageType.STICKER
-                                if all(item["type"] == "sticker" for item in attachments)
-                                else MessageType.PHOTO)
+                if all(item["type"] == "sticker" for item in attachments):
+                    message_type = MessageType.STICKER
+                elif all(item["type"] == "file" for item in attachments):
+                    message_type = MessageType.DOCUMENT
+                else:
+                    message_type = MessageType.PHOTO
             event = MessageEvent(
                 text=text,
                 message_type=message_type,
