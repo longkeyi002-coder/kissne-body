@@ -161,6 +161,15 @@
   function cancel(turnId) {
     return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
+  function decideApproval(approvalId, decision, scope, reason) {
+    var body = {
+      approval_id: String(approvalId || ''),
+      decision: decision === 'deny' ? 'deny' : 'allow',
+      scope: scope || 'once'
+    };
+    if (reason) body.reason = String(reason);
+    return request('/mobile/approval', { method: 'POST', body: body });
+  }
 
   window.KissneTransport = {
     ApiError: ApiError,
@@ -182,6 +191,7 @@
     sendAsset: sendAsset,
     poll: poll,
     ack: ack,
-    cancel: cancel
+    cancel: cancel,
+    decideApproval: decideApproval
   };
 })();
