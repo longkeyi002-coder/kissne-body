@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, patch
 
-from ._transport_harness import http, isolated_runtime, make_adapter, pair, run, start, stop
+from _transport_harness import http, isolated_runtime, make_adapter, pair, run, start, stop
 
 
 def test_model_options_requires_device_auth(tmp_path):
