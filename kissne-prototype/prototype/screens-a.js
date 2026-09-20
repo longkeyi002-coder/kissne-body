@@ -273,8 +273,8 @@
         <div class="devstrip">
           <span class="devstrip__ic">${icon('server', 18)}</span>
           <span class="devstrip__main">
-            <span class="devstrip__t">当前设备 ${chip(offline ? '离线' : '在线（示例）', offline ? 'warn' : 'solid')}</span>
-            <span class="devstrip__s">设备名称待接入 · 连接后由设备返回</span>
+            <span class="devstrip__t">当前设备 ${chip(offline ? '离线' : '在线', offline ? 'warn' : 'solid')}</span>
+            <span class="devstrip__s">人人星 · MiMo v2.5</span>
           </span>
           ${offline ? btn('重连', { small: true, kind: 'ghost', to: '#/connect?state=connecting' }) : ''}
         </div>`;
