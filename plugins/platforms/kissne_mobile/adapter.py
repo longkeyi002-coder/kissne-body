@@ -464,6 +464,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if chat_id in self._session_reset_pending:
             self._session_reset_pending.discard(chat_id)
             extra["presentation"] = "session_reset"
+            # Persist the exact Hermes-authored reply, not reconstructed model/provider/context data.
+            # This sidecar survives /new session boundaries and Runtime restarts.
+            notice_id = f"kbn_{secrets.token_hex(8)}"
+            try:
+                await asyncio.to_thread(
+                    self.device_store().record_timeline_notice,
+                    chat_id, notice_id, "session_reset", str(content or ""),
+                )
+                extra["notice_id"] = notice_id
+            except Exception:
+                logger.exception("[kissne_mobile] failed to persist session reset notice")
         message_id = await self._queue_event(
             chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
         if message_id is None:
@@ -1175,6 +1186,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     "role": role, "text": text, "created_at": stamp,
                     # Session identity is intentionally omitted from the public presentation.
                 })
+        # Command replies such as /new are produced outside normal assistant transcript storage.
+        # Merge their verbatim durable presentation rows into the same user-visible timeline.
+        try:
+            notices = self.device_store().timeline_notices(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] timeline notice read failed", exc_info=True)
+            notices = []
+        for notice in notices:
+            notice_id = str(notice.get("notice_id") or "")
+            text = str(notice.get("text") or "")
+            if not notice_id or not text:
+                continue
+            rows.append({
+                "message_ref": "notice:" + notice_id,
+                "role": "system",
+                "text": text,
+                "created_at": float(notice.get("created_at") or 0),
+                "presentation": str(notice.get("presentation") or ""),
+            })
         rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
         return rows
 
