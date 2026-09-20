@@ -86,6 +86,7 @@ from .device_store import (
     EVENT_APPROVAL_RESOLVED,
     EVENT_COMPLETED,
     EVENT_DELTA,
+    EVENT_NOTICE,
     EVENT_PENDING,
     INBOUND_CONFLICT,
     INBOUND_DUPLICATE,
@@ -480,13 +481,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
             candidate = await asyncio.to_thread(store.turn, reply_anchor)
             if candidate and str(candidate.get("installation_id") or "") == str(chat_id or "").strip():
                 target_turn = reply_anchor
-        if not target_turn:
-            # Legacy/direct sends do not always carry an event reply anchor. This fallback is safe
-            # for ordinary status traffic, but canonical final replies from BasePlatformAdapter do.
-            target_turn = await asyncio.to_thread(store.pending_turn_id, chat_id) or ""
+
+        # BasePlatformAdapter final delivery replies to the triggering MessageEvent.message_id.
+        # Mobile deliberately sets that id to its server turn_id, so an exact target proves this is
+        # the terminal reply for that turn. Sends without that proof are auxiliary notices and must
+        # neither close nor visually complete whichever newer turn happens to be pending.
+        is_final = bool(target_turn)
 
         pending_reset_turn = self._session_reset_turns.get(chat_id, "")
-        if chat_id in self._session_reset_pending and pending_reset_turn and target_turn == pending_reset_turn:
+        if (is_final and chat_id in self._session_reset_pending
+                and pending_reset_turn and target_turn == pending_reset_turn):
             self._session_reset_pending.discard(chat_id)
             self._session_reset_turns.pop(chat_id, None)
             extra["presentation"] = "session_reset"
@@ -502,8 +506,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             except Exception:
                 logger.exception("[kissne_mobile] failed to persist session reset notice")
         message_id = await self._queue_event(
-            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to,
-            extra=extra or None, target_turn_id=target_turn or None)
+            chat_id, EVENT_COMPLETED if is_final else EVENT_NOTICE,
+            content=content, reply_to=reply_to, extra=extra or None,
+            target_turn_id=target_turn or None)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
