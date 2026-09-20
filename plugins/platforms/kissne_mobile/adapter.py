@@ -129,6 +129,8 @@ OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 PAIRING_PATH = "/pair"
 BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+HISTORY_PATH = "/history"
+SEARCH_PATH = "/search"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -339,6 +341,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get(HISTORY_PATH, self._handle_history)
+        app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post("/approval", self._handle_approval)
         app.router.add_get("/model-options", self._handle_model_options)
@@ -1081,6 +1085,108 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 continue
             covered.append(int(event["seq"]))
         return covered
+
+    def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
+        """All Hermes sessions owned by this Mobile installation, newest first.
+
+        /new is a context boundary, not a UI conversation boundary.  The installation routing
+        key therefore scopes the visible timeline while historical session ids remain internal.
+        """
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        db = store._db_for_key(self.mobile_session_key(installation))
+        if db is None or not hasattr(db, "list_sessions_rich"):
+            return []
+        return db.list_sessions_rich(
+            session_key=self.mobile_session_key(installation),
+            include_archived=True, include_children=True,
+            project_compression_tips=False, order_by_last_active=True,
+            limit=500, offset=0, compact_rows=True,
+        )
+
+    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
+        """Flatten this installation's /new-separated transcripts into one chronological timeline."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        rows: List[Dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        for session in self._mobile_history_sessions(installation):
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                continue
+            try:
+                transcript = store.load_transcript(session_id) or []
+            except Exception:
+                logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
+                continue
+            for index, row in enumerate(transcript):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "").strip().lower()
+                text = row.get("content", row.get("text"))
+                if role not in {"user", "assistant"} or not isinstance(text, str) or not text.strip():
+                    continue
+                stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+                stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
+                dedupe = (session_id, index)
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                rows.append({
+                    "message_ref": f"{session_id}:{index}",
+                    "role": role, "text": text, "created_at": stamp,
+                    # Session identity is intentionally omitted from the public presentation.
+                })
+        rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
+        return rows
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        """Page backwards through the continuous Mobile timeline across explicit /new boundaries."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        raw_limit = request.query.get("limit", "50")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 100))
+        before = str(request.query.get("before") or "").strip()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        end = len(rows)
+        if before:
+            positions = [i for i, item in enumerate(rows) if item["message_ref"] == before]
+            if not positions:
+                return _error_response("history_cursor_not_found", 400)
+            end = positions[0]
+        start = max(0, end - limit)
+        page = rows[start:end]
+        return _json_response({
+            "ok": True, "messages": page,
+            "has_more": start > 0,
+            "next_before": page[0]["message_ref"] if start > 0 and page else None,
+        })
+
+    async def _handle_history_search(self, request: web.Request) -> web.Response:
+        """Search only this installation's visible Hermes history, across /new session boundaries."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            return _error_response("query_required", 400)
+        raw_limit = request.query.get("limit", "20")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 50))
+        needle = query.casefold()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
+        return _json_response({"ok": True, "results": matches[:limit]})
 
     async def _handle_bootstrap(self, request: web.Request) -> web.Response:
         """Which Conversation this device is on, plus a bounded tail of it. Creates nothing, ever."""
