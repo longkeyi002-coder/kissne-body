@@ -1033,10 +1033,22 @@
       function hydrateHistory(history) {
         CHAT_LOG.length = 0;
         (history || []).forEach(function (item) {
-          if (!item || (item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string') return;
+          if (!item || (item.role !== 'user' && item.role !== 'assistant')) return;
+          var text = typeof item.text === 'string' ? item.text : '';
+          var attachments = Array.isArray(item.attachments) ? item.attachments : [];
+          if (!text.trim() && !attachments.length) return;
+          var parts = [];
+          if (text.trim()) parts.push(esc(text));
+          attachments.forEach(function (a) {
+            var kind = String((a && a.type) || '');
+            var label = String((a && a.label) || '');
+            if (kind === 'sticker') parts.push('<span class="attachment-history attachment-history--sticker">' + icon('smile', 15) + '<span>' + esc(label || '表情包') + '</span></span>');
+            else if (kind === 'image') parts.push('<span class="attachment-history attachment-history--image">' + icon('image', 15) + '<span>图片</span></span>');
+            else if (kind === 'file') parts.push('<span class="attachment-history attachment-history--file">' + icon('file', 15) + '<span>' + esc(label || '文件') + '</span></span>');
+          });
           CHAT_LOG.push({
             who: item.role === 'user' ? 'me' : 'ai',
-            html: esc(item.text),
+            html: parts.join(''),
             time: historyClock(item.created_at)
           });
         });
