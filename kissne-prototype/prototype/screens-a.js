@@ -964,6 +964,7 @@
       var sIn = root.querySelector('input.srchbox__in');
       if (sIn) {
         var listEl = root.querySelector('[data-srchlist]');
+        var searchRequestId = 0;
         function renderSearch() {
           if (!listEl) return;
           var qv = (sIn.value || '').trim();
@@ -975,15 +976,27 @@
             }).join('') || '<div class="srch__empty">输入关键词搜索当前聊天</div>';
             return;
           }
-          var matches = CHAT_LOG.filter(function (m) {
-            var plain = String(m.html || '').replace(/<[^>]*>/g, ' ');
-            return plain.indexOf(qv) >= 0;
+          var T0 = window.KissneTransport;
+          if (!T0 || !T0.hasToken || !T0.hasToken()) {
+            listEl.innerHTML = '<div class="srch__empty">连接设备后可搜索全部聊天历史</div>';
+            return;
+          }
+          var requestId = ++searchRequestId;
+          listEl.innerHTML = '<div class="srch__empty">正在搜索全部聊天历史…</div>';
+          T0.searchHistory(qv, 50).then(function (data) {
+            if (requestId !== searchRequestId) return;
+            var matches = data.results || [];
+            listEl.innerHTML = matches.map(function (m) {
+              var when = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : '';
+              return '<button class="srch__row" type="button" data-history-ref="' + esc(m.message_ref || '') + '">'
+                + '<span class="srch__kw">' + esc(String(m.text || '').slice(0, 120)) + '</span>'
+                + '<span class="srch__t">' + esc(when) + '</span></button>';
+            }).join('') || '<div class="srch__empty">没有找到相关消息</div>';
+          }).catch(function () {
+            if (requestId === searchRequestId) {
+              listEl.innerHTML = '<div class="srch__empty">搜索失败，请检查连接后重试</div>';
+            }
           });
-          listEl.innerHTML = matches.map(function (m) {
-            var plain = String(m.html || '').replace(/<[^>]*>/g, ' ').trim();
-            return '<div class="srch__row" data-nav="#/chat?state=normal&find=' + encodeURIComponent(qv) + '">'
-              + '<span class="srch__kw">' + esc(plain.slice(0, 90)) + '</span><span class="srch__t">' + esc(m.time || '') + '</span></div>';
-          }).join('') || '<div class="srch__empty">没有找到相关消息</div>';
         }
         function onSearchKey(e) {
           if (e.key !== 'Enter') return;
