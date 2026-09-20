@@ -1325,7 +1325,6 @@
         send.removeEventListener('click', push);
         liveStopped = true;
         clearTimeout(livePollTimer);
-        seqTs = [];
         clearTimeout(hitT);
         clearTimeout(bootT);
       };
