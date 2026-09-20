@@ -28,7 +28,7 @@
       function film(kind, count) {
         var out = '';
         for (var i = 0; i < count; i++) {
-          out += '<img src="assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png" alt=""' +
+          out += '<img src="assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png?v=20260920d" alt=""' +
             (i ? ' hidden' : '') + '>';
         }
         return '<div class="splash__film splash__film--' + kind + '" data-splash-film="' + kind + '">' + out + '</div>';
