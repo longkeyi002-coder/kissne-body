@@ -1282,6 +1282,13 @@
           var finalText = String(event.text || '');
           function presentReply(text) {
             var clean = String(text || '').trim();
+            /* Hermes owns /new and /reset notices. Never rebuild model/provider/context here:
+               render the exact backend-authored payload as one lightweight system boundary. */
+            if (/^(?:✨\s*)?Session reset!|^Session reset\b|^Starting fresh\b/i.test(clean)) {
+              if (el && el.parentNode) el.parentNode.removeChild(el);
+              append('<div class="sessionreset" role="note"><pre>' + esc(clean) + '</pre></div>');
+              return;
+            }
             if (clean.length > 1800) {
               var paras = clean.split(/\n\s*\n/).filter(Boolean);
               var summary = (paras[0] || clean).slice(0, 320) + ((paras[0] || clean).length > 320 ? '…' : '');
