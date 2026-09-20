@@ -126,7 +126,7 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
                 "◆ Context: 2.0M tokens (detected)\n"
                 "✦ Tip: backend-owned text"
             )
-            result = await adapter.send("phone-a", backend_text)
+            result = await adapter.send("phone-a", backend_text, reply_to="kbm_turn_reset")
             adapter._queue_event = original_queue
             notices = adapter.device_store().timeline_notices("phone-a")
             return result, sent, notices
@@ -137,6 +137,7 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
     event_type, kwargs = sent[0]
     assert kwargs["content"].endswith("✦ Tip: backend-owned text")
     assert "future-model-from-hermes" in kwargs["content"]
+    assert kwargs["target_turn_id"] == "kbm_turn_reset"
     assert kwargs["extra"]["presentation"] == "session_reset"
     assert kwargs["extra"]["notice_id"].startswith("kbn_")
     assert len(notices) == 1
@@ -144,40 +145,42 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
     assert notices[0]["text"] == kwargs["content"]
     assert notices[0]["notice_id"] == kwargs["extra"]["notice_id"]
 
-def test_session_reset_marker_is_not_consumed_by_an_unrelated_newer_turn(tmp_path):
+def test_session_reset_reply_uses_its_originating_turn_even_when_newer_turn_is_pending(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
             adapter = make_adapter()
-            sent = []
-
-            async def capture(installation_id, event_type, **kwargs):
-                sent.append((event_type, kwargs))
-                return "out"
-
-            adapter._queue_event = capture
             store = adapter.device_store()
             store.open_turn("kbm_turn_reset", "phone-a")
             adapter._session_reset_pending.add("phone-a")
             adapter._session_reset_turns["phone-a"] = "kbm_turn_reset"
 
-            # A newer ordinary turn is now the pending turn. Its reply must not consume /new's marker.
+            # A newer ordinary turn exists before /new's backend reply is delivered.
             store.open_turn("kbm_turn_plain", "phone-a")
-            await adapter.send("phone-a", "ordinary reply")
-            marker_after_plain = (
-                "phone-a" in adapter._session_reset_pending,
-                adapter._session_reset_turns.get("phone-a"),
+            reset_result = await adapter.send(
+                "phone-a", "canonical reset reply", reply_to="kbm_turn_reset"
             )
+            after_reset = {
+                "marker": "phone-a" in adapter._session_reset_pending,
+                "reset_state": store.turn("kbm_turn_reset")["state"],
+                "plain_state": store.turn("kbm_turn_plain")["state"],
+                "events": store.events_after("phone-a", 0, limit=10),
+            }
 
-            store.close_turn("kbm_turn_plain", "completed")
-            await adapter.send("phone-a", "canonical reset reply")
-            return sent, marker_after_plain, adapter._session_reset_turns.get("phone-a")
+            plain_result = await adapter.send(
+                "phone-a", "ordinary reply", reply_to="kbm_turn_plain"
+            )
+            return reset_result, plain_result, after_reset, store.events_after("phone-a", 0, limit=10)
 
-    sent, marker_after_plain, remaining = run(scenario())
-    assert marker_after_plain == (True, "kbm_turn_reset")
-    assert sent[0][1].get("extra") in (None, {})
-    assert sent[1][1]["extra"]["presentation"] == "session_reset"
-    assert sent[1][1]["extra"]["notice_id"].startswith("kbn_")
-    assert remaining is None
+    reset_result, plain_result, after_reset, events = run(scenario())
+    assert reset_result.success is True
+    assert plain_result.success is True
+    assert after_reset["marker"] is False
+    assert after_reset["reset_state"] == "completed"
+    assert after_reset["plain_state"] == "pending"
+    assert after_reset["events"][0]["turn_id"] == "kbm_turn_reset"
+    assert after_reset["events"][0]["presentation"] == "session_reset"
+    assert events[1]["turn_id"] == "kbm_turn_plain"
+    assert "presentation" not in events[1]
 
 
 def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_path):
