@@ -1242,96 +1242,82 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .empty404 b{font-size:15px;color:var(--ink)}
 
 /* =====================================================================
-   开屏页（入口页）— 先 logo，后素材；冷启动才播 morph 动画
-   只动这一页：中央 Kissne、Kiss 蓝 / ne 绿、无解释文字、无底部入口
-
-   三种态：
-     .is-final   （默认）logo 先淡入 → 素材随后淡入，**不需要点击**
-     .is-intro   定格，只有 logo
-     .is-animate 冷启动 morph：logo 放大淡出、素材接上（app.js 负责自动跳转）
+   开屏页（入口页）— 使用真实素材帧
+   Logo 先出现，叶青栩 / 小羊连续动作接入，最后用双人贴贴帧定格
    ===================================================================== */
 .screen--splash{background:#fff}
-.splash{flex:1;position:relative;overflow:hidden}
-
+.splash{flex:1;position:relative;overflow:hidden;background:#fff}
 .splash__layer{
   position:absolute;inset:0;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
 }
-
-/* 基线：logo 可见、素材隐藏。各状态再分别覆盖。 */
-.splash__logo{
-  flex-direction:row;gap:0;
-  font-size:48px;font-weight:750;letter-spacing:-.035em;line-height:1;
-  opacity:1;
+.splash__logo{opacity:1}
+.splash__logo img{
+  display:block;width:min(72vw,238px);height:auto;
+  object-fit:contain;
+  filter:drop-shadow(0 8px 18px rgba(89,166,228,.14));
 }
-.splash__logo .lg-kiss{color:var(--blue-ink)}
-.splash__logo .lg-ne{color:var(--green-ink)}
-.splash__duo{opacity:0}
-
-/* —— 默认态：logo 先出现，随后交叉淡出换成素材（不做 morph 缩放，不跳转）——
-   两层同为居中绝对定位，必须**错开**：logo 先淡入 → 停留 → 淡出，
-   素材在 logo 淡出时接上，避免两者同框叠在一起。 */
-@keyframes splashRevealLogo{
-  0%   {opacity:0;transform:scale(.97)}
-  18%  {opacity:1;transform:scale(1)}
-  58%  {opacity:1;transform:scale(1)}
-  82%  {opacity:0;transform:scale(.94)}
-  100% {opacity:0;transform:scale(.94)}
+.splash__actors{opacity:0;gap:4px}
+.splash__duo{opacity:1}
+.splash__sprite{
+  display:block;flex:none;
+  background-repeat:no-repeat;
+  background-position:0 0;
+  background-size:800% 100%;
+  image-rendering:auto;
 }
-@keyframes splashRevealDuo{
-  0%,52% {opacity:0;transform:scale(.88)}
-  86%    {opacity:1;transform:scale(1)}
-  100%   {opacity:1;transform:scale(1)}
+.splash__sprite--fox,
+.splash__sprite--sheep{
+  width:148px;height:99px;
+  background-size:800% 100%;
+  animation:splashFrames 1.12s steps(8,end) infinite;
 }
-.splash.is-final .splash__logo{animation:splashRevealLogo 2.4s cubic-bezier(.4,0,.2,1) both}
-.splash.is-final .splash__duo{animation:splashRevealDuo 2.4s cubic-bezier(.4,0,.2,1) both}
-
-/* —— 定格：只有 logo —— */
-.splash.is-intro .splash__logo{animation:none;opacity:1;transform:none}
-.splash.is-intro .splash__duo{animation:none;opacity:0}
-
-/* —— 冷启动 morph：logo 与角色**交叉过渡**（重叠窗口 46%–68%），
-      避免出现"logo 已淡出、角色还没进"的空档 —— 之前 70%–75% 区间画面内容只剩 0.68% —— */
-@keyframes splashLogo{
-  0%   {opacity:0;transform:scale(.92)}
-  14%  {opacity:1;transform:scale(1)}
-  50%  {opacity:1;transform:scale(1)}
-  68%  {opacity:0;transform:scale(.72)}
-  100% {opacity:0;transform:scale(.72)}
+.splash__sprite--fox{background-image:url("assets/real/splash-generated/fox-strip.png")}
+.splash__sprite--sheep{background-image:url("assets/real/splash-generated/sheep-strip.png")}
+.splash__sprite--duo{
+  width:min(84vw,326px);height:min(56vw,218px);
+  background-image:url("assets/real/splash-generated/duo-strip.png");
+  background-size:800% 100%;
+  animation:splashFrames 1.12s steps(8,end) infinite;
 }
-@keyframes splashDuo{
-  0%,46% {opacity:0;transform:scale(.78)}
-  74%    {opacity:1;transform:scale(1)}
-  100%   {opacity:1;transform:scale(1)}
+@keyframes splashFrames{
+  from{background-position:0 0}
+  to{background-position:100% 0}
 }
-.splash.is-animate .splash__logo{animation:splashLogo 2.9s cubic-bezier(.4,0,.2,1) forwards}
-.splash.is-animate .splash__duo{animation:splashDuo 2.9s cubic-bezier(.4,0,.2,1) forwards}
-
-.duo__pair{display:flex;align-items:center;gap:26px}
-/* 蓝 / 绿淡底只是**占位装饰**：一旦 _inbox 里给了 fox-splash / sheep-splash，
-   真图会带上 .ph--img，这里必须显式排除它 ——
-   这些选择器特异性 (0,2,0) 高于 .ph--img (0,1,0)，不排除的话
-   透明底角色背后会多出一块**方角**的淡蓝 / 淡绿底（实测 #EEF3F8 / #EFF4EF）。 */
-.duo__item .ph:not(.ph--img){border-width:2px}
-.duo__item--fox .ph:not(.ph--img){border-color:var(--blue-line);background:var(--blue-wash)}
-.duo__item--fox .ph__code{color:var(--blue-deep)}
-.duo__item--sheep .ph:not(.ph--img){border-color:var(--green-line);background:var(--green-wash)}
-.duo__item--sheep .ph__code{color:var(--green-ink)}
-
-/* 降低动效偏好：不做动画。
-   注意媒体查询**不提升特异性**，这里必须与上面的状态规则同特异性（0,3,0）并写在后面，
-   否则 .splash.is-final .splash__logo 会把这里的降级覆盖掉。
-   默认态：把 logo 与素材改成上下排列（position:static），两者都看得到且不叠压。 */
+@keyframes splashLogoIn{
+  0%{opacity:0;transform:scale(.84)}
+  15%{opacity:1;transform:scale(1)}
+  52%{opacity:1;transform:scale(1)}
+  70%{opacity:0;transform:scale(.72)}
+  100%{opacity:0;transform:scale(.72)}
+}
+@keyframes splashActorsIn{
+  0%,42%{opacity:0;transform:scale(.86)}
+  58%{opacity:1;transform:scale(1)}
+  73%,100%{opacity:0;transform:scale(1.02)}
+}
+@keyframes splashDuoIn{
+  0%,64%{opacity:0;transform:scale(.82)}
+  82%{opacity:1;transform:scale(1)}
+  100%{opacity:1;transform:scale(1)}
+}
+.splash.is-animate .splash__logo{animation:splashLogoIn 2.9s cubic-bezier(.4,0,.2,1) forwards}
+.splash.is-animate .splash__actors{animation:splashActorsIn 2.9s cubic-bezier(.4,0,.2,1) forwards}
+.splash.is-animate .splash__duo{animation:splashDuoIn 2.9s cubic-bezier(.4,0,.2,1) forwards}
+.splash.is-intro .splash__logo{opacity:1}
+.splash.is-intro .splash__actors,
+.splash.is-intro .splash__duo{opacity:0}
+.splash.is-final .splash__logo{opacity:1}
+.splash.is-final .splash__actors{display:none}
+.splash.is-final .splash__duo{opacity:1}
 @media (prefers-reduced-motion:reduce){
-  .splash.is-intro .splash__logo{animation:none;opacity:1;transform:none}
-  .splash.is-intro .splash__duo{animation:none;opacity:0}
-  .splash.is-animate .splash__logo{animation:none;opacity:0;transform:none}
-  .splash.is-animate .splash__duo{animation:none;opacity:1;transform:none}
-  .splash.is-final{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
-  .splash.is-final .splash__layer{position:static;inset:auto}
-  .splash.is-final .splash__logo{animation:none;opacity:1;transform:none}
-  .splash.is-final .splash__duo{animation:none;opacity:1;transform:none}
-  .composerwrap{transition:none}
+  .splash__sprite{animation:none}
+  .splash.is-animate .splash__logo{animation:none;opacity:0}
+  .splash.is-animate .splash__actors{animation:none;opacity:0}
+  .splash.is-animate .splash__duo{animation:none;opacity:1}
+  .splash.is-final .splash__logo{animation:none;opacity:1}
+  .splash.is-final .splash__duo{animation:none;opacity:1}
 }
 
 /* =====================================================================

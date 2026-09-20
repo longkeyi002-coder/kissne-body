@@ -27,21 +27,20 @@
       var cls = 'splash' + (s === 'intro' ? ' is-intro' : (s === 'animate' ? ' is-animate' : ' is-final'));
       return `
       <div class="screen screen--splash">
-        <!-- 默认态无需点击：logo 先淡入，素材随后淡入。
-             点击整屏只是「重播 morph 动画」，不是看到 logo 的前提。 -->
-        <div class="${cls}" data-nav="#/welcome?state=animate">
+        <!-- 冷启动开屏：真实 Kissne Logo → 叶青栩与小羊动作帧 → 双人贴贴定格 -->
+        <div class="splash" data-nav="#/welcome?state=animate">
           <div class="splash__layer splash__logo">
-            <span class="lg-kiss">Kiss</span><span class="lg-ne">ne</span>
+            <img src="assets/real/splash-generated/splash-logo.png" alt="Kissne">
+          </div>
+          <div class="splash__layer splash__actors" aria-hidden="true">
+            <span class="splash__sprite splash__sprite--fox"></span>
+            <span class="splash__sprite splash__sprite--sheep"></span>
           </div>
           <div class="splash__layer splash__duo">
-            <div class="duo__pair">
-              <div class="duo__item duo__item--fox">${ph('FOX_SPLASH_CHARACTER', { size: 118 })}</div>
-              <div class="duo__item duo__item--sheep">${ph('SHEEP_SPLASH_CHARACTER', { size: 118 })}</div>
-            </div>
+            <span class="splash__sprite splash__sprite--duo"></span>
           </div>
         </div>
-      </div>`;
-    }
+      </div>    }
   });
 
   /* =====================================================================
