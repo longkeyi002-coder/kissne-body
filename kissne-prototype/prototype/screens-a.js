@@ -519,15 +519,15 @@
      输入框上方的磁吸快捷条（.quickbar），不再藏在「＋」里。 */
   function plusPopLayer(origin) {
     var items = [
-      { ic: 'image', t: '照片',        d: '从相册选一张发过去', nav: '#/chat?state=' + origin },
-      { ic: 'file',  t: '文件',        d: '上传文档、压缩包等', nav: '#/chat?state=' + origin }
+      { ic: 'image', t: '照片',        d: '从相册选择图片', action: 'pick-image' },
+      { ic: 'file',  t: '文件',        d: '文件发送稍后接入', action: 'file-unavailable' }
     ];
     return '<div class="pop">'
       + items.map(function (it) {
-          return '<a class="pop__item" data-nav="' + it.nav + '">'
+          return '<button class="pop__item" type="button" data-chat-action="' + it.action + '">'
             + '<span class="pop__ic">' + icon(it.ic, 17) + '</span>'
             + '<span class="pop__main"><span class="pop__t">' + esc(it.t) + '</span>'
-            + '<span class="pop__d">' + esc(it.d) + '</span></span></a>';
+            + '<span class="pop__d">' + esc(it.d) + '</span></span></button>';
         }).join('')
       + '</div>';
   }
@@ -657,14 +657,21 @@
   var LAST_SENT_HASH = '';
   /* 历史搜索：像微信的搜索记录那样**按时间线排列**（今天 / 昨天 / 更早）。
      模块级，删除与清空都是真的生效（只在本会话内）。 */
-  var SEARCH_LOG = [
-    { k: '周末计划',   t: '14:20', g: '今天' },
-    { k: '美术馆',     t: '11:05', g: '今天' },
-    { k: '叶青栩 心情', t: '21:40', g: '昨天' },
-    { k: '记忆库',     t: '18:12', g: '昨天' },
-    { k: '小机星',     t: '20:05', g: '更早 · 09-16' },
-    { k: '语音通话',   t: '09:31', g: '更早 · 09-15' }
-  ];
+  var SEARCH_LOG = [];
+  function rememberSearch(k) {
+    k = String(k || '').trim();
+    if (!k) return;
+    for (var i = SEARCH_LOG.length - 1; i >= 0; i--) {
+      if (SEARCH_LOG[i].k === k) SEARCH_LOG.splice(i, 1);
+    }
+    var d = new Date();
+    SEARCH_LOG.unshift({
+      k: k,
+      t: String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'),
+      g: '今天'
+    });
+    if (SEARCH_LOG.length > 20) SEARCH_LOG.length = 20;
+  }
   function logRender() {
     return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
@@ -692,45 +699,30 @@
 
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
-        var groups = [];
-        SEARCH_LOG.forEach(function (it) {
-          var g = groups.length ? groups[groups.length - 1] : null;
-          if (!g || g.name !== it.g) { g = { name: it.g, items: [] }; groups.push(g); }
-          g.items.push(it);
-        });
-        var rows = groups.map(function (g) {
-          return '<div class="srch__g">' + esc(g.name) + '</div>'
-            + g.items.map(function (it) {
-                /* 点一条 → 回人人星并**定位到那条消息**（find=关键词），和微信一样 */
-                return '<div class="srch__row" data-kw="' + esc(it.k) + '"'
-                  + ' data-nav="#/chat?state=normal&find=' + encodeURIComponent(it.k) + '">'
-                  + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
-                  + '<span class="srch__kw">' + esc(it.k) + '</span>'
-                  + '<span class="srch__t">' + esc(it.t) + '</span>'
-                  + '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">'
-                  + icon('close', 12) + '</button>'
-                  + '</div>';
-              }).join('');
+        var rows = SEARCH_LOG.map(function (it) {
+          return '<div class="srch__row" data-kw="' + esc(it.k) + '"'
+            + ' data-nav="#/chat?state=normal&find=' + encodeURIComponent(it.k) + '">'
+            + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
+            + '<span class="srch__kw">' + esc(it.k) + '</span>'
+            + '<span class="srch__t">' + esc(it.t) + '</span>'
+            + '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">'
+            + icon('close', 12) + '</button></div>';
         }).join('');
         return `
         <div class="screen screen--chat screen--srch">
-          <!-- 背后是人人星的消息：透过半透明面板能看见，也是「定位」的落点 -->
           <div class="srchbehind" aria-hidden="true">
             <div class="chathead chathead--ghost"></div>
             <div class="chatbody">${logRender()}</div>
           </div>
-          <!-- 上半：100% 透明，只有搜索框 -->
           <header class="chathead chathead--srch">
             <button class="iconbtn chathead__back" data-nav="#/chat" aria-label="返回">${icon('back')}</button>
             <div class="srchbox">${icon('search', 15)}
-              <input class="srchbox__in" type="text" placeholder="搜索聊天记录" aria-label="搜索聊天记录"></div>
+              <input class="srchbox__in" type="search" enterkeyhint="search" placeholder="搜索聊天记录" aria-label="搜索聊天记录"></div>
           </header>
-          <!-- 下半：60% 透明（rgba .4）的历史记录面板 -->
           <div class="srchpanel">
-            <div class="srch__head"><span>历史搜索</span>
+            <div class="srch__head"><span>最近搜索</span>
               <button class="srch__clear" type="button" data-clearsrch>${icon('trash', 12)}清空</button></div>
-            <div class="srch__list" data-srchlist>${rows}</div>
-            ${note('按时间线排列（今天 / 昨天 / 更早）。点一条会回到人人星并定位到那条消息；这里只做界面，不产生真实搜索。')}
+            <div class="srch__list" data-srchlist>${rows || '<div class="srch__empty">输入关键词搜索当前聊天</div>'}</div>
           </div>
         </div>`;
       }
@@ -888,6 +880,7 @@
         + ' placeholder="' + (offline ? '设备离线，无法发送' : (netlost ? '网络已断开' : '说点什么…')) + '">'
         + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入">' + icon('mic', 19) + '</button>'
         + '<button class="sendbtn"' + dis + ' aria-label="发送">' + icon('send', 18) + '</button>'
+        + '<input class="chat-image-picker" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>'
         + '</div>';
 
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
@@ -944,57 +937,46 @@
        换页/去通话页回来都还在），随后回一条占位 AI 消息（原型不发起真实请求）。
        从表情包页选了一张也会在这里落成一条消息。 */
     mount: function (root, ctx) {
-      /* —— 历史搜索页：输入即筛选 · 单条删除 · 一键清空 —— */
+      /* —— 历史搜索：输入关键词直接搜索当前真实聊天记录 —— */
       var sIn = root.querySelector('input.srchbox__in');
       if (sIn) {
         var listEl = root.querySelector('[data-srchlist]');
-        function sweep() {
+        function renderSearch() {
           if (!listEl) return;
-          var gs = listEl.querySelectorAll('.srch__g');
-          for (var i = 0; i < gs.length; i++) {
-            var g = gs[i], n = g.nextElementSibling, empty = true;
-            while (n && !n.classList.contains('srch__g')) {
-              if (n.classList.contains('srch__row') && n.style.display !== 'none') { empty = false; break; }
-              n = n.nextElementSibling;
-            }
-            g.style.display = empty ? 'none' : '';
+          var qv = (sIn.value || '').trim();
+          if (!qv) {
+            listEl.innerHTML = SEARCH_LOG.map(function (it) {
+              return '<div class="srch__row" data-nav="#/chat?state=normal&find=' + encodeURIComponent(it.k) + '">'
+                + '<span class="srch__ic">' + icon('clock', 13) + '</span><span class="srch__kw">' + esc(it.k)
+                + '</span><span class="srch__t">' + esc(it.t) + '</span></div>';
+            }).join('') || '<div class="srch__empty">输入关键词搜索当前聊天</div>';
+            return;
           }
-          if (!listEl.querySelector('.srch__row') || !SEARCH_LOG.length) {
-            listEl.innerHTML = '<div class="srch__empty">没有搜索记录</div>';
-          }
+          var matches = CHAT_LOG.filter(function (m) {
+            var plain = String(m.html || '').replace(/<[^>]*>/g, ' ');
+            return plain.indexOf(qv) >= 0;
+          });
+          listEl.innerHTML = matches.map(function (m) {
+            var plain = String(m.html || '').replace(/<[^>]*>/g, ' ').trim();
+            return '<div class="srch__row" data-nav="#/chat?state=normal&find=' + encodeURIComponent(qv) + '">'
+              + '<span class="srch__kw">' + esc(plain.slice(0, 90)) + '</span><span class="srch__t">' + esc(m.time || '') + '</span></div>';
+          }).join('') || '<div class="srch__empty">没有找到相关消息</div>';
         }
-        function filter() {
-          if (!listEl) return;
-          var v = (sIn.value || '').trim();
-          var rows = listEl.querySelectorAll('.srch__row');
-          for (var i = 0; i < rows.length; i++) {
-            var kw = rows[i].getAttribute('data-kw') || '';
-            rows[i].style.display = (!v || kw.indexOf(v) >= 0) ? '' : 'none';
-          }
-          sweep();
+        function onSearchKey(e) {
+          if (e.key !== 'Enter') return;
+          var qv = (sIn.value || '').trim();
+          if (!qv) return;
+          rememberSearch(qv);
+          renderSearch();
         }
-        function onDel(e) {
-          e.stopPropagation();          /* 别让它冒泡到行上的 data-nav（否则删一条会顺带跳走） */
-          var k = e.currentTarget.getAttribute('data-delsrch');
-          for (var i = SEARCH_LOG.length - 1; i >= 0; i--) {
-            if (SEARCH_LOG[i].k === k) SEARCH_LOG.splice(i, 1);
-          }
-          var row = e.currentTarget.parentNode;
-          if (row && row.parentNode) row.parentNode.removeChild(row);
-          sweep();
-        }
-        function onClear() {
-          SEARCH_LOG.length = 0;
-          if (listEl) listEl.innerHTML = '<div class="srch__empty">没有搜索记录</div>';
-        }
-        sIn.addEventListener('input', filter);
-        var xBtns = root.querySelectorAll('[data-delsrch]');
-        for (var xi = 0; xi < xBtns.length; xi++) xBtns[xi].addEventListener('click', onDel);
+        function onClear() { SEARCH_LOG.length = 0; renderSearch(); }
+        sIn.addEventListener('input', renderSearch);
+        sIn.addEventListener('keydown', onSearchKey);
         var clr = root.querySelector('[data-clearsrch]');
         if (clr) clr.addEventListener('click', onClear);
         return function () {
-          sIn.removeEventListener('input', filter);
-          for (var xj = 0; xj < xBtns.length; xj++) xBtns[xj].removeEventListener('click', onDel);
+          sIn.removeEventListener('input', renderSearch);
+          sIn.removeEventListener('keydown', onSearchKey);
           if (clr) clr.removeEventListener('click', onClear);
         };
       }
@@ -1216,6 +1198,42 @@
         }
       }
 
+      /* 照片：使用系统相册选择器，直接按真实 attachment 合同发送。 */
+      var imagePicker = root.querySelector('.chat-image-picker');
+      var pickImageBtn = root.querySelector('[data-chat-action="pick-image"]');
+      var fileBtn = root.querySelector('[data-chat-action="file-unavailable"]');
+      function onPickImage() { if (imagePicker) imagePicker.click(); }
+      async function onImagesChosen() {
+        if (!imagePicker || !imagePicker.files || !imagePicker.files.length) return;
+        if (!live) { append(sysMsg('尚未连接 Kissne 设备，图片未发送。', clockNow())); return; }
+        var files = Array.prototype.slice.call(imagePicker.files, 0, 4);
+        try {
+          var attachments = [];
+          for (var fi = 0; fi < files.length; fi++) {
+            var file = files[fi];
+            var url = URL.createObjectURL(file);
+            append(meMsg('<span class="stkmsg"><img class="stkimg" src="' + esc(url) + '" alt="已选择图片"></span>', '', clockNow()));
+            attachments.push({
+              type: 'image',
+              mime_type: file.type || 'image/jpeg',
+              data: await T.blobToBase64(file)
+            });
+          }
+          var accepted = await T.sendMessage({ attachments: attachments });
+          liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          scheduleLivePoll(0);
+        } catch (err) {
+          append(sysMsg((err && err.status === 413) ? '图片过大，请选择更小的图片。' : '图片发送失败，请重试。', clockNow()));
+        } finally {
+          imagePicker.value = '';
+        }
+      }
+      function onFileUnavailable() { append(sysMsg('文件发送还没有接入真实 Transport。', clockNow())); }
+      if (pickImageBtn) pickImageBtn.addEventListener('click', onPickImage);
+      if (imagePicker) imagePicker.addEventListener('change', onImagesChosen);
+      if (fileBtn) fileBtn.addEventListener('click', onFileUnavailable);
+
       /* 表情面板里的贴图：点一张就发出去，然后收起面板（不跳页） */
       var stkState = (ctx && ctx.state && ctx.state !== 'empty' && ctx.state !== 'keyboard')
         ? ctx.state : 'normal';
@@ -1319,6 +1337,9 @@
         input.removeEventListener('blur', onBlur);
 
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
+        if (pickImageBtn) pickImageBtn.removeEventListener('click', onPickImage);
+        if (imagePicker) imagePicker.removeEventListener('change', onImagesChosen);
+        if (fileBtn) fileBtn.removeEventListener('click', onFileUnavailable);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
