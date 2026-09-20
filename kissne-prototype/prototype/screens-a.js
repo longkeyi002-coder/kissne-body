@@ -1282,9 +1282,10 @@
         }
         if (type === 'completed' && event.presentation === 'session_reset') {
           var resetText = String(event.text || '');
-          append(sessionResetMsg(resetText, clockNow(), event.message_ref || ''));
+          var resetRef = event.notice_id ? 'notice:' + event.notice_id : (event.message_ref || '');
+          append(sessionResetMsg(resetText, clockNow(), resetRef));
           CHAT_LOG.push({ who: 'sys', text: resetText, time: clockNow(),
-            presentation: 'session_reset', ref: event.message_ref || '' });
+            presentation: 'session_reset', ref: resetRef });
           if (turnId) liveCompleted[turnId] = true;
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           return;
@@ -1304,16 +1305,6 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
-          if (event.presentation === 'session_reset') {
-            if (el && el.parentNode) el.parentNode.removeChild(el);
-            append(sessionResetMsg(finalText, clockNow(), event.notice_id ? 'notice:' + event.notice_id : ''));
-            CHAT_LOG.push({
-              who: 'sys', presentation: 'session_reset', text: finalText,
-              time: clockNow(), ref: event.notice_id ? 'notice:' + event.notice_id : ''
-            });
-            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-            return;
-          }
            function presentReply(text) {
             var clean = String(text || '').trim();
              if (clean.length > 1800) {
