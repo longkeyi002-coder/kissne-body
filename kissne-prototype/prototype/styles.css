@@ -1495,3 +1495,21 @@ body.is-shot .phone{
   .hsel{min-height:44px;touch-action:manipulation}
 }
 .dd__item.is-loading{pointer-events:none;opacity:.58}
+
+/* Hermes-owned /new boundary. Content stays verbatim; Kissne only changes presentation. */
+.msg--session-reset{justify-content:center;margin:14px 0}
+.msg--session-reset .msg__sysline{
+  max-width:88%;padding:9px 12px;border:1px solid var(--line-2);border-radius:12px;
+  background:var(--g1);color:var(--ink-2);text-align:left
+}
+.msg--session-reset pre{
+  margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.55;color:inherit
+}
+.msg--session-reset .msg__time{display:block;margin-top:4px}
+.composerquote{
+  display:flex;align-items:center;gap:8px;margin:0 12px 6px;padding:7px 9px;
+  border-left:3px solid var(--blue-line);border-radius:8px;background:var(--g1);
+  color:var(--ink-2);font-size:11px
+}
+.composerquote span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.composerquote button{border:0;background:transparent;color:var(--ink-3);font-size:18px;line-height:1;padding:2px 4px}
