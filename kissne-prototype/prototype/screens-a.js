@@ -478,19 +478,32 @@
      真实列表由 Hermes 返回（自带模型供应商与思考强度档位），
      本阶段按占位示例摆放：模型名用 Hermes 风格的示例名（非真实模型表），
      真实列表由 Hermes 返回后整体替换。 */
-  var MODELS = [
-    { k: 'auto',  v: '自动',             d: '跟随当前可用模型' },
-    { k: 'mimo',  v: 'MiMo v2.5',       d: '轻快响应' },
-    { k: 'deep',  v: 'DeepSeek v4.1',    d: '深度推理' },
-    { k: 'flash', v: 'Flash',            d: '极速回复' }
-  ];
-  var EFFORTS = [
-    { k: 'auto', v: '自动', d: '按问题难度由 Hermes 决定' },
-    { k: 'off',  v: '关闭', d: '不输出思考过程' },
-    { k: 'low',  v: '低',   d: '更快、更省' },
-    { k: 'mid',  v: '中',   d: '默认档' },
-    { k: 'high', v: '高',   d: '更充分的思考' }
-  ];
+  /* Runtime is the source of truth. These are offline-only fallbacks, never a model catalog. */
+  var MODELS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前模型' }];
+  var EFFORTS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前设置' }];
+  var MODEL_OPTIONS_LOADING = false;
+  function refreshModelOptions() {
+    var T = window.KissneTransport;
+    if (!T || !T.hasToken || !T.hasToken() || MODEL_OPTIONS_LOADING) return;
+    MODEL_OPTIONS_LOADING = true;
+    T.modelOptions().then(function (data) {
+      MODELS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前模型' }].concat(
+        (data.models || []).map(function (m) {
+          return { k: m.provider + '/' + m.model, v: m.label || m.model, d: m.provider || '' };
+        }));
+      EFFORTS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前设置' }].concat(
+        (data.efforts || []).map(function (e) {
+          return { k: e.value, v: e.label || e.value, d: '' };
+        }));
+      try {
+        sessionStorage.setItem('kissne.current_model', data.current_model || 'auto');
+        sessionStorage.setItem('kissne.current_effort', data.current_effort || 'auto');
+      } catch (e) {}
+      if ((location.hash || '').indexOf('#/chat') === 0) window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }).catch(function () {
+      /* Offline: keep only Auto; do not pretend stale hard-coded models are available. */
+    }).finally(function () { MODEL_OPTIONS_LOADING = false; });
+  }
   function pick(list, key, fallback) {
     for (var i = 0; i < list.length; i++) { if (list[i].k === key) return list[i]; }
     for (var j = 0; j < list.length; j++) { if (list[j].k === fallback) return list[j]; }
@@ -732,8 +745,14 @@
 
       /* --- 当前选中的模型 / 思考强度（从查询参数读，选完能立刻反映到头部）--- */
       var q = ctx.params;
-      var curModel  = pick(MODELS,  q && q.get('model'),  'auto');
-      var curEffort = pick(EFFORTS, q && q.get('effort'), 'mid');
+      refreshModelOptions();
+      var savedModel = 'auto', savedEffort = 'auto';
+      try {
+        savedModel = sessionStorage.getItem('kissne.current_model') || 'auto';
+        savedEffort = sessionStorage.getItem('kissne.current_effort') || 'auto';
+      } catch (e) {}
+      var curModel  = pick(MODELS,  (q && q.get('model')) || savedModel,  'auto');
+      var curEffort = pick(EFFORTS, (q && q.get('effort')) || savedEffort, 'auto');
       /* 菜单是从哪个状态点开的：选中后回到那里（从侧栏直接切到菜单态时兜底到空态） */
       var origin = (q && q.get('from')) || '';
       if (!origin || origin === 'model-menu' || origin === 'effort-menu') {
