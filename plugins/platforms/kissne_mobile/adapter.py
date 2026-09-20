@@ -897,6 +897,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             quoted = next((item for item in history_rows if item["message_ref"] == reply_ref), None)
             if quoted is None:
                 return _error_response("reply_target_not_found", 400)
+            # Timeline notices are navigational/system state, not conversational claims. Keep them
+            # searchable/jumpable but do not inject them into a new model turn as quoted user content.
+            if str(quoted.get("role") or "") == "system":
+                return _error_response("reply_target_not_quotable", 400)
         fingerprint = self._payload_fingerprint(text, attachments, reply_ref)
         if client_message_id:
             existing = await asyncio.to_thread(
