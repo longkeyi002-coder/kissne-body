@@ -198,3 +198,37 @@ def test_bad_attachment_shapes_are_refused(tmp_path):
         return statuses
 
     assert run(scenario()) == [400, 400, 400, 400]
+
+
+def test_document_reaches_runtime_as_document_media(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            captured = []
+
+            async def capture(event):
+                captured.append((event.message_type, list(event.media_types),
+                                 [Path(p).read_bytes() for p in event.media_urls]))
+
+            adapter.handle_message = capture
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                data = base64.b64encode(b"hello from kissne").decode("ascii")
+                status, payload, _ = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "doc-1", "attachments": [{
+                        "type": "file", "mime_type": "text/plain",
+                        "data": data, "label": "note.txt",
+                    }]},
+                )
+            finally:
+                await stop(adapter)
+        return status, payload, captured
+
+    status, payload, captured = run(scenario())
+    assert status == 202, (status, payload)
+    assert captured == [(MessageType.DOCUMENT, ["text/plain"], [b"hello from kissne"])]
