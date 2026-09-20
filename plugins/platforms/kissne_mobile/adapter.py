@@ -700,14 +700,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }, status=201)
 
     @staticmethod
-    def _payload_fingerprint(text: str, attachments: Optional[List[Dict[str, Any]]] = None) -> str:
+    def _payload_fingerprint(text: str, attachments: Optional[List[Dict[str, Any]]] = None, reply_to: str = "") -> str:
         """Digest text plus attachment identity so idempotency also covers media changes."""
         items = [{
             "type": item["type"], "mime_type": item["mime_type"],
             "label": item.get("label", ""),
             "sha256": hashlib.sha256(item["bytes"]).hexdigest(),
         } for item in (attachments or [])]
-        canonical = json.dumps({"text": text, "attachments": items}, ensure_ascii=False,
+        canonical = json.dumps({"text": text, "attachments": items, "reply_to": reply_to}, ensure_ascii=False,
                                sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -830,7 +830,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
-        fingerprint = self._payload_fingerprint(text, attachments)
+        reply_ref = str(body.get("reply_to") or "").strip()
+        quoted = None
+        if reply_ref:
+            history_rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+            quoted = next((item for item in history_rows if item["message_ref"] == reply_ref), None)
+            if quoted is None:
+                return _error_response("reply_target_not_found", 400)
+        fingerprint = self._payload_fingerprint(text, attachments, reply_ref)
         if client_message_id:
             existing = await asyncio.to_thread(
                 store.inbound_record, installation, client_message_id)
@@ -886,7 +893,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 user_id=installation,
                 # Mobile approvals have a dedicated authenticated /approval endpoint. Ordinary chat
                 # text must never become a gateway control command or a bare yes/no approval reply.
-                allow_gateway_control=False,
+                allow_gateway_control=(
+                    text.lstrip().startswith("/")
+                    and text.lstrip().split(maxsplit=1)[0].lower() not in {"/approve", "/deny"}
+                ),
+                reply_to_message_id=reply_ref or None,
+                reply_to_text=str(quoted.get("text") or "") if quoted else None,
+                reply_to_author_name=(
+                    "叶青栩" if quoted and quoted.get("role") == "assistant" else
+                    "用户" if quoted else None
+                ),
+                reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
             )
             if attachments:
                 # Attach before admission: an immediately spawned background task may reach
