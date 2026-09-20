@@ -114,7 +114,10 @@ class TestApprovalInterrupt:
         elapsed = time.monotonic() - start
 
         assert not t.is_alive(), "approval wait did not return after interrupt"
-        assert result_holder["result"] == {"resolved": True, "choice": "deny", "reason": None}
+        assert result_holder["result"]["resolved"] is True
+        assert result_holder["result"]["choice"] == "deny"
+        assert result_holder["result"]["reason"] is None
+        assert result_holder["result"].get("request_id")
         # Must be far below the 300s timeout — the interrupt, not the deadline,
         # is what released the wait.
         assert elapsed < 10, f"interrupt path too slow ({elapsed:.1f}s)"
@@ -159,4 +162,7 @@ class TestApprovalInterrupt:
         t.join(timeout=10)
         assert not t.is_alive()
         # Timed out (no resolution) because the foreign interrupt was ignored.
-        assert result_holder["result"] == {"resolved": False, "choice": None, "reason": None}
+        assert result_holder["result"]["resolved"] is False
+        assert result_holder["result"]["choice"] is None
+        assert result_holder["result"]["reason"] is None
+        assert result_holder["result"].get("request_id")
