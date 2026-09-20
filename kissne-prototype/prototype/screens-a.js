@@ -574,8 +574,10 @@
      省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
+  var MSG_SEQ = 0;
   function meMsg(html, meta, time, state) {
-    return '<div class="msg msg--me">' + ava('USER_AVATAR', '我', state || MY_AVA)
+    var mid = 'local-msg-' + (++MSG_SEQ);
+    return '<div class="msg msg--me" data-msg-id="' + mid + '" tabindex="0">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
@@ -1168,7 +1170,9 @@
         var v = (input.value || '').trim();
         if (!v) return;
         input.value = '';
-        append(meMsg(esc(v), '', clockNow()));
+        var beforeSend = list.lastElementChild;
+        append(meMsg(esc(v), '发送中…', clockNow()));
+        var sentNode = list.lastElementChild;
         pushLog({ who: 'me', html: esc(v), time: clockNow() });
 
         if (live) {
@@ -1176,10 +1180,15 @@
             var accepted = await T.sendText(v);
             liveCurrentTurn = String((accepted && accepted.turn_id) || '');
             if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            if (sentNode) { var metaOk = sentNode.querySelector('.msg__meta'); if (metaOk) metaOk.textContent = ''; }
             scheduleLivePoll(0);
           } catch (err) {
-            append(aiMsg(icon('alert', 15) + '<span>消息发送失败，请重试。</span>',
-              'is-failed', clockNow(), '没连上', 'sad'));
+            if (sentNode) {
+              sentNode.classList.add('is-send-failed');
+              sentNode.setAttribute('data-retry-text', v);
+              var meta = sentNode.querySelector('.msg__meta');
+              if (meta) meta.innerHTML = '<button type="button" class="msgretry" data-retry>发送失败 · 点此重试</button>';
+            }
             if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
           }
           return;
@@ -1299,6 +1308,81 @@
       }
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
+      /* 消息交互：长按/右键复制；失败文本可原位重试；图片点击查看。 */
+      var holdTimer = null, actionTarget = null;
+      function closeMsgActions() {
+        var old = root.querySelector('.msgactions');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        actionTarget = null;
+      }
+      function openMsgActions(msg) {
+        closeMsgActions();
+        actionTarget = msg;
+        var menu = document.createElement('div');
+        menu.className = 'msgactions';
+        menu.innerHTML = '<button type="button" data-msg-copy>复制</button>'
+          + (msg && msg.getAttribute('data-retry-text') ? '<button type="button" data-msg-retry>重试</button>' : '');
+        root.appendChild(menu);
+      }
+      function onMsgPointerDown(e) {
+        var msg = e.target.closest && e.target.closest('.msg');
+        if (!msg) return;
+        clearTimeout(holdTimer);
+        holdTimer = setTimeout(function () { openMsgActions(msg); }, 520);
+      }
+      function onMsgPointerEnd() { clearTimeout(holdTimer); }
+      function onMsgContext(e) {
+        var msg = e.target.closest && e.target.closest('.msg');
+        if (!msg) return;
+        e.preventDefault(); openMsgActions(msg);
+      }
+      async function retryTextNode(msg) {
+        var value = msg && msg.getAttribute('data-retry-text');
+        if (!value || !live) return;
+        var meta = msg.querySelector('.msg__meta');
+        if (meta) meta.textContent = '重试中…';
+        try {
+          var accepted = await T.sendText(value);
+          msg.classList.remove('is-send-failed');
+          msg.removeAttribute('data-retry-text');
+          if (meta) meta.textContent = '';
+          liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          scheduleLivePoll(0);
+        } catch (err) {
+          if (meta) meta.innerHTML = '<button type="button" class="msgretry" data-retry>发送失败 · 点此重试</button>';
+        }
+      }
+      async function onMsgAction(e) {
+        var directRetry = e.target.closest && e.target.closest('[data-retry]');
+        if (directRetry) {
+          var owner = directRetry.closest('.msg');
+          await retryTextNode(owner); return;
+        }
+        if (e.target.closest && e.target.closest('[data-msg-copy]') && actionTarget) {
+          var text = (actionTarget.querySelector('.bubble') || actionTarget).innerText || '';
+          try { await navigator.clipboard.writeText(text); } catch (_) {}
+          closeMsgActions(); return;
+        }
+        if (e.target.closest && e.target.closest('[data-msg-retry]') && actionTarget) {
+          var target = actionTarget; closeMsgActions(); await retryTextNode(target); return;
+        }
+        var img = e.target.closest && e.target.closest('.bubble img');
+        if (img && img.src) {
+          var viewer = document.createElement('div');
+          viewer.className = 'imageviewer';
+          viewer.innerHTML = '<button type="button" aria-label="关闭">×</button><img src="' + esc(img.src) + '" alt="图片预览">';
+          viewer.addEventListener('click', function () { viewer.remove(); });
+          root.appendChild(viewer); return;
+        }
+        if (!e.target.closest || !e.target.closest('.msgactions')) closeMsgActions();
+      }
+      list.addEventListener('pointerdown', onMsgPointerDown);
+      list.addEventListener('pointerup', onMsgPointerEnd);
+      list.addEventListener('pointercancel', onMsgPointerEnd);
+      list.addEventListener('contextmenu', onMsgContext);
+      root.addEventListener('click', onMsgAction);
+
       /* 输入区保持在聊天页 flex 文档流底部。
          真机软键盘出现/收起时由浏览器 visual viewport 调整可视区域，
          不再手动写 bottom / transform / padding，避免 Android 收键盘后残留在半屏。 */
@@ -1385,6 +1469,12 @@
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
+        list.removeEventListener('pointerdown', onMsgPointerDown);
+        list.removeEventListener('pointerup', onMsgPointerEnd);
+        list.removeEventListener('pointercancel', onMsgPointerEnd);
+        list.removeEventListener('contextmenu', onMsgContext);
+        root.removeEventListener('click', onMsgAction);
+        clearTimeout(holdTimer);
         send.removeEventListener('click', push);
         liveStopped = true;
         clearTimeout(livePollTimer);
