@@ -653,6 +653,14 @@
       + '<div class="msg__sysline"><pre>' + esc(String(text || '')) + '</pre></div>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
+  function quoteCard(ref, text, role) {
+    var author = role === 'assistant' ? '叶青栩' : (role === 'system' ? '系统' : '我');
+    return '<button type="button" class="msgquote" data-quote-ref="' + esc(String(ref || '')) + '">'
+      + '<span class="msgquote__author">' + esc(author) + '</span>'
+      + '<span class="msgquote__text">' + esc(String(text || '').replace(/\s+/g, ' ').trim().slice(0, 140) || '引用消息') + '</span>'
+      + '</button>';
+  }
+
   function pushLog(m) {
     CHAT_LOG.push(m);
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
@@ -1116,7 +1124,15 @@
             if (x.node) { x.node.classList.remove('is-send-pending'); var m=x.node.querySelector('.msg__meta'); if(m)m.textContent=''; }
           });
           liveCurrentTurn = String((accepted && accepted.turn_id) || '');
-          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          if (liveCurrentTurn) {
+            var userRef = 'turn:' + liveCurrentTurn + ':user';
+            batch.forEach(function (x) {
+              if (x.node) x.node.setAttribute('data-history-ref', userRef);
+              if (x.logEntry) x.logEntry.ref = userRef;
+            });
+            liveEnsure(liveCurrentTurn);
+            liveSetCancel(true);
+          }
           scheduleLivePoll(0);
         } catch (err) {
           batch.forEach(function (x) {
@@ -1139,11 +1155,13 @@
           flushComposeBatch();
         }, Math.min(COMPOSE_IDLE_MS, COMPOSE_MAX_WAIT_MS - elapsed));
       }
-      function queueComposeText(text, node) {
+      function queueComposeText(text, node, reply, logEntry) {
         if (!composeBatch.length) composeBatchStartedAt = Date.now();
-        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length, replyTo: pendingReply && pendingReply.ref });
-        pendingReply = null;
-        var quoteNode = root.querySelector('.composerquote'); if (quoteNode) quoteNode.remove();
+        composeBatch.push({
+          text:text, node:node, logEntry:logEntry,
+          messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length,
+          replyTo: reply && reply.ref ? reply.ref : ''
+        });
         if (composeBatch.length >= 12) { flushComposeBatch(); return; }
         scheduleComposeFlush();
       }
@@ -1164,6 +1182,36 @@
           + '<div class="chatempty__t">还没有消息</div>'
           + '<div class="chatempty__s">发一条消息，开始和叶青栩对话。</div></div>';
       }
+      function historyBody(item) {
+        var text = typeof item.text === 'string' ? item.text : '';
+        var attachments = Array.isArray(item.attachments) ? item.attachments : [];
+        var parts = [];
+        if (item.role === 'user' && item.reply_to) {
+          var preview = item.reply_preview || {};
+          parts.push(quoteCard(item.reply_to, preview.text || '', preview.role || ''));
+        }
+        if (text.trim()) parts.push(esc(text));
+        attachments.forEach(function (a) {
+          var kind = String((a && a.type) || '');
+          var label = String((a && a.label) || '');
+          if (kind === 'sticker') parts.push('<span class="attachment-history attachment-history--sticker">' + icon('smile', 15) + '<span>' + esc(label || '表情包') + '</span></span>');
+          else if (kind === 'image') parts.push('<span class="attachment-history attachment-history--image">' + icon('image', 15) + '<span>图片</span></span>');
+          else if (kind === 'file') parts.push('<span class="attachment-history attachment-history--file">' + icon('file', 15) + '<span>' + esc(label || '文件') + '</span></span>');
+        });
+        return parts.join('');
+      }
+      function historyRowHtml(item) {
+        if (!item || !['user', 'assistant', 'system'].includes(item.role)) return '';
+        var raw = String(item.text || '');
+        if (item.role === 'system' && item.presentation === 'session_reset') {
+          return sessionResetMsg(raw, historyClock(item.created_at), item.message_ref || '');
+        }
+        var body = historyBody(item);
+        if (!body) return '';
+        return item.role === 'assistant'
+          ? aiMsg(body, '', historyClock(item.created_at), '', '', item.message_ref || '')
+          : meMsg(body, '', historyClock(item.created_at), '', item.message_ref || '');
+      }
       function hydrateHistory(history) {
         CHAT_LOG.length = 0;
         (history || []).forEach(function (item) {
@@ -1177,22 +1225,15 @@
             });
             return;
           }
-          var attachments = Array.isArray(item.attachments) ? item.attachments : [];
-          if (!text.trim() && !attachments.length) return;
-          var parts = [];
-          if (text.trim()) parts.push(esc(text));
-          attachments.forEach(function (a) {
-            var kind = String((a && a.type) || '');
-            var label = String((a && a.label) || '');
-            if (kind === 'sticker') parts.push('<span class="attachment-history attachment-history--sticker">' + icon('smile', 15) + '<span>' + esc(label || '表情包') + '</span></span>');
-            else if (kind === 'image') parts.push('<span class="attachment-history attachment-history--image">' + icon('image', 15) + '<span>图片</span></span>');
-            else if (kind === 'file') parts.push('<span class="attachment-history attachment-history--file">' + icon('file', 15) + '<span>' + esc(label || '文件') + '</span></span>');
-          });
+          var body = historyBody(item);
+          if (!body) return;
           CHAT_LOG.push({
             who: item.role === 'user' ? 'me' : 'ai',
-            html: parts.join(''),
+            html: body,
+            text: text,
             time: historyClock(item.created_at),
-            ref: item.message_ref || ''
+            ref: item.message_ref || '',
+            replyTo: item.reply_to || ''
           });
         });
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
@@ -1208,7 +1249,10 @@
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append(aiMsg('正在思考' + dots(), 'is-pending', clockNow(), '思考', 'think'));
         var el = list.lastElementChild;
-        if (id) liveTurns[id] = el;
+        if (id && el) {
+          liveTurns[id] = el;
+          el.setAttribute('data-live-turn', id);
+        }
         return el;
       }
       function liveAvatar(el, state) {
@@ -1305,15 +1349,17 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
-           function presentReply(text) {
+          var assistantRef = turnId ? ('turn:' + turnId + ':assistant') : String(event.message_ref || '');
+          if (el && assistantRef) el.setAttribute('data-history-ref', assistantRef);
+          function presentReply(text) {
             var clean = String(text || '').trim();
-             if (clean.length > 1800) {
+            if (clean.length > 1800) {
               var paras = clean.split(/\n\s*\n/).filter(Boolean);
               var summary = (paras[0] || clean).slice(0, 320) + ((paras[0] || clean).length > 320 ? '…' : '');
               liveText(el, summary, false);
               var doc = '<button type="button" class="replydoc" data-full-reply="' + encodeURIComponent(clean) + '">'
                 + icon('file',15) + '<span><b>完整回复</b><small>' + clean.length + ' 字 · 点击查看</small></span></button>';
-              append(aiMsg(doc, '', clockNow(), '', 'happy'));
+              append(aiMsg(doc, '', clockNow(), '', 'happy', assistantRef));
               return;
             }
             var pieces = clean.length <= 420
@@ -1323,19 +1369,17 @@
             liveText(el, pieces.shift(), false);
             pieces.forEach(function (part) {
               if (!part.trim()) return;
-              append(aiMsg(esc(part.trim()), '', clockNow(), '', 'happy'));
+              append(aiMsg(esc(part.trim()), '', clockNow(), '', 'happy', assistantRef));
             });
           }
           presentReply(finalText);
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
-            var shown = finalText.length > 1800
-              ? [(finalText.split(/\n\s*\n/).filter(Boolean)[0] || finalText).slice(0, 320)]
-              : (finalText.length <= 420
-                  ? finalText.split(/(?<=[。！？!?])\s*/).filter(Boolean)
-                  : finalText.split(/\n\s*\n/).filter(Boolean));
-            shown.forEach(function (part) { CHAT_LOG.push({ who: 'ai', html: esc(part), time: clockNow() }); });
+            CHAT_LOG.push({
+              who: 'ai', html: esc(finalText), text: finalText,
+              time: clockNow(), ref: assistantRef
+            });
           }
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
@@ -1377,6 +1421,7 @@
           hydrateHistory((hp && hp.messages) || boot.history || []);
           historyBefore = String((hp && hp.next_before) || '');
           historyHasMore = !!(hp && hp.has_more);
+          if (historyRef) await locateHistoryRef(historyRef);
           (boot.pending_approvals || []).forEach(renderApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
@@ -1407,14 +1452,24 @@
         var v = (input.value || '').trim();
         if (!v) return;
         input.value = '';
-        var beforeSend = list.lastElementChild;
-        append(meMsg(esc(v), '发送中…', clockNow()));
+        var reply = pendingReply ? {
+          ref: pendingReply.ref, text: pendingReply.text,
+          role: pendingReply.role, author: pendingReply.author
+        } : null;
+        pendingReply = null;
+        var quoteNode = root.querySelector('.composerquote');
+        if (quoteNode) quoteNode.remove();
+        var bodyHtml = (reply ? quoteCard(reply.ref, reply.text, reply.role) : '') + esc(v);
+        append(meMsg(bodyHtml, '发送中…', clockNow()));
         var sentNode = list.lastElementChild;
-        pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        var logEntry = pushLog({
+          who: 'me', html: bodyHtml, text: v, time: clockNow(),
+          replyTo: reply && reply.ref ? reply.ref : ''
+        });
 
         if (live) {
           if (sentNode) sentNode.classList.add('is-send-pending');
-          queueComposeText(v, sentNode);
+          queueComposeText(v, sentNode, reply, logEntry);
           return;
         }
 
@@ -1425,16 +1480,6 @@
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
       var historyRef = (p && p.get('ref')) || '';
-      if (historyRef) {
-        setTimeout(function () {
-          var hit = list.querySelector('[data-history-ref="' + CSS.escape(historyRef) + '"]');
-          if (hit) {
-            jumpTo(Math.max(0, hit.offsetTop - 56));
-            hit.classList.add('is-hit');
-            setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
-          }
-        }, 80);
-      }
 
       var findKw = (p && p.get('find')) || '';
       var hitT = null;
@@ -1600,6 +1645,12 @@
         }
       }
       async function onMsgAction(e) {
+        var quoteJump = e.target.closest && e.target.closest('[data-quote-ref]');
+        if (quoteJump) {
+          await locateHistoryRef(quoteJump.getAttribute('data-quote-ref') || '');
+          closeMsgActions();
+          return;
+        }
         var docBtn = e.target.closest && e.target.closest('[data-full-reply]');
         if (docBtn) {
           var full = decodeURIComponent(docBtn.getAttribute('data-full-reply') || '');
@@ -1621,15 +1672,21 @@
           closeMsgActions(); return;
         }
         if (e.target.closest && e.target.closest('[data-msg-reply]') && actionTarget) {
+          var replyRole = actionTarget.classList.contains('msg--ai') ? 'assistant'
+            : (actionTarget.classList.contains('msg--sys') ? 'system' : 'user');
           pendingReply = {
             ref: actionTarget.getAttribute('data-history-ref') || '',
-            text: ((actionTarget.querySelector('.bubble') || actionTarget.querySelector('.msg__text') || actionTarget).innerText || '').trim()
+            text: ((actionTarget.querySelector('.bubble') || actionTarget.querySelector('.msg__text')
+              || actionTarget.querySelector('.msg__sysline') || actionTarget).innerText || '').trim(),
+            role: replyRole,
+            author: replyRole === 'assistant' ? '叶青栩' : (replyRole === 'system' ? '系统' : '我')
           };
           var oldQuote = root.querySelector('.composerquote');
           if (oldQuote) oldQuote.remove();
           var quote = document.createElement('div');
           quote.className = 'composerquote';
-          quote.innerHTML = '<span>引用：' + esc(pendingReply.text.slice(0, 90)) + '</span><button type="button" data-clear-reply aria-label="取消引用">×</button>';
+          quote.innerHTML = '<span>引用 ' + esc(pendingReply.author) + '：' + esc(pendingReply.text.slice(0, 90))
+            + '</span><button type="button" data-clear-reply aria-label="取消引用">×</button>';
           var wrap = root.querySelector('.composerwrap');
           if (wrap) wrap.insertBefore(quote, wrap.querySelector('.composer'));
           closeMsgActions(); input.focus(); return;
@@ -1669,26 +1726,43 @@
       input.addEventListener('blur', onBlur);
 
       async function loadOlderHistory() {
-        if (!live || !historyHasMore || historyLoading || !historyBefore) return;
+        if (!live || !historyHasMore || historyLoading || !historyBefore) return false;
         historyLoading = true;
         var oldHeight = list.scrollHeight;
         try {
           var page = await T.history(historyBefore, 50);
           var rows = (page && page.messages) || [];
-          var html = rows.map(function (item) {
-            var raw = String(item.text || '');
-            if (item.role === 'system' && item.presentation === 'session_reset')
-              return sessionResetMsg(raw, historyClock(item.created_at), item.message_ref);
-            var text = esc(raw);
-            return item.role === 'assistant'
-              ? aiMsg(text, '', historyClock(item.created_at), '', '', item.message_ref)
-              : meMsg(text, '', historyClock(item.created_at), '', item.message_ref);
-          }).join('');
+          var html = rows.map(historyRowHtml).join('');
           if (html) list.insertAdjacentHTML('afterbegin', html);
           historyBefore = String((page && page.next_before) || '');
           historyHasMore = !!(page && page.has_more);
           list.scrollTop = Math.max(0, list.scrollHeight - oldHeight);
+          return rows.length > 0;
         } finally { historyLoading = false; }
+      }
+      async function locateHistoryRef(ref) {
+        ref = String(ref || '');
+        if (!ref) return false;
+        var selector = '[data-history-ref="' + CSS.escape(ref) + '"]';
+        var hit = list.querySelector(selector);
+        var pages = 0;
+        while (!hit && live && historyHasMore && historyBefore && pages < 40) {
+          var loaded = await loadOlderHistory();
+          pages++;
+          hit = list.querySelector(selector);
+          if (!loaded) break;
+        }
+        if (!hit) {
+          var oldMiss = list.querySelector('.srchmiss[data-ref-miss]');
+          if (oldMiss) oldMiss.remove();
+          list.insertAdjacentHTML('afterbegin',
+            '<div class="srchmiss" data-ref-miss>原消息暂时找不到，可能已被清理。</div>');
+          return false;
+        }
+        jumpTo(Math.max(0, hit.offsetTop - 56));
+        hit.classList.add('is-hit');
+        setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
+        return true;
       }
       function onHistoryScroll() { if (list.scrollTop < 72) loadOlderHistory(); }
       list.addEventListener('scroll', onHistoryScroll);
