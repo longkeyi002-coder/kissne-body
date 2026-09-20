@@ -503,7 +503,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     chat_id, notice_id, "session_reset", str(content or ""),
                 )
                 extra["notice_id"] = notice_id
-            extra["message_ref"] = "notice:" + notice_id
+                extra["message_ref"] = "notice:" + notice_id
             except Exception:
                 logger.exception("[kissne_mobile] failed to persist session reset notice")
         message_id = await self._queue_event(
