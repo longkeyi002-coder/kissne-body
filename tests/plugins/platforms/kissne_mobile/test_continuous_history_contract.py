@@ -126,12 +126,18 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
             )
             result = await adapter.send("phone-a", backend_text)
             adapter._queue_event = original_queue
-            return result, sent
+            notices = adapter.device_store().timeline_notices("phone-a")
+            return result, sent, notices
 
-    result, sent = run(scenario())
+    result, sent, notices = run(scenario())
     assert result.success is True
     assert len(sent) == 1
     event_type, kwargs = sent[0]
     assert kwargs["content"].endswith("✦ Tip: backend-owned text")
     assert "future-model-from-hermes" in kwargs["content"]
-    assert kwargs["extra"] == {"presentation": "session_reset"}
+    assert kwargs["extra"]["presentation"] == "session_reset"
+    assert kwargs["extra"]["notice_id"].startswith("kbn_")
+    assert len(notices) == 1
+    assert notices[0]["presentation"] == "session_reset"
+    assert notices[0]["text"] == kwargs["content"]
+    assert notices[0]["notice_id"] == kwargs["extra"]["notice_id"]
