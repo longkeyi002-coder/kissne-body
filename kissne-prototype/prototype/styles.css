@@ -1104,7 +1104,8 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   display:flex;flex-direction:column;
   transition:transform .2s ease;
 }
-.screen--chat.is-typing .composerwrap{
+/* 真实键盘（手机）：浏览器自己处理 composer 位移，不再叠加 --kbd-lift */
+.screen--chat.is-typing:not(.is-real-kbd) .composerwrap{
   transform:translateY(calc(var(--kbd-lift) * -1))
 }
 
@@ -1437,7 +1438,7 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   .stage__bar{display:none}
   .stage__body{padding:0;height:100%}
   .phone{
-    width:100vw;height:100vh;height:100dvh;
+    width:100vw;height:100vh;
     border:0;border-radius:0;box-shadow:none;
   }
   /* 真机上用系统状态栏，不画假的 */
