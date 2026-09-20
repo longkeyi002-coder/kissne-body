@@ -243,11 +243,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def bind_conversation(self, installation_id: str, session_key: str) -> bool:
         """Point this installation's routing key at an ALREADY EXISTING Runtime Conversation.
 
-        Uses only public ``SessionStore`` API — ``bind_source_to_existing_session`` writes the
-        routing alias and nothing else: no session row is created, ended or reopened and the joined
-        row's identity is left untouched — so the resolution itself is the store's truth and
-        survives a restart. Returns ``False`` when the target conversation does not exist
-        or the store cannot do it; the plugin never invents a conversation of its own.
+        Uses only public ``SessionStore`` API.  When the routing key is already bound to
+        the *same* session, this is a no-op that returns ``True``.  When it points at a
+        *different* session, ``switch_session`` re-targets the alias so that a stale
+        client-sent ``session_key`` does not hard-fail the message.
         """
         store = getattr(self, "_session_store", None)
         installation = str(installation_id or "").strip()
@@ -263,19 +262,42 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.warning("[kissne_mobile] refusing to bind installation %s: conversation %s does not exist",
                            _fingerprint(installation), target_key)
             return False
+
+        source = self.source_for_installation(installation)
+
+        # Already bound to the same session → nothing to do.
+        current = store.peek_session_id(self.mobile_session_key(installation))
+        if current == target.session_id:
+            return True
+
+        # Currently unbound → fresh bind.
+        if current is None:
+            try:
+                entry = store.bind_source_to_existing_session(source, target.session_id)
+            except Exception:
+                logger.warning("[kissne_mobile] failed to bind installation %s to %s",
+                               _fingerprint(installation), target_key, exc_info=True)
+                return False
+            if entry is None or entry.session_id != target.session_id:
+                logger.warning("[kissne_mobile] installation %s did not resolve to the target conversation",
+                               _fingerprint(installation))
+                return False
+            logger.info("[kissne_mobile] installation %s joined the existing conversation on key %s",
+                        _fingerprint(installation), target_key)
+            return True
+
+        # Already bound elsewhere → re-point via switch_session.
         try:
-            entry = store.bind_source_to_existing_session(
-                self.source_for_installation(installation), target.session_id,
-            )
+            entry = store.switch_session(self.mobile_session_key(installation), target.session_id)
         except Exception:
-            logger.warning("[kissne_mobile] failed to bind installation %s to %s",
+            logger.warning("[kissne_mobile] failed to switch installation %s to %s",
                            _fingerprint(installation), target_key, exc_info=True)
             return False
         if entry is None or entry.session_id != target.session_id:
-            logger.warning("[kissne_mobile] installation %s did not resolve to the target conversation",
+            logger.warning("[kissne_mobile] installation %s switch did not resolve to target",
                            _fingerprint(installation))
             return False
-        logger.info("[kissne_mobile] installation %s joined the existing conversation on key %s",
+        logger.info("[kissne_mobile] installation %s re-pointed to conversation on key %s",
                     _fingerprint(installation), target_key)
         return True
 
@@ -419,6 +441,21 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
 
+    async def edit_message(
+        self, chat_id: str, message_id: str, content: str, *, finalize: bool = False,
+    ) -> SendResult:
+        """Polling adapter: no native message-edit, so "edit" = queue a fresh delta.
+
+        The gateway's progress system calls ``edit_message`` to update the tool-progress bubble
+        in-place.  Since the Android client re-fetches by cursor, a new delta with the same
+        ``draft_id`` replaces the previous text in the client's view.
+        """
+        extra: Dict[str, Any] = {"draft_id": 0, "edited_message_id": message_id}
+        new_id = await self._queue_event(chat_id, EVENT_DELTA, content=content, extra=extra)
+        if new_id is None:
+            return SendResult(success=False, error="missing target installation")
+        return SendResult(success=True, message_id=new_id)
+
     def supports_draft_streaming(self, chat_type: Optional[str] = None,
                                  metadata: Optional[Dict[str, Any]] = None,
                                  chat_id: Optional[str] = None) -> bool:
@@ -554,9 +591,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response(f"bad_request: {exc}", 400)
 
         conversation_key = str(body.get("session_key") or "").strip()
-        bound = False
         if conversation_key:
             bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
+        else:
+            # No explicit session_key: auto-bind to the installation's own mobile_session_key
+            # so a fresh mobile-native conversation is ready on first message.
+            own_key = self.mobile_session_key(installation)
+            bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
         return _json_response({
             "ok": True,
             "installation_id": installation,
@@ -614,10 +655,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if not await asyncio.to_thread(self.bind_conversation, installation, conversation_key):
                 return _error_response("conversation_not_bound", 409)
         elif self.bound_conversation(installation) is None:
-            # Never let an unbound installation open a second, mobile-only conversation.
-            logger.warning("[kissne_mobile] inbound refused for unbound installation %s",
-                           _fingerprint(installation))
-            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+            # Unbound installation without explicit session_key: auto-bind to its own
+            # mobile_session_key so the gateway creates a fresh, mobile-native conversation.
+            own_key = self.mobile_session_key(installation)
+            if not await asyncio.to_thread(self.bind_conversation, installation, own_key):
+                logger.warning("[kissne_mobile] auto-bind failed for unbound installation %s",
+                               _fingerprint(installation))
+                return _error_response("auto_bind_failed", 500)
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
@@ -859,6 +903,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("cursor_must_not_be_negative", 400)
 
         identity = self._conversation_identity(installation)
+        if identity is None:
+            # Auto-bind to the installation's own mobile_session_key so a fresh
+            # mobile-native conversation is created on first cold start.
+            own_key = self.mobile_session_key(installation)
+            await asyncio.to_thread(self.bind_conversation, installation, own_key)
+            identity = self._conversation_identity(installation)
         if identity is None:
             logger.info("[kissne_mobile] bootstrap: installation %s has joined no conversation yet",
                         _fingerprint(installation))
