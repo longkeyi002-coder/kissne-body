@@ -53,7 +53,11 @@ Out of scope for this ticket: the Android client itself (``KB1-ANDROID-CHAT``).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
+import os
+import tempfile
 import importlib.util
 import json
 import logging
@@ -78,8 +82,11 @@ from gateway.session import build_session_key
 from .device_store import (
     DEFAULT_PAIRING_TTL_SECONDS,
     EVENT_CANCELLED,
+    EVENT_APPROVAL_REQUIRED,
+    EVENT_APPROVAL_RESOLVED,
     EVENT_COMPLETED,
     EVENT_DELTA,
+    EVENT_NOTICE,
     EVENT_PENDING,
     INBOUND_CONFLICT,
     INBOUND_DUPLICATE,
@@ -94,11 +101,24 @@ from .device_store import (
 )
 
 logger = logging.getLogger(__name__)
+_LIVE_ADAPTERS: Dict[str, "KissneMobileAdapter"] = {}
 
 PLATFORM_NAME = "kissne_mobile"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 0  # ephemeral by default: the Android side is told the port it must reach
-DEFAULT_MAX_BODY_BYTES = 64 * 1024
+DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_ATTACHMENTS = 4
+MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+ALLOWED_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/zip",
+}
+ALLOWED_ATTACHMENT_MIME_TYPES = ALLOWED_IMAGE_MIME_TYPES | ALLOWED_DOCUMENT_MIME_TYPES
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
 
 # This platform has NO external credential, so enablement needs an explicit per-profile opt-in:
@@ -110,6 +130,8 @@ OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 PAIRING_PATH = "/pair"
 BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+HISTORY_PATH = "/history"
+SEARCH_PATH = "/search"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -166,6 +188,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Transport only, and only for the throttle: recent pairing attempts per client address. Queued
         # replies are NOT kept in memory — they are rows (see ``device_store``), so a restart loses none.
         self._pair_attempts: Dict[str, Deque[float]] = {}
+        # Presentation-only marker for canonical Hermes /new or /reset replies. The command handler
+        # replies inline, so this flag is consumed by send(); reply text itself is never parsed.
+        self._session_reset_pending: set[str] = set()
+        # Keep the originating turn so only that /new or /reset reply can consume the marker.
+        # A concurrent ordinary turn must never be mislabeled as a session reset.
+        self._session_reset_turns: Dict[str, str] = {}
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -320,7 +348,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get(HISTORY_PATH, self._handle_history)
+        app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
+        app.router.add_post("/approval", self._handle_approval)
+        app.router.add_get("/model-options", self._handle_model_options)
+        app.router.add_post("/set-model", self._handle_set_model)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
@@ -378,7 +411,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
-                           extra: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                           extra: Optional[Dict[str, Any]] = None,
+                           target_turn_id: Optional[str] = None) -> Optional[str]:
         """Append one typed event to the installation's durable stream; returns its transport message id.
 
         The row is committed *before* the device is told anything, so nothing between "reply produced"
@@ -402,15 +436,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
-        turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
+        turn_id = str(target_turn_id or "").strip()
+        if turn_id:
+            target = await asyncio.to_thread(store.turn, turn_id)
+            if not target or str(target.get("installation_id") or "") != installation:
+                logger.error("[kissne_mobile] refusing outbound with foreign/missing turn %s",
+                             _fingerprint(turn_id))
+                return None
+        else:
+            turn_id = await asyncio.to_thread(store.pending_turn_id, installation) or ""
         try:
             seq = await asyncio.to_thread(
-                store.enqueue_event, installation, event_type, payload, turn_id,
+                store.enqueue_event, installation, event_type, payload, turn_id or None,
                 cap=max(1, self._outbound_cap),
             )
             if event_type == EVENT_COMPLETED and turn_id:
-                # The reply closes the turn it answers — but only from ``pending``: a late reply must not
-                # resurrect a turn the user already cancelled.
+                # Close the exact originating turn when the gateway supplied its message id.
+                # Falling back to newest-pending is only for non-final/status sends that lack one.
                 await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
@@ -422,8 +464,52 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue the FINAL reply for the installation as a ``completed`` event."""
-        message_id = await self._queue_event(chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
+        """Queue the FINAL reply exactly as Hermes produced it.
+
+        Slash-command responses such as /new are canonical backend output: Mobile does not parse,
+        reconstruct, or pin model/provider/context fields.  The lightweight presentation hint only
+        tells the client that this exact text is a session-boundary notice.
+        """
+        # Keep the response byte-for-byte at the presentation boundary. We deliberately do not
+        # infer model/provider/context from the text: those values belong to Hermes and may change.
+        # The hint comes from the actual inbound slash command, never from reply contents.
+        extra: Dict[str, Any] = {}
+        store = self.device_store()
+        target_turn = ""
+        reply_anchor = str(reply_to or "").strip()
+        if reply_anchor:
+            candidate = await asyncio.to_thread(store.turn, reply_anchor)
+            if candidate and str(candidate.get("installation_id") or "") == str(chat_id or "").strip():
+                target_turn = reply_anchor
+
+        # BasePlatformAdapter final delivery replies to the triggering MessageEvent.message_id.
+        # Mobile deliberately sets that id to its server turn_id, so an exact target proves this is
+        # the terminal reply for that turn. Sends without that proof are auxiliary notices and must
+        # neither close nor visually complete whichever newer turn happens to be pending.
+        is_final = bool(target_turn)
+
+        pending_reset_turn = self._session_reset_turns.get(chat_id, "")
+        if (is_final and chat_id in self._session_reset_pending
+                and pending_reset_turn and target_turn == pending_reset_turn):
+            self._session_reset_pending.discard(chat_id)
+            self._session_reset_turns.pop(chat_id, None)
+            extra["presentation"] = "session_reset"
+            # Persist the exact Hermes-authored reply, not reconstructed model/provider/context data.
+            # This sidecar survives /new session boundaries and Runtime restarts.
+            notice_id = f"kbn_{secrets.token_hex(8)}"
+            try:
+                await asyncio.to_thread(
+                    self.device_store().record_timeline_notice,
+                    chat_id, notice_id, "session_reset", str(content or ""),
+                )
+                extra["notice_id"] = notice_id
+                extra["message_ref"] = "notice:" + notice_id
+            except Exception:
+                logger.exception("[kissne_mobile] failed to persist session reset notice")
+        message_id = await self._queue_event(
+            chat_id, EVENT_COMPLETED if is_final else EVENT_NOTICE,
+            content=content, reply_to=reply_to, extra=extra or None,
+            target_turn_id=target_turn or None)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
@@ -471,6 +557,73 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "type": "dm",
             "installation_id": installation,
         }
+
+    @staticmethod
+    def _cleanup_inbound_media(event: MessageEvent) -> None:
+        """Remove plugin-owned inbound temp files after Runtime has finished with the event."""
+        for path in list(getattr(event, "media_urls", None) or []):
+            if not os.path.basename(path).startswith("kissne-mobile-"):
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def installation_from_session_key(self, session_key: str) -> Optional[str]:
+        prefix = f"{PLATFORM_NAME}:dm:"
+        if not session_key.startswith(prefix):
+            return None
+        return session_key[len(prefix):].split(":", 1)[0] or None
+
+    def queue_approval_resolution_from_hook(self, installation: str, approval_id: str,
+                                            status: str, reason: str) -> None:
+        loop = getattr(self, "_approval_loop", None)
+        if loop is None or loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._queue_event(
+                installation, EVENT_APPROVAL_RESOLVED,
+                extra={"approval_id": approval_id, "decision": status,
+                       "scope": None, "reason": reason}),
+            loop)
+
+    def _install_mobile_approval_notify(self, installation: str) -> None:
+        """Bridge Hermes' synchronous approval notifier into this device's durable event stream."""
+        session_key = self.mobile_session_key(installation)
+        loop = asyncio.get_running_loop()
+        self._approval_loop = loop
+        _LIVE_ADAPTERS[session_key] = self
+        from tools.approval import register_gateway_notify
+
+        def notify(data: Dict[str, Any]) -> None:
+            payload = {
+                "approval_id": str(data.get("request_id") or ""),
+                "tool_input": {"command": str(data.get("command") or "")},
+                "summary": str(data.get("description") or "Approval required"),
+                "allow_session": bool(data.get("allow_session", False)),
+                "allow_permanent": bool(data.get("allow_permanent", False)),
+                "status": "pending",
+            }
+            asyncio.run_coroutine_threadsafe(
+                self._queue_event(installation, EVENT_APPROVAL_REQUIRED, extra=payload), loop)
+
+        register_gateway_notify(session_key, notify)
+
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        """Persist attachment metadata only when Runtime actually starts this event."""
+        pending = getattr(event, "_kissne_attachment_metadata", None)
+        if not pending:
+            return
+        installation, turn_id, text, attachments = pending
+        await asyncio.to_thread(
+            self.device_store().record_attachment_message,
+            installation, turn_id, text, attachments,
+        )
+        event._kissne_attachment_metadata = None
+
+    async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
+        """BasePlatformAdapter calls this only when background processing is actually finished."""
+        self._cleanup_inbound_media(event)
 
     # -- HTTP handlers -----------------------------------------------------------------------------
 
@@ -607,9 +760,77 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }, status=201)
 
     @staticmethod
-    def _payload_fingerprint(text: str) -> str:
-        """Digest of an inbound payload — the thing that separates a retry from a rewrite."""
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    def _payload_fingerprint(text: str, attachments: Optional[List[Dict[str, Any]]] = None, reply_to: str = "") -> str:
+        """Digest text plus attachment identity so idempotency also covers media changes."""
+        items = [{
+            "type": item["type"], "mime_type": item["mime_type"],
+            "label": item.get("label", ""),
+            "sha256": hashlib.sha256(item["bytes"]).hexdigest(),
+        } for item in (attachments or [])]
+        canonical = json.dumps({"text": text, "attachments": items, "reply_to": reply_to}, ensure_ascii=False,
+                               sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _decode_attachments(body: Dict[str, Any]) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        raw = body.get("attachments", [])
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            return None, "attachments_must_be_an_array"
+        if len(raw) > MAX_ATTACHMENTS:
+            return None, "too_many_attachments"
+        decoded: List[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                return None, "attachment_must_be_an_object"
+            kind = str(item.get("type") or "").strip().lower()
+            mime = str(item.get("mime_type") or "").strip().lower()
+            data = item.get("data")
+            if kind not in {"image", "sticker", "file"}:
+                return None, "unsupported_attachment_type"
+            if mime not in ALLOWED_ATTACHMENT_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if kind in {"image", "sticker"} and mime not in ALLOWED_IMAGE_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if kind == "file" and mime not in ALLOWED_DOCUMENT_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if not isinstance(data, str) or not data:
+                return None, "attachment_data_required"
+            try:
+                blob = base64.b64decode(data, validate=True)
+            except (binascii.Error, ValueError):
+                return None, "invalid_attachment_data"
+            if not blob:
+                return None, "attachment_data_required"
+            if len(blob) > MAX_ATTACHMENT_BYTES:
+                return None, "attachment_too_large"
+            decoded.append({"type": kind, "mime_type": mime,
+                            "label": str(item.get("label") or "").strip(), "bytes": blob})
+        return decoded, None
+
+    @staticmethod
+    def _materialize_attachments(attachments: List[Dict[str, Any]]) -> List[str]:
+        suffixes = {
+            "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+            "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md",
+            "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip",
+        }
+        paths: List[str] = []
+        try:
+            for item in attachments:
+                fd, path = tempfile.mkstemp(prefix="kissne-mobile-", suffix=suffixes[item["mime_type"]])
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(item["bytes"])
+                paths.append(path)
+            return paths
+        except Exception:
+            for path in paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
 
     async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
         """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
@@ -643,12 +864,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return error
         body = payload or {}
         if "ack" in body:
-            if str(body.get("text") or "").strip():
-                return _error_response("text_and_ack_are_mutually_exclusive", 400)
+            if str(body.get("text") or "").strip() or body.get("attachments"):
+                return _error_response("message_and_ack_are_mutually_exclusive", 400)
             return await self._handle_ack(installation, body)
         text = str(body.get("text") or "")
-        if not text.strip():
-            return _error_response("text_required", 400)
+        attachments, attachment_error = self._decode_attachments(body)
+        if attachment_error:
+            return _error_response(attachment_error, 400)
+        attachments = attachments or []
+        if not text.strip() and not attachments:
+            return _error_response("text_or_attachment_required", 400)
 
         conversation_key = str(body.get("session_key") or "").strip()
         if conversation_key:
@@ -665,7 +890,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
-        fingerprint = self._payload_fingerprint(text)
+        reply_ref = str(body.get("reply_to") or "").strip()
+        quoted = None
+        if reply_ref:
+            history_rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+            quoted = next((item for item in history_rows if item["message_ref"] == reply_ref), None)
+            if quoted is None:
+                return _error_response("reply_target_not_found", 400)
+            # Timeline notices are navigational/system state, not conversational claims. Keep them
+            # searchable/jumpable but do not inject them into a new model turn as quoted user content.
+            if str(quoted.get("role") or "") == "system":
+                return _error_response("reply_target_not_quotable", 400)
+        fingerprint = self._payload_fingerprint(text, attachments, reply_ref)
         if client_message_id:
             existing = await asyncio.to_thread(
                 store.inbound_record, installation, client_message_id)
@@ -693,20 +929,83 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
-        event = MessageEvent(
-            text=text,
-            message_type=MessageType.TEXT,
-            source=source,
-            raw_message=body,
-            # The client message_id is only an HTTP retry/idempotency key.  The server turn_id is
-            # Runtime identity, so the persisted user row can be reconciled with outbound frames.
-            message_id=turn_id,
-            user_id=installation,
-        )
+        command_name = text.lstrip().split(maxsplit=1)[0].lower() if text.lstrip().startswith("/") else ""
+        if command_name in {"/new", "/reset"}:
+            self._session_reset_pending.add(installation)
+            self._session_reset_turns[installation] = turn_id
+        # Approval callbacks are session-scoped and synchronous on the agent thread. Register the
+        # mobile bridge immediately before this installation injects work into that session.
+        self._install_mobile_approval_notify(installation)
+        media_paths: List[str] = []
         try:
+            if quoted is not None and reply_ref:
+                await asyncio.to_thread(
+                    store.record_reply_link, installation, turn_id, reply_ref,
+                    str(quoted.get("role") or ""), str(quoted.get("text") or ""),
+                )
+            if attachments:
+                media_paths = self._materialize_attachments(attachments)
+            message_type = MessageType.TEXT
+            if attachments:
+                if all(item["type"] == "sticker" for item in attachments):
+                    message_type = MessageType.STICKER
+                elif all(item["type"] == "file" for item in attachments):
+                    message_type = MessageType.DOCUMENT
+                else:
+                    message_type = MessageType.PHOTO
+            event = MessageEvent(
+                text=text,
+                message_type=message_type,
+                source=source,
+                raw_message=body,
+                media_urls=media_paths,
+                media_types=[item["mime_type"] for item in attachments],
+                # The client message_id is only an HTTP retry/idempotency key.  The server turn_id is
+                # Runtime identity, so the persisted user row can be reconciled with outbound frames.
+                message_id=turn_id,
+                user_id=installation,
+                # Mobile approvals have a dedicated authenticated /approval endpoint. Ordinary chat
+                # text must never become a gateway control command or a bare yes/no approval reply.
+                allow_gateway_control=(
+                    text.lstrip().startswith("/")
+                    and text.lstrip().split(maxsplit=1)[0].lower() not in {"/approve", "/deny"}
+                ),
+                reply_to_message_id=reply_ref or None,
+                reply_to_text=str(quoted.get("text") or "") if quoted else None,
+                reply_to_author_name=(
+                    "叶青栩" if quoted and quoted.get("role") == "assistant" else
+                    "系统" if quoted and quoted.get("role") == "system" else
+                    "用户" if quoted else None
+                ),
+                reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
+            )
+            if attachments:
+                # Attach before admission: an immediately spawned background task may reach
+                # on_processing_start before handle_message() returns.
+                event._kissne_attachment_metadata = (
+                    installation, turn_id, text,
+                    [{"type": item["type"], "mime_type": item["mime_type"],
+                      "label": str(item.get("label") or "")} for item in attachments],
+                )
             await self.handle_message(event)
+            accepted = bool(getattr(event, "_gateway_accepted", False))
+            # Accepted events are owned by BasePlatformAdapter's background task; its
+            # on_processing_complete hook removes media only after the Runtime is done reading it.
+            # Test doubles / refused events have no background owner, so clean them here.
+            if not accepted:
+                self._cleanup_inbound_media(event)
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound message %s", message_id)
+            if reply_ref:
+                try:
+                    await asyncio.to_thread(store.delete_reply_link, installation, turn_id)
+                except Exception:
+                    logger.warning("[kissne_mobile] failed to clean reply link", exc_info=True)
+            for path in media_paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             return _error_response("inbound_injection_failed", 503)
         return _json_response(
             {"ok": True, "message_id": message_id, "turn_id": turn_id}, status=202)
@@ -883,6 +1182,188 @@ class KissneMobileAdapter(BasePlatformAdapter):
             covered.append(int(event["seq"]))
         return covered
 
+    def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
+        """All Hermes sessions owned by this Mobile installation, newest first.
+
+        /new is a context boundary, not a UI conversation boundary.  The installation routing
+        key therefore scopes the visible timeline while historical session ids remain internal.
+        """
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        db = store._db_for_key(self.mobile_session_key(installation))
+        if db is None or not hasattr(db, "list_sessions_rich"):
+            return []
+        return db.list_sessions_rich(
+            session_key=self.mobile_session_key(installation),
+            include_archived=True, include_children=True,
+            project_compression_tips=False, order_by_last_active=True,
+            limit=500, offset=0, compact_rows=True,
+        )
+
+    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
+        """Flatten /new-separated transcripts into one canonical Mobile timeline.
+
+        New Mobile turns use a stable public turn:<turn_id>:user|assistant reference, so a live
+        message can be quoted immediately and keep the same reference after reload. Foreign/legacy
+        transcript rows fall back to the historical session/index reference.
+        """
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+
+        try:
+            saved_attachments = self.device_store().attachment_messages(installation, 500)
+        except Exception:
+            logger.warning("[kissne_mobile] attachment history read failed", exc_info=True)
+            saved_attachments = []
+        attachments_by_turn = {
+            str(item.get("turn_id") or ""): list(item.get("attachments") or [])
+            for item in saved_attachments if str(item.get("turn_id") or "")
+        }
+        try:
+            saved_replies = self.device_store().reply_links(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] reply-link history read failed", exc_info=True)
+            saved_replies = []
+        replies_by_turn = {
+            str(item.get("turn_id") or ""): item
+            for item in saved_replies if str(item.get("turn_id") or "")
+        }
+
+        rows: List[Dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        for session in self._mobile_history_sessions(installation):
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                continue
+            try:
+                transcript = store.load_transcript(session_id) or []
+            except Exception:
+                logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
+                continue
+
+            active_mobile_turn = ""
+            for index, row in enumerate(transcript):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "").strip().lower()
+                if role not in {"user", "assistant"}:
+                    continue
+
+                mobile_turn = ""
+                if role == "user":
+                    candidate = str(row.get("message_id") or "").strip()
+                    active_mobile_turn = candidate if candidate.startswith("kbm_turn_") else ""
+                    mobile_turn = active_mobile_turn
+                else:
+                    mobile_turn = active_mobile_turn
+                    active_mobile_turn = ""
+
+                text = row.get("content", row.get("text"))
+                if not isinstance(text, str):
+                    text = ""
+                attachments = attachments_by_turn.get(mobile_turn, []) if role == "user" else []
+                if not text.strip() and not attachments:
+                    continue
+
+                stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+                stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
+                dedupe = (session_id, index)
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+
+                message_ref = (
+                    f"turn:{mobile_turn}:{role}"
+                    if mobile_turn else f"{session_id}:{index}"
+                )
+                item: Dict[str, Any] = {
+                    "message_ref": message_ref,
+                    "role": role,
+                    "text": text,
+                    "created_at": stamp,
+                }
+                if attachments:
+                    item["attachments"] = attachments
+                if role == "user" and mobile_turn:
+                    link = replies_by_turn.get(mobile_turn)
+                    if link:
+                        item["reply_to"] = str(link.get("reply_to") or "")
+                        item["reply_preview"] = {
+                            "role": str(link.get("quoted_role") or ""),
+                            "text": str(link.get("quoted_text") or ""),
+                        }
+                rows.append(item)
+
+        # Command replies such as /new are produced outside normal assistant transcript storage.
+        # Merge their verbatim durable presentation rows into the same user-visible timeline.
+        try:
+            notices = self.device_store().timeline_notices(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] timeline notice read failed", exc_info=True)
+            notices = []
+        for notice in notices:
+            notice_id = str(notice.get("notice_id") or "")
+            text = str(notice.get("text") or "")
+            if not notice_id or not text:
+                continue
+            rows.append({
+                "message_ref": "notice:" + notice_id,
+                "role": "system",
+                "text": text,
+                "created_at": float(notice.get("created_at") or 0),
+                "presentation": str(notice.get("presentation") or ""),
+            })
+        rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
+        return rows
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        """Page backwards through the continuous Mobile timeline across explicit /new boundaries."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        raw_limit = request.query.get("limit", "50")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 100))
+        before = str(request.query.get("before") or "").strip()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        end = len(rows)
+        if before:
+            positions = [i for i, item in enumerate(rows) if item["message_ref"] == before]
+            if not positions:
+                return _error_response("history_cursor_not_found", 400)
+            end = positions[0]
+        start = max(0, end - limit)
+        page = rows[start:end]
+        return _json_response({
+            "ok": True, "messages": page,
+            "has_more": start > 0,
+            "next_before": page[0]["message_ref"] if start > 0 and page else None,
+        })
+
+    async def _handle_history_search(self, request: web.Request) -> web.Response:
+        """Search only this installation's visible Hermes history, across /new session boundaries."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            return _error_response("query_required", 400)
+        raw_limit = request.query.get("limit", "20")
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 50))
+        needle = query.casefold()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
+        return _json_response({"ok": True, "results": matches[:limit]})
+
     async def _handle_bootstrap(self, request: web.Request) -> web.Response:
         """Which Conversation this device is on, plus a bounded tail of it. Creates nothing, ever."""
         installation = await self._authenticated_installation(request)
@@ -919,7 +1400,34 @@ class KissneMobileAdapter(BasePlatformAdapter):
             })
         history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
             identity["session_id"])
+        attachment_messages = await asyncio.to_thread(
+            self.device_store().attachment_messages, installation, self._history_cap)
+        if attachment_messages:
+            by_turn = {str(item.get("_turn_id") or ""): item for item in history if item.get("_turn_id")}
+            for saved in attachment_messages:
+                turn = str(saved.get("turn_id") or "")
+                if turn and turn in by_turn:
+                    by_turn[turn]["attachments"] = list(saved.get("attachments") or [])
+                elif turn:
+                    history.append({"role": "user", "text": str(saved.get("text") or ""),
+                                    "attachments": list(saved.get("attachments") or []),
+                                    "_turn_id": turn,
+                                    "created_at": float(saved.get("created_at") or 0)})
+            history.sort(key=lambda item: float(item.get("created_at") or 0))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
+        # In-process reconnects can restore every still-live approval. After a Runtime restart the
+        # in-memory Hermes queue is empty, so stale persisted markers are deliberately not revived.
+        from tools.approval import list_gateway_approvals
+        live_approvals = await asyncio.to_thread(
+            list_gateway_approvals, self.mobile_session_key(installation))
+        approvals = [{
+            "approval_id": str(item.get("request_id") or ""),
+            "tool_input": {"command": str(item.get("command") or "")},
+            "summary": str(item.get("description") or "Approval required"),
+            "allow_session": bool(item.get("allow_session", False)),
+            "allow_permanent": bool(item.get("allow_permanent", False)),
+            "status": "pending",
+        } for item in live_approvals]
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
         return _json_response({
@@ -929,8 +1437,140 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "history": history,
             "history_truncated": truncated,
             "pending_turn_id": pending,
+            "pending_approvals": approvals,
             "covered_event_seqs": covered,
         })
+
+    async def _handle_approval(self, request: web.Request) -> web.Response:
+        """Resolve one real, currently-pending Hermes approval by its opaque request id."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        approval_id = str(body.get("approval_id") or "").strip()
+        decision = str(body.get("decision") or "").strip().lower()
+        scope = str(body.get("scope") or "once").strip().lower()
+        reason = str(body.get("reason") or "").strip() or None
+        if not approval_id:
+            return _error_response("approval_id_required", 400)
+        if decision not in {"allow", "deny"}:
+            return _error_response("invalid_approval_decision", 400)
+        if scope not in {"once", "session", "always"}:
+            return _error_response("invalid_approval_scope", 400)
+        session_key = self.mobile_session_key(installation)
+        from tools.approval import list_gateway_approvals, resolve_gateway_approval
+        pending = await asyncio.to_thread(list_gateway_approvals, session_key)
+        current = next((item for item in pending
+                        if str(item.get("request_id") or "") == approval_id), None)
+        if current is None:
+            # Do not distinguish forged, expired, already-resolved, or another device's id.
+            return _error_response("unknown_approval", 404)
+        if decision == "allow":
+            if scope == "always" and not bool(current.get("allow_permanent", False)):
+                return _error_response("approval_scope_not_allowed", 409)
+            if scope == "session" and not bool(current.get("allow_session", False)):
+                return _error_response("approval_scope_not_allowed", 409)
+            choice = scope
+        else:
+            choice = "deny"
+        resolved = await asyncio.to_thread(
+            resolve_gateway_approval, session_key, choice,
+            False, reason, approval_id)
+        if resolved != 1:
+            return _error_response("approval_no_longer_pending", 409)
+        # Allow is not mirrored by the Runtime hook, so publish it here. Deny is emitted by
+        # post_approval_response with the same request_id; keeping one producer avoids duplicate cards.
+        if decision == "allow":
+            await asyncio.to_thread(
+                self.device_store().enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
+                {"approval_id": approval_id, "decision": "approved",
+                 "scope": scope, "reason": reason},
+                None, cap=max(1, self._outbound_cap))
+        return _json_response({"ok": True, "approval_id": approval_id,
+                               "status": "approved" if decision == "allow" else "denied"})
+
+    async def _handle_model_options(self, request: web.Request) -> web.Response:
+        """Return the same authenticated provider/model catalog and reasoning ladder Hermes uses."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        from hermes_cli.config import load_config
+        from hermes_cli.model_switch import list_authenticated_providers
+        from agent.reasoning_effort import EFFORT_LADDER
+
+        cfg = await asyncio.to_thread(load_config)
+        model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+        current_model = str(model_cfg.get("default") or model_cfg.get("model") or "")
+        current_provider = str(model_cfg.get("provider") or "")
+        reasoning_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        current_effort = str(reasoning_cfg.get("reasoning_effort") or "medium")
+        try:
+            providers = await asyncio.to_thread(
+                list_authenticated_providers,
+                current_provider=current_provider, current_model=current_model,
+                current_base_url=str(model_cfg.get("base_url") or ""),
+                user_providers=cfg.get("providers") or {},
+                custom_providers=cfg.get("custom_providers") or [],
+                excluded_providers=(cfg.get("model_catalog") or {}).get("excluded_providers"),
+                max_models=50,
+            )
+        except Exception:
+            logger.exception("[kissne_mobile] failed to list model options")
+            providers = []
+        models = []
+        for provider in providers:
+            slug = str(provider.get("slug") or "")
+            provider_label = str(provider.get("name") or slug)
+            for item in provider.get("models") or []:
+                model_id = str(item.get("id") if isinstance(item, dict) else item)
+                if model_id:
+                    models.append({"provider": slug, "model": model_id, "label": model_id,
+                                   "provider_label": provider_label})
+        labels = {"none": "关闭思考", "xhigh": "Extra High"}
+        efforts = [{"value": value, "label": labels.get(value, value.title())}
+                   for value in EFFORT_LADDER]
+        return _json_response({
+            "models": models, "efforts": efforts,
+            "current_model": f"{current_provider}/{current_model}" if current_provider else current_model,
+            "current_effort": current_effort,
+        })
+
+    async def _handle_set_model(self, request: web.Request) -> web.Response:
+        """Switch Mobile's bound Runtime session through Hermes' canonical /model path."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        model = str(body.get("model") or "").strip()
+        effort = str(body.get("effort") or "").strip().lower()
+        from agent.reasoning_effort import EFFORT_LADDER
+        if effort and effort not in EFFORT_LADDER:
+            return _error_response("invalid_reasoning_effort", 400)
+        if not model and not effort:
+            return _error_response("model_or_effort_required", 400)
+
+        source = self.source_for_installation(installation)
+        replies = []
+        if model:
+            event = MessageEvent(text=f"/model {model}" + (f" --reasoning {effort}" if effort else ""),
+                                 message_type=MessageType.COMMAND, source=source,
+                                 user_id=installation, allow_gateway_control=True)
+            reply = await self._handle_model_command(event)
+            if reply:
+                replies.append(str(reply))
+        elif effort:
+            event = MessageEvent(text=f"/reasoning {effort}", message_type=MessageType.COMMAND,
+                                 source=source, user_id=installation, allow_gateway_control=True)
+            reply = await self._handle_reasoning_command(event)
+            if reply:
+                replies.append(str(reply))
+        return _json_response({"ok": True, "messages": replies})
 
     async def _handle_cancel(self, request: web.Request) -> web.Response:
         """``{"turn_id": T}`` -> interrupt that turn's Runtime activity and acknowledge the state."""
@@ -959,6 +1599,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
         if not moved:
             return _error_response("turn_not_cancellable", 409)
+        # A cancelled pending turn must not reappear as a synthetic attachment-only
+        # history row on the next bootstrap.
+        await asyncio.to_thread(store.delete_attachment_message, installation, turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_CANCELLED,
             {"turn_id": turn_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -967,11 +1610,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # must speak this installation's own routing key (an alias, not the Conversation's canonical key —
         # using the canonical key would stop another entry point's turn on the same Conversation).
         session_key = self.mobile_session_key(installation)
+        # Snapshot before interrupt: unregister/cancellation wakes and removes the live queue.
+        from tools.approval import list_gateway_approvals
+        cancelled_approvals = await asyncio.to_thread(list_gateway_approvals, session_key)
         try:
             await self.interrupt_session_activity(session_key, installation, None)
         except Exception:
             logger.warning("[kissne_mobile] cancel could not interrupt turn %s",
                            _fingerprint(turn_id), exc_info=True)
+        for approval in cancelled_approvals:
+            approval_id = str(approval.get("request_id") or "")
+            if approval_id:
+                await asyncio.to_thread(
+                    store.enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
+                    {"approval_id": approval_id, "decision": "denied",
+                     "scope": None, "reason": "turn_cancelled"},
+                    turn_id, cap=max(1, self._outbound_cap))
         logger.info("[kissne_mobile] cancelled turn %s for installation %s",
                     _fingerprint(turn_id), _fingerprint(installation))
         return _json_response({
@@ -1047,8 +1701,33 @@ def _is_connected(config: Optional[PlatformConfig] = None) -> bool:
     return bool(extra.get("enabled"))
 
 
+def _mobile_post_approval_response(**payload: Any) -> None:
+    """Mirror Hermes' real approval outcome into Mobile without becoming an approval authority."""
+    session_key = str(payload.get("session_key") or "")
+    if not session_key.startswith(f"{PLATFORM_NAME}:"):
+        return
+    choice = str(payload.get("choice") or "")
+    if choice not in {"timeout", "deny"}:
+        return
+    # request_id is intentionally supplied by the approval wait lifecycle when available.
+    approval_id = str(payload.get("request_id") or "")
+    if not approval_id:
+        return
+    adapter = _LIVE_ADAPTERS.get(session_key)
+    if adapter is None:
+        return
+    installation = adapter.installation_from_session_key(session_key)
+    if not installation:
+        return
+    status = "expired" if choice == "timeout" else "denied"
+    adapter.queue_approval_resolution_from_hook(
+        installation, approval_id, status,
+        "approval_timeout" if choice == "timeout" else "runtime_denied")
+
+
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
+    ctx.register_hook("post_approval_response", _mobile_post_approval_response)
     ctx.register_platform(
         name=PLATFORM_NAME,
         label="Kissne Mobile",

@@ -164,4 +164,5 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         entry.result = "deny"
         entry.event.set()
     _drop_entry()
-    return _finish(payload, state != "timeout", entry.result, entry.reason)
+    return _finish(payload, state != "timeout", entry.result, entry.reason,
+                   request_id=entry.data.get("request_id"))
