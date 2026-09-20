@@ -174,6 +174,13 @@ class DeviceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
                 ON attachment_messages (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS attachment_messages (
+                installation_id TEXT NOT NULL, turn_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
+                attachments TEXT NOT NULL, created_at REAL NOT NULL,
+                PRIMARY KEY (installation_id, turn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
+                ON attachment_messages (installation_id, created_at);
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
@@ -557,6 +564,43 @@ class DeviceStore:
                 (installation, TURN_PENDING),
             ).fetchone()
         return str(row["turn_id"]) if row is not None else None
+
+
+    def record_attachment_message(self, installation_id: str, turn_id: str, text: str,
+                                  attachments: List[Dict[str, Any]]) -> None:
+        """Persist presentation metadata only; never duplicate attachment binary bytes."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            raise ValueError("turn_id is required")
+        safe = [{"type": str(x.get("type") or ""), "mime_type": str(x.get("mime_type") or ""),
+                 "label": str(x.get("label") or "")}
+                for x in (attachments or []) if isinstance(x, dict)]
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO attachment_messages "
+                "(installation_id, turn_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)",
+                (installation, handle, str(text or ""), json.dumps(safe, ensure_ascii=False), time.time()))
+            conn.commit()
+
+    def attachment_messages(self, installation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT turn_id, text, attachments, created_at FROM attachment_messages "
+                "WHERE installation_id = ? ORDER BY created_at DESC LIMIT ?",
+                (installation, max(1, int(limit)))).fetchall()
+        out = []
+        for row in reversed(rows):
+            try:
+                attachments = json.loads(row["attachments"])
+            except (TypeError, ValueError):
+                attachments = []
+            out.append({"turn_id": str(row["turn_id"]), "text": str(row["text"] or ""),
+                        "attachments": attachments if isinstance(attachments, list) else [],
+                        "created_at": float(row["created_at"])})
+        return out
 
     def inbound_record(self, installation_id: str, client_message_id: str) -> Optional[Dict[str, Any]]:
         """The stored record of a client ``message_id``, or ``None`` when it is new."""
