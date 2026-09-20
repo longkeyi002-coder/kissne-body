@@ -1504,7 +1504,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("unauthorized", 401)
         from hermes_cli.config import load_config
         from hermes_cli.model_switch import list_authenticated_providers
-        from agent.reasoning_effort import EFFORT_LADDER
+        from hermes_constants import VALID_REASONING_EFFORTS
 
         cfg = await asyncio.to_thread(load_config)
         model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
@@ -1536,7 +1536,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                                    "provider_label": provider_label})
         labels = {"none": "关闭思考", "xhigh": "Extra High"}
         efforts = [{"value": value, "label": labels.get(value, value.title())}
-                   for value in EFFORT_LADDER]
+                   for value in ("none", *VALID_REASONING_EFFORTS)]
         return _json_response({
             "models": models, "efforts": efforts,
             "current_model": f"{current_provider}/{current_model}" if current_provider else current_model,
@@ -1555,7 +1555,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         model = str(body.get("model") or "").strip()
         effort = str(body.get("effort") or "").strip().lower()
         from agent.reasoning_effort import EFFORT_LADDER
-        if effort and effort not in EFFORT_LADDER:
+        if effort and effort not in ("none", *VALID_REASONING_EFFORTS):
             return _error_response("invalid_reasoning_effort", 400)
         if not model and not effort:
             return _error_response("model_or_effort_required", 400)
