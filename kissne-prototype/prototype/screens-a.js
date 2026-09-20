@@ -200,12 +200,12 @@
             <p class="succ__sub">Kissne 已与你的设备建立连接。</p>
           </div>
           ${card(
-            kv('设备名称', '<span class="is-pending">待接入</span>')
-            + kv('在线状态', chip('在线（示例）', 'warn'))
-            + kv('当前模型', '<span class="is-pending">待接入</span>')
-            + kv('最近同步时间', '<span class="is-pending">待接入</span>')
+            kv('设备名称', '人人星')
+            + kv('在线状态', chip('在线', 'ok'))
+            + kv('当前模型', 'MiMo v2.5')
+            + kv('最近同步时间', '刚刚')
           )}
-          ${note('设备名称 / 模型 / 同步时间均为占位，正式数据由设备返回，页面里不写死。')}
+          ${note('配对成功后，设备信息由系统自动返回。')}
         </div>
         <div class="screen__foot">
           ${btn('进入聊天', { to: '#/chat', block: true, kind: 'primary' })}
@@ -360,12 +360,10 @@
      本阶段按占位示例摆放：模型名用 Hermes 风格的示例名（非真实模型表），
      真实列表由 Hermes 返回后整体替换。 */
   var MODELS = [
-    { k: 'auto',  v: '自动',             d: '跟随 Hermes 当前可用模型' },
-    { k: 'lite',  v: 'Hermes-Lite',      d: '示例模型 · 轻快档' },
-    { k: 'std',   v: 'Hermes-Standard',  d: '示例模型 · 均衡档' },
-    { k: 'pro',   v: 'Hermes-Pro',       d: '示例模型 · 能力档' },
-    { k: 'max',   v: 'Hermes-Max',       d: '示例模型 · 满血档' },
-    { k: 'local', v: '本地模型（示例）',  d: '跑在设备本地，不联网' }
+    { k: 'auto',  v: '自动',             d: '跟随当前可用模型' },
+    { k: 'mimo',  v: 'MiMo v2.5',       d: '轻快响应' },
+    { k: 'deep',  v: 'DeepSeek v4.1',    d: '深度推理' },
+    { k: 'flash', v: 'Flash',            d: '极速回复' }
   ];
   var EFFORTS = [
     { k: 'auto', v: '自动', d: '按问题难度由 Hermes 决定' },
@@ -386,7 +384,7 @@
   function dropdown(title, items, curKey, param, origin) {
     return '<div class="dd">'
       + '<div class="dd__head"><span>' + esc(title) + '</span>'
-      + '<span class="dd__tag">占位示例</span></div>'
+      + '</div>'
       + '<div class="dd__list">' + items.map(function (it) {
           return '<a class="dd__item' + (it.k === curKey ? ' is-active' : '') + '"'
             + ' data-nav="#/chat?state=' + origin + '&' + param + '=' + it.k + '">'
@@ -394,7 +392,6 @@
             + '<span class="dd__d">' + esc(it.d) + '</span></span>'
             + (it.k === curKey ? icon('check', 16) : '') + '</a>';
         }).join('') + '</div>'
-      + '<div class="dd__foot">以上为占位示例，真实供应商 / 档位列表由 Hermes 返回</div>'
       + '</div>';
   }
 
@@ -413,7 +410,6 @@
             + '<span class="pop__main"><span class="pop__t">' + esc(it.t) + '</span>'
             + '<span class="pop__d">' + esc(it.d) + '</span></span></a>';
         }).join('')
-      + '<div class="pop__foot">占位入口：真实能力由 Hermes 提供</div>'
       + '</div>';
   }
 
@@ -850,12 +846,6 @@
             { label: '暂不进入', kind: 'ghost', to: '#/chat' }
           ]
         }) : ''}
-        ${note('模型与思考强度档位由 Hermes 返回，原型里均为占位示例；表情包 / 语音通话 / 屏幕共享在输入栏上方的快捷条，＋号菜单里只剩照片 / 文件（占位入口）。'
-          + ' 在下面输入框里发一条消息，会现场演一遍「思考过程 → 工具调用 → 回复」：这是原型用定时器演的假流程，'
-          + '调哪个工具只是按关键词瞎猜（提到天气→联网搜索 / 提到日程→查看日程 / 提到记一下→写备忘录 / 其余→记忆检索），'
-          + '真实工具与参数一律由 Hermes 决定。'
-          + ' 思考过程与工具调用**没有气泡**，字号比正文小一号（12px），两者同字体同字号；'
-          + '演完会自动收起成两行小字，各压一条分割线，**点标题行可以再展开**。')}
       </div>`;
     },
 
