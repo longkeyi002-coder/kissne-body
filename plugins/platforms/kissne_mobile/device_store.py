@@ -178,6 +178,16 @@ class DeviceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
                 ON attachment_messages (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS timeline_notices (
+                installation_id TEXT NOT NULL,
+                notice_id       TEXT NOT NULL,
+                presentation    TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                PRIMARY KEY (installation_id, notice_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_timeline_notices_installation
+                ON timeline_notices (installation_id, created_at);
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
@@ -612,6 +622,36 @@ class DeviceStore:
                         "attachments": attachments if isinstance(attachments, list) else [],
                         "created_at": float(row["created_at"])})
         return out
+
+    def record_timeline_notice(self, installation_id: str, notice_id: str,
+                               presentation: str, text: str) -> None:
+        """Persist backend-authored timeline notices verbatim for later cross-session history."""
+        installation = self._installation(installation_id)
+        handle = str(notice_id or "").strip()
+        if not handle:
+            raise ValueError("notice_id is required")
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO timeline_notices "
+                "(installation_id, notice_id, presentation, text, created_at) VALUES (?, ?, ?, ?, ?)",
+                (installation, handle, str(presentation or ""), str(text or ""), time.time()),
+            )
+            conn.commit()
+
+    def timeline_notices(self, installation_id: str) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT notice_id, presentation, text, created_at FROM timeline_notices "
+                "WHERE installation_id = ? ORDER BY created_at ASC",
+                (installation,),
+            ).fetchall()
+        return [
+            {"notice_id": str(row["notice_id"]), "presentation": str(row["presentation"] or ""),
+             "text": str(row["text"] or ""), "created_at": float(row["created_at"])}
+            for row in rows
+        ]
 
     def inbound_record(self, installation_id: str, client_message_id: str) -> Optional[Dict[str, Any]]:
         """The stored record of a client ``message_id``, or ``None`` when it is new."""
