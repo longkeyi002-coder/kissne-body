@@ -448,8 +448,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue the FINAL reply for the installation as a ``completed`` event."""
-        message_id = await self._queue_event(chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
+        """Queue the FINAL reply exactly as Hermes produced it.
+
+        Slash-command responses such as /new are canonical backend output: Mobile does not parse,
+        reconstruct, or pin model/provider/context fields.  The lightweight presentation hint only
+        tells the client that this exact text is a session-boundary notice.
+        """
+        extra: Dict[str, Any] = {}
+        pending = await asyncio.to_thread(self.device_store().pending_turn, chat_id)
+        if isinstance(pending, dict):
+            inbound = str(pending.get("text") or "").strip().lower()
+            if inbound == "/new" or inbound == "/reset" or inbound.startswith("/new ") or inbound.startswith("/reset "):
+                extra["presentation"] = "session_reset"
+        message_id = await self._queue_event(
+            chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to, extra=extra or None)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
