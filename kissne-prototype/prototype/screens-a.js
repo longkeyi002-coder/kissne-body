@@ -1022,7 +1022,9 @@
       var liveCurrentTurn = '';
       var composeBatch = [];
       var composeTimer = null;
-      var COALESCE_MS = 1800;
+      var composeBatchStartedAt = 0;
+      var COMPOSE_IDLE_MS = 2500;
+      var COMPOSE_MAX_WAIT_MS = 15000;
       var liveApprovals = Object.create(null);
 
       async function flushComposeBatch() {
@@ -1050,12 +1052,26 @@
           if (err && err.status === 401) { live=false; location.hash='#/connect'; }
         }
       }
-      function queueComposeText(text, node) {
-        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length });
+      function scheduleComposeFlush() {
         clearTimeout(composeTimer);
-        if (composeBatch.length >= 12) { flushComposeBatch(); return; }
-        composeTimer=setTimeout(flushComposeBatch, COALESCE_MS);
+        if (!composeBatch.length) return;
+        var elapsed = Date.now() - composeBatchStartedAt;
+        if (elapsed >= COMPOSE_MAX_WAIT_MS) { flushComposeBatch(); return; }
+        composeTimer = setTimeout(function () {
+          if ((input.value || '').trim()) { scheduleComposeFlush(); return; }
+          flushComposeBatch();
+        }, Math.min(COMPOSE_IDLE_MS, COMPOSE_MAX_WAIT_MS - elapsed));
       }
+      function queueComposeText(text, node) {
+        if (!composeBatch.length) composeBatchStartedAt = Date.now();
+        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length });
+        if (composeBatch.length >= 12) { flushComposeBatch(); return; }
+        scheduleComposeFlush();
+      }
+      function onComposeInput() {
+        if (composeBatch.length) scheduleComposeFlush();
+      }
+      input.addEventListener('input', onComposeInput);
 
       function historyClock(raw) {
         if (typeof raw !== 'number' || !isFinite(raw)) return '';
@@ -1576,6 +1592,7 @@
       send.addEventListener('click', push);
       return function () {
         input.removeEventListener('keydown', onKey);
+        input.removeEventListener('input', onComposeInput);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
 
