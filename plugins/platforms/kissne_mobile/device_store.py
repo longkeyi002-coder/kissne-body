@@ -174,13 +174,6 @@ class DeviceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
                 ON attachment_messages (installation_id, created_at);
-            CREATE TABLE IF NOT EXISTS attachment_messages (
-                installation_id TEXT NOT NULL, turn_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
-                attachments TEXT NOT NULL, created_at REAL NOT NULL,
-                PRIMARY KEY (installation_id, turn_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
-                ON attachment_messages (installation_id, created_at);
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
