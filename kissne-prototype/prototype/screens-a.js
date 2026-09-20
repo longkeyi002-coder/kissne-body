@@ -1265,6 +1265,15 @@
           append(sysMsg(esc(event.text || '系统通知'), clockNow()));
           return;
         }
+        if (type === 'completed' && event.presentation === 'session_reset') {
+          var resetText = String(event.text || '');
+          append('<div class="msg msg--sys msg--session-reset" data-session-reset>'
+            + '<div class="msg__sysline"><pre>' + esc(resetText) + '</pre></div>'
+            + '<span class="msg__time is-center">' + clockNow() + '</span></div>');
+          if (turnId) liveCompleted[turnId] = true;
+          if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          return;
+        }
         if (type === 'approval_required') { renderApproval(event); return; }
         if (type === 'approval_resolved') { resolveApprovalCard(event); return; }
         var el = liveEnsure(turnId);
