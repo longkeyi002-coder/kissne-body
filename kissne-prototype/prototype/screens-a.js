@@ -1023,6 +1023,7 @@
       var composeBatch = [];
       var composeTimer = null;
       var COALESCE_MS = 1800;
+      var liveApprovals = Object.create(null);
 
       async function flushComposeBatch() {
         clearTimeout(composeTimer);
@@ -1116,6 +1117,57 @@
         box.classList.toggle('is-pending', !!pending);
         box.textContent = String(text || '');
       }
+      function renderApproval(event) {
+        var id = String(event.approval_id || '');
+        if (!id || liveApprovals[id]) return;
+        var command = event.tool_input && event.tool_input.command ? String(event.tool_input.command) : '';
+        var summary = String(event.summary || '叶青栩需要你的批准才能继续这一步。');
+        var wrap = document.createElement('div');
+        wrap.className = 'approval-card';
+        wrap.setAttribute('data-approval-id', id);
+        wrap.innerHTML = '<div class="approval-card__title">需要批准</div>'
+          + '<div class="approval-card__summary">' + esc(summary) + '</div>'
+          + (command ? '<pre class="approval-card__command">' + esc(command) + '</pre>' : '')
+          + '<div class="approval-card__actions">'
+          + '<button type="button" data-approval-decision="deny">拒绝</button>'
+          + '<button type="button" data-approval-decision="allow" data-approval-scope="once">允许一次</button>'
+          + (event.allow_session ? '<button type="button" data-approval-decision="allow" data-approval-scope="session">本次会话允许</button>' : '')
+          + (event.allow_permanent ? '<button type="button" data-approval-decision="allow" data-approval-scope="always">始终允许</button>' : '')
+          + '</div>';
+        list.appendChild(wrap);
+        liveApprovals[id] = wrap;
+        jumpTo(list.scrollHeight);
+      }
+      function resolveApprovalCard(event) {
+        var id = String(event.approval_id || '');
+        var el = liveApprovals[id];
+        if (!el) return;
+        var decision = String(event.decision || 'resolved');
+        el.classList.add('is-resolved');
+        var actions = el.querySelector('.approval-card__actions');
+        if (actions) actions.innerHTML = '<span>' + esc(decision === 'approved' ? '已允许' : decision === 'expired' ? '已过期' : '已拒绝') + '</span>';
+        delete liveApprovals[id];
+      }
+      async function onApprovalClick(e) {
+        var b = e.target.closest('[data-approval-decision]');
+        if (!b) return;
+        var card = b.closest('[data-approval-id]');
+        if (!card || b.disabled) return;
+        var buttons = card.querySelectorAll('button');
+        buttons.forEach(function (x) { x.disabled = true; });
+        try {
+          await T.decideApproval(card.getAttribute('data-approval-id'),
+            b.getAttribute('data-approval-decision'), b.getAttribute('data-approval-scope') || 'once');
+        } catch (err) {
+          if (err && (err.status === 404 || err.status === 409)) {
+            resolveApprovalCard({approval_id:card.getAttribute('data-approval-id'), decision:'expired'});
+          } else {
+            buttons.forEach(function (x) { x.disabled = false; });
+          }
+        }
+      }
+      list.addEventListener('click', onApprovalClick);
+
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
         var type = String(event.type || '');
@@ -1124,6 +1176,8 @@
           append(sysMsg(esc(event.text || '系统通知'), clockNow()));
           return;
         }
+        if (type === 'approval_required') { renderApproval(event); return; }
+        if (type === 'approval_resolved') { resolveApprovalCard(event); return; }
         var el = liveEnsure(turnId);
         if (type === 'pending') {
           liveText(el, '正在思考…', true);
@@ -1178,6 +1232,7 @@
       }
       function scheduleLivePoll(ms) {
         clearTimeout(livePollTimer);
+        list.removeEventListener('click', onApprovalClick);
         if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
       }
       async function livePoll() {
@@ -1206,6 +1261,7 @@
           var boot = await T.bootstrap();
           if (!boot || !boot.bound) { live = false; location.hash = '#/connect'; return; }
           hydrateHistory(boot.history || []);
+          (boot.pending_approvals || []).forEach(renderApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
           if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
