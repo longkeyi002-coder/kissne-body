@@ -28,7 +28,7 @@
       return `
       <div class="screen screen--splash">
         <!-- 冷启动开屏：真实 Kissne Logo → 叶青栩与小羊动作帧 → 双人贴贴定格 -->
-        <div class="splash" data-nav="#/welcome?state=animate">
+        <div class="${cls}" data-nav="#/welcome?state=animate">
           <div class="splash__layer splash__logo">
             <img src="assets/real/splash-generated/splash-logo.png" alt="Kissne">
           </div>
@@ -40,8 +40,9 @@
             <span class="splash__sprite splash__sprite--duo"></span>
           </div>
         </div>
-      </div>    }
-  });
+      </div>`;
+    }
+  ;
 
   /* =====================================================================
      02 设备连接页
