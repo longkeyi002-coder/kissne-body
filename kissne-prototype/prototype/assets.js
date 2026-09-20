@@ -145,6 +145,11 @@
      素材由 tools/gen-assets.py 从 _inbox/stickers/ 生成，**白底已抠成透明**
      （角色身体本身就是白的，所以是"只抠与四边相连的白底"，见生成器的 _cut_white_bg）。
      清单里没有该 key 时退回灰块标签，绝不出现裂图。 */
+  K.stickerPath = function (key) {
+    var path = A.stickers && A.stickers[key];
+    return path ? rel(path) : '';
+  };
+
   K.sticker = function (key, opts) {
     opts = opts || {};
     var path = A.stickers && A.stickers[key];
