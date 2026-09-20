@@ -1015,6 +1015,7 @@
       var live = !!(T && T.hasToken());
       var liveStopped = false;
       var livePollTimer = null;
+      var livePollBusy = false;
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
@@ -1024,7 +1025,8 @@
       var COALESCE_MS = 1800;
 
       async function flushComposeBatch() {
-        clearTimeout(composeTimer); composeTimer = null;
+        clearTimeout(composeTimer);
+        if (composeBatch.length && live) { flushComposeBatch(); } composeTimer = null;
         if (!composeBatch.length || !live) return;
         var batch = composeBatch.splice(0);
         var merged = batch.map(function (x) { return x.text; }).join('\n');
@@ -1050,6 +1052,7 @@
       function queueComposeText(text, node) {
         composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length });
         clearTimeout(composeTimer);
+        if (composeBatch.length >= 12) { flushComposeBatch(); return; }
         composeTimer=setTimeout(flushComposeBatch, COALESCE_MS);
       }
 
@@ -1159,7 +1162,12 @@
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
-            CHAT_LOG.push({ who: 'ai', html: esc(finalText), time: clockNow() });
+            var shown = finalText.length > 1800
+              ? [(finalText.split(/\n\s*\n/).filter(Boolean)[0] || finalText).slice(0, 320)]
+              : (finalText.length <= 420
+                  ? finalText.split(/(?<=[。！？!?])\s*/).filter(Boolean)
+                  : finalText.split(/\n\s*\n/).filter(Boolean));
+            shown.forEach(function (part) { CHAT_LOG.push({ who: 'ai', html: esc(part), time: clockNow() }); });
           }
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
@@ -1173,7 +1181,8 @@
         if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
       }
       async function livePoll() {
-        if (!live || liveStopped) return;
+        if (!live || liveStopped || livePollBusy) return;
+        livePollBusy = true;
         try {
           var payload = await T.poll();
           var events = (payload && payload.events) || [];
@@ -1187,6 +1196,8 @@
         } catch (err) {
           if (err && err.status === 401) { live = false; location.hash = '#/connect'; return; }
           scheduleLivePoll(1800);
+        } finally {
+          livePollBusy = false;
         }
       }
       async function liveBootstrap() {
