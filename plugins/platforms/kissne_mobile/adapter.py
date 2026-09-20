@@ -502,6 +502,26 @@ class KissneMobileAdapter(BasePlatformAdapter):
             except OSError:
                 pass
 
+    def _install_mobile_approval_notify(self, installation: str) -> None:
+        """Bridge Hermes' synchronous approval notifier into this device's durable event stream."""
+        session_key = self.mobile_session_key(installation)
+        loop = asyncio.get_running_loop()
+        from tools.approval import register_gateway_notify
+
+        def notify(data: Dict[str, Any]) -> None:
+            payload = {
+                "approval_id": str(data.get("request_id") or ""),
+                "tool_input": {"command": str(data.get("command") or "")},
+                "summary": str(data.get("description") or "Approval required"),
+                "allow_session": bool(data.get("allow_session", False)),
+                "allow_permanent": bool(data.get("allow_permanent", False)),
+                "status": "pending",
+            }
+            asyncio.run_coroutine_threadsafe(
+                self._queue_event(installation, EVENT_APPROVAL_REQUIRED, extra=payload), loop)
+
+        register_gateway_notify(session_key, notify)
+
     async def on_processing_start(self, event: MessageEvent) -> None:
         """Persist attachment metadata only when Runtime actually starts this event."""
         pending = getattr(event, "_kissne_attachment_metadata", None)
@@ -811,6 +831,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
+        # Approval callbacks are session-scoped and synchronous on the agent thread. Register the
+        # mobile bridge immediately before this installation injects work into that session.
+        self._install_mobile_approval_notify(installation)
         media_paths: List[str] = []
         try:
             if attachments:
