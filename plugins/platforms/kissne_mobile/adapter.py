@@ -341,6 +341,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post("/approval", self._handle_approval)
+        app.router.add_get("/model-options", self._handle_model_options)
+        app.router.add_post("/set-model", self._handle_set_model)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
@@ -1207,6 +1209,84 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 None, cap=max(1, self._outbound_cap))
         return _json_response({"ok": True, "approval_id": approval_id,
                                "status": "approved" if decision == "allow" else "denied"})
+
+    async def _handle_model_options(self, request: web.Request) -> web.Response:
+        """Return the same authenticated provider/model catalog and reasoning ladder Hermes uses."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        from hermes_cli.config import load_config
+        from hermes_cli.model_switch import list_authenticated_providers
+        from agent.reasoning_effort import EFFORT_LADDER
+
+        cfg = await asyncio.to_thread(load_config)
+        model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+        current_model = str(model_cfg.get("default") or model_cfg.get("model") or "")
+        current_provider = str(model_cfg.get("provider") or "")
+        reasoning_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        current_effort = str(reasoning_cfg.get("reasoning_effort") or "medium")
+        try:
+            providers = await asyncio.to_thread(
+                list_authenticated_providers,
+                current_provider=current_provider, current_model=current_model,
+                current_base_url=str(model_cfg.get("base_url") or ""),
+                user_providers=cfg.get("providers") or {},
+                custom_providers=cfg.get("custom_providers") or [],
+                excluded_providers=(cfg.get("model_catalog") or {}).get("excluded_providers"),
+                max_models=50,
+            )
+        except Exception:
+            logger.exception("[kissne_mobile] failed to list model options")
+            providers = []
+        models = []
+        for provider in providers:
+            slug = str(provider.get("slug") or "")
+            for item in provider.get("models") or []:
+                model_id = str(item.get("id") if isinstance(item, dict) else item)
+                if model_id:
+                    models.append({"provider": slug, "model": model_id, "label": model_id})
+        labels = {"none": "关闭思考", "xhigh": "Extra High"}
+        efforts = [{"value": value, "label": labels.get(value, value.title())}
+                   for value in EFFORT_LADDER]
+        return _json_response({
+            "models": models, "efforts": efforts,
+            "current_model": f"{current_provider}/{current_model}" if current_provider else current_model,
+            "current_effort": current_effort,
+        })
+
+    async def _handle_set_model(self, request: web.Request) -> web.Response:
+        """Switch Mobile's bound Runtime session through Hermes' canonical /model path."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        model = str(body.get("model") or "").strip()
+        effort = str(body.get("effort") or "").strip().lower()
+        from agent.reasoning_effort import EFFORT_LADDER
+        if effort and effort not in EFFORT_LADDER:
+            return _error_response("invalid_reasoning_effort", 400)
+        if not model and not effort:
+            return _error_response("model_or_effort_required", 400)
+
+        source = self.source_for_installation(installation)
+        replies = []
+        if model:
+            event = MessageEvent(text=f"/model {model}" + (f" --reasoning {effort}" if effort else ""),
+                                 message_type=MessageType.COMMAND, source=source,
+                                 user_id=installation, allow_gateway_control=True)
+            reply = await self._handle_model_command(event)
+            if reply:
+                replies.append(str(reply))
+        elif effort:
+            event = MessageEvent(text=f"/reasoning {effort}", message_type=MessageType.COMMAND,
+                                 source=source, user_id=installation, allow_gateway_control=True)
+            reply = await self._handle_reasoning_command(event)
+            if reply:
+                replies.append(str(reply))
+        return _json_response({"ok": True, "messages": replies})
 
     async def _handle_cancel(self, request: web.Request) -> web.Response:
         """``{"turn_id": T}`` -> interrupt that turn's Runtime activity and acknowledge the state."""
