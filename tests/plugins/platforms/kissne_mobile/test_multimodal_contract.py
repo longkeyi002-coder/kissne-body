@@ -232,3 +232,38 @@ def test_document_reaches_runtime_as_document_media(tmp_path):
     status, payload, captured = run(scenario())
     assert status == 202, (status, payload)
     assert captured == [(MessageType.DOCUMENT, ["text/plain"], [b"hello from kissne"])]
+
+
+def test_bootstrap_restores_attachment_presentation_metadata(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                device_store = adapter.device_store()
+                device_store.record_attachment_message(
+                    "inst-1", "turn-attachment-1", "给你看",
+                    [{"type": "image", "mime_type": "image/png", "label": ""}],
+                )
+                status, payload, _ = await http(
+                    port, "POST", "/bootstrap", token=token, body={"cursor": 0},
+                )
+            finally:
+                await stop(adapter)
+        return status, payload
+
+    status, payload = run(scenario())
+    assert status == 200, (status, payload)
+    restored = [row for row in payload["history"]
+                if row.get("_turn_id") == "turn-attachment-1"]
+    assert len(restored) == 1
+    assert restored[0]["text"] == "给你看"
+    assert restored[0]["attachments"] == [
+        {"type": "image", "mime_type": "image/png", "label": ""}
+    ]
+    # Presentation persistence must never put the original base64/binary payload into bootstrap.
+    assert "data" not in restored[0]["attachments"][0]
