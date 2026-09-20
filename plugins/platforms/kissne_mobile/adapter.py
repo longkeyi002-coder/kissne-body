@@ -1197,11 +1197,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
             False, reason, approval_id)
         if resolved != 1:
             return _error_response("approval_no_longer_pending", 409)
-        await asyncio.to_thread(
-            self.device_store().enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
-            {"approval_id": approval_id, "decision": "approved" if decision == "allow" else "denied",
-             "scope": scope if decision == "allow" else None, "reason": reason},
-            None, cap=max(1, self._outbound_cap))
+        # Allow is not mirrored by the Runtime hook, so publish it here. Deny is emitted by
+        # post_approval_response with the same request_id; keeping one producer avoids duplicate cards.
+        if decision == "allow":
+            await asyncio.to_thread(
+                self.device_store().enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
+                {"approval_id": approval_id, "decision": "approved",
+                 "scope": scope, "reason": reason},
+                None, cap=max(1, self._outbound_cap))
         return _json_response({"ok": True, "approval_id": approval_id,
                                "status": "approved" if decision == "allow" else "denied"})
 
