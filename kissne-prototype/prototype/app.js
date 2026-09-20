@@ -292,20 +292,22 @@
   }
   render();
 
-  /* —— 手机端键盘防护：锁住 phone 高度，键盘弹出时不让 viewport 缩小 —— */
-  (function lockPhoneHeight() {
+  /* —— Android / WebView 键盘：跟随 visual viewport，不缓存键盘前高度。 —— */
+  (function followVisualViewport() {
     var mql = window.matchMedia('(max-width:1100px)');
     if (!mql.matches) return;
-    var phone = document.querySelector('.phone');
-    if (!phone) return;
     function apply() {
-      /* 用 visualViewport.height 作为基准，键盘弹出时它不变（overlays-content）；
-         如果 overlays-content 没生效，fallback 到 innerHeight */
-      var h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-      phone.style.height = h + 'px';
+      var phone = document.querySelector('.phone');
+      if (!phone) return;
+      var vv = window.visualViewport;
+      phone.style.height = Math.round((vv && vv.height) || window.innerHeight) + 'px';
     }
     apply();
-    /* 只在横竖屏切换时重新计算，键盘弹出不触发 */
-    window.addEventListener('orientationchange', function () { setTimeout(apply, 200); });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', apply);
+      window.visualViewport.addEventListener('scroll', apply);
+    }
+    window.addEventListener('orientationchange', function () { setTimeout(apply, 150); });
   })();
+
 })();
