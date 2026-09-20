@@ -529,8 +529,8 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   font-size:9.5px;font-weight:600;color:var(--ink-3);
   border:1px dashed var(--line-2);border-radius:999px;padding:1px 7px;
 }
-.dd__list{max-height:380px;overflow-y:auto}
-.dd__item{display:flex;align-items:center;gap:10px;padding:10px 13px;
+.dd__list{max-height:min(380px,52dvh);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable}
+.dd__item{display:flex;align-items:center;gap:10px;padding:10px 13px;min-height:48px;touch-action:manipulation;
   border-bottom:1px solid var(--line);color:var(--ink-2)}
 .dd__item:last-child{border-bottom:0}
 .dd__item:hover{background:var(--g1)}
@@ -1482,3 +1482,13 @@ body.is-shot .phone{
   display:flex;align-items:center;justify-content:space-between}
 .animgrid__t code{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
 .animgrid__t .tag{font-size:9px;color:#6f9a6f;border:1px solid #cfe6cf;background:#eef7ee;border-radius:6px;padding:1px 5px}
+
+/* Mobile model picker: keep controls reachable above Android browser/IME chrome. */
+@media (max-width:600px){
+  .dd{max-width:calc(100vw - 24px);max-height:62dvh}
+  .dd__list{max-height:calc(62dvh - 42px)}
+  .dd__item{min-height:52px;padding:11px 14px}
+  .dd__v,.dd__d{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hsel{min-height:44px;touch-action:manipulation}
+}
+.dd__item.is-loading{pointer-events:none;opacity:.58}
