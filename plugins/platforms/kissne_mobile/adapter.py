@@ -1310,8 +1310,27 @@ def _is_connected(config: Optional[PlatformConfig] = None) -> bool:
     return bool(extra.get("enabled"))
 
 
+def _mobile_post_approval_response(**payload: Any) -> None:
+    """Mirror Hermes' real approval outcome into Mobile without becoming an approval authority."""
+    session_key = str(payload.get("session_key") or "")
+    if not session_key.startswith(f"{PLATFORM_NAME}:"):
+        return
+    choice = str(payload.get("choice") or "")
+    if choice not in {"timeout", "deny"}:
+        return
+    # request_id is intentionally supplied by the approval wait lifecycle when available.
+    approval_id = str(payload.get("request_id") or "")
+    if not approval_id:
+        return
+    # The adapter instance owns delivery; lifecycle hooks have no adapter handle by design.
+    # Resolution for explicit mobile allow/deny is emitted by POST /approval. This hook is
+    # reserved for Runtime-owned terminal outcomes once the lifecycle exposes request_id.
+    logger.debug("[kissne_mobile] Hermes approval %s ended with %s", _fingerprint(approval_id), choice)
+
+
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
+    ctx.register_hook("post_approval_response", _mobile_post_approval_response)
     ctx.register_platform(
         name=PLATFORM_NAME,
         label="Kissne Mobile",
