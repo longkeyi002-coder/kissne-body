@@ -1019,6 +1019,39 @@
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
       var liveCurrentTurn = '';
+      var composeBatch = [];
+      var composeTimer = null;
+      var COALESCE_MS = 1800;
+
+      async function flushComposeBatch() {
+        clearTimeout(composeTimer); composeTimer = null;
+        if (!composeBatch.length || !live) return;
+        var batch = composeBatch.splice(0);
+        var merged = batch.map(function (x) { return x.text; }).join('\n');
+        try {
+          var accepted = await T.sendText(merged, batch[0].messageId);
+          batch.forEach(function (x) {
+            if (x.node) { x.node.classList.remove('is-send-pending'); var m=x.node.querySelector('.msg__meta'); if(m)m.textContent=''; }
+          });
+          liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          scheduleLivePoll(0);
+        } catch (err) {
+          batch.forEach(function (x) {
+            if (!x.node) return;
+            x.node.classList.add('is-send-failed');
+            x.node.setAttribute('data-retry-text', x.text);
+            var m=x.node.querySelector('.msg__meta');
+            if(m)m.innerHTML='<button type="button" class="msgretry" data-retry>发送失败 · 点此重试</button>';
+          });
+          if (err && err.status === 401) { live=false; location.hash='#/connect'; }
+        }
+      }
+      function queueComposeText(text, node) {
+        composeBatch.push({ text:text, node:node, messageId:'kbui_' + Date.now().toString(36) + '_' + composeBatch.length });
+        clearTimeout(composeTimer);
+        composeTimer=setTimeout(flushComposeBatch, COALESCE_MS);
+      }
 
       function historyClock(raw) {
         if (typeof raw !== 'number' || !isFinite(raw)) return '';
@@ -1101,7 +1134,28 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           var finalText = String(event.text || '');
-          liveText(el, finalText, false);
+          function presentReply(text) {
+            var clean = String(text || '').trim();
+            if (clean.length > 1800) {
+              var paras = clean.split(/\n\s*\n/).filter(Boolean);
+              var summary = (paras[0] || clean).slice(0, 320) + ((paras[0] || clean).length > 320 ? '…' : '');
+              liveText(el, summary, false);
+              var doc = '<button type="button" class="replydoc" data-full-reply="' + encodeURIComponent(clean) + '">'
+                + icon('file',15) + '<span><b>完整回复</b><small>' + clean.length + ' 字 · 点击查看</small></span></button>';
+              append(aiMsg(doc, '', clockNow(), '', 'happy'));
+              return;
+            }
+            var pieces = clean.length <= 420
+              ? clean.split(/(?<=[。！？!?])\s*/).filter(Boolean)
+              : clean.split(/\n\s*\n/).filter(Boolean);
+            if (pieces.length <= 1) { liveText(el, clean, false); return; }
+            liveText(el, pieces.shift(), false);
+            pieces.forEach(function (part) {
+              if (!part.trim()) return;
+              append(aiMsg(esc(part.trim()), '', clockNow(), '', 'happy'));
+            });
+          }
+          presentReply(finalText);
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
@@ -1176,21 +1230,8 @@
         pushLog({ who: 'me', html: esc(v), time: clockNow() });
 
         if (live) {
-          try {
-            var accepted = await T.sendText(v);
-            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
-            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
-            if (sentNode) { var metaOk = sentNode.querySelector('.msg__meta'); if (metaOk) metaOk.textContent = ''; }
-            scheduleLivePoll(0);
-          } catch (err) {
-            if (sentNode) {
-              sentNode.classList.add('is-send-failed');
-              sentNode.setAttribute('data-retry-text', v);
-              var meta = sentNode.querySelector('.msg__meta');
-              if (meta) meta.innerHTML = '<button type="button" class="msgretry" data-retry>发送失败 · 点此重试</button>';
-            }
-            if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
-          }
+          if (sentNode) sentNode.classList.add('is-send-pending');
+          queueComposeText(v, sentNode);
           return;
         }
 
@@ -1328,6 +1369,7 @@
         var msg = e.target.closest && e.target.closest('.msg');
         if (!msg) return;
         clearTimeout(holdTimer);
+        clearTimeout(composeTimer);
         holdTimer = setTimeout(function () { openMsgActions(msg); }, 520);
       }
       function onMsgPointerEnd() { clearTimeout(holdTimer); }
@@ -1354,6 +1396,16 @@
         }
       }
       async function onMsgAction(e) {
+        var docBtn = e.target.closest && e.target.closest('[data-full-reply]');
+        if (docBtn) {
+          var full = decodeURIComponent(docBtn.getAttribute('data-full-reply') || '');
+          var viewer = document.createElement('div');
+          viewer.className = 'replyviewer';
+          viewer.innerHTML = '<div class="replyviewer__sheet"><button type="button" aria-label="关闭">×</button><pre></pre></div>';
+          viewer.querySelector('pre').textContent = full;
+          viewer.addEventListener('click', function (ev) { if (ev.target === viewer || ev.target.tagName === 'BUTTON') viewer.remove(); });
+          root.appendChild(viewer); return;
+        }
         var directRetry = e.target.closest && e.target.closest('[data-retry]');
         if (directRetry) {
           var owner = directRetry.closest('.msg');
