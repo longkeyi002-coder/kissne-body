@@ -135,6 +135,7 @@ def test_session_reset_notice_uses_backend_reply_verbatim(tmp_path):
     assert result.success is True
     assert len(sent) == 1
     event_type, kwargs = sent[0]
+    assert event_type == "completed"
     assert kwargs["content"].endswith("✦ Tip: backend-owned text")
     assert "future-model-from-hermes" in kwargs["content"]
     assert kwargs["target_turn_id"] == "kbm_turn_reset"
@@ -181,6 +182,23 @@ def test_session_reset_reply_uses_its_originating_turn_even_when_newer_turn_is_p
     assert after_reset["events"][0]["presentation"] == "session_reset"
     assert events[1]["turn_id"] == "kbm_turn_plain"
     assert "presentation" not in events[1]
+
+
+def test_auxiliary_send_is_notice_and_does_not_complete_pending_turn(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path):
+            adapter = make_adapter()
+            store = adapter.device_store()
+            store.open_turn("kbm_turn_live", "phone-a")
+            result = await adapter.send("phone-a", "transcript/status echo")
+            return result, store.turn("kbm_turn_live"), store.events_after("phone-a", 0, limit=10)
+
+    result, turn, events = run(scenario())
+    assert result.success is True
+    assert turn["state"] == "pending"
+    assert len(events) == 1
+    assert events[0]["type"] == "notice"
+    assert events[0]["text"] == "transcript/status echo"
 
 
 def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_path):
