@@ -1107,6 +1107,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
                                     "created_at": float(saved.get("created_at") or 0)})
             history.sort(key=lambda item: float(item.get("created_at") or 0))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
+        # In-process reconnects can restore every still-live approval. After a Runtime restart the
+        # in-memory Hermes queue is empty, so stale persisted markers are deliberately not revived.
+        from tools.approval import list_gateway_approvals
+        live_approvals = await asyncio.to_thread(
+            list_gateway_approvals, self.mobile_session_key(installation))
+        approvals = [{
+            "approval_id": str(item.get("request_id") or ""),
+            "tool_input": {"command": str(item.get("command") or "")},
+            "summary": str(item.get("description") or "Approval required"),
+            "allow_session": bool(item.get("allow_session", False)),
+            "allow_permanent": bool(item.get("allow_permanent", False)),
+            "status": "pending",
+        } for item in live_approvals]
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
         return _json_response({
@@ -1116,6 +1129,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "history": history,
             "history_truncated": truncated,
             "pending_turn_id": pending,
+            "pending_approvals": approvals,
             "covered_event_seqs": covered,
         })
 
