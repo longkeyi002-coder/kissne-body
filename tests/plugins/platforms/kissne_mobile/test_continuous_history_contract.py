@@ -1,6 +1,6 @@
 """Continuous Mobile timeline: /new boundaries stay internal; search and quotes cross them."""
 
-from ._transport_harness import http, isolated_runtime, make_adapter, pair, run, start, stop
+from _transport_harness import http, isolated_runtime, make_adapter, pair, run, start, stop
 
 
 def _rows():
