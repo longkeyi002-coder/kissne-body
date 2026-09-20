@@ -489,7 +489,7 @@
     T.modelOptions().then(function (data) {
       MODELS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前模型' }].concat(
         (data.models || []).map(function (m) {
-          return { k: m.provider + '/' + m.model, v: m.label || m.model, d: m.provider || '' };
+          return { k: m.provider + '/' + m.model, v: m.label || m.model, d: m.provider_label || m.provider || '' };
         }));
       EFFORTS = [{ k: 'auto', v: '自动', d: '跟随 Hermes 当前设置' }].concat(
         (data.efforts || []).map(function (e) {
