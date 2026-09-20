@@ -23,7 +23,7 @@
      在应用内切回 #/welcome 不会重播。 */
   var COLD = true;
   var splashTimer = null;
-  var SPLASH_MS = 3600;          /* 动画 2.9s + 停留 0.7s */
+  var SPLASH_MS = 7000;          /* 动画 2.9s + 停留 0.7s */
   var SPLASH_NEXT = '#/connect';  /* 无凭据 / bootstrap 失败时的落点 */
   var splashTarget = null;
   function resolveSplashTarget() {

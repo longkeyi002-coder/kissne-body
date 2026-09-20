@@ -15,86 +15,123 @@
      ===================================================================== */
   K.registerScreen({
     no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
-    purpose: '开屏页：真实 Logo 分镜、叶青栩与小羊连续动作、最后双人贴贴；冷启动播放后自动进入下一页。',
+    purpose: '全新连续开屏动画：Logo 变化、叶青栩与小羊入场、双人贴贴；冷启动播放结束后自动进入下一页。',
     out: ['#/connect'],
     states: [
       { key: 'final',   label: '定格 · 双人贴贴' },
       { key: 'animate', label: '播放完整开屏动画' },
       { key: 'intro',   label: '定格 · 只有 Logo' }
     ],
-    render: function (ctx) {
-      var s = ctx.state || 'final';
-      var cls = 'splash' + (s === 'intro' ? ' is-intro' : (s === 'animate' ? ' is-animate' : ' is-final'));
-      function film(kind, count) {
-        var out = '';
-        for (var i = 0; i < count; i++) {
-          out += '<img src="assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png?v=20260920d" alt=""' +
-            (i ? ' hidden' : '') + '>';
-        }
-        return '<div class="splash__film splash__film--' + kind + '" data-splash-film="' + kind + '">' + out + '</div>';
-      }
+    render: function () {
       return `
       <div class="screen screen--splash">
-        <div class="${cls}" data-nav="#/welcome?state=animate">
-          <div class="splash__layer splash__logo">
-            ${film('logo', 4)}
-          </div>
-          <div class="splash__layer splash__actors" aria-hidden="true">
-            ${film('fox', 8)}
-            ${film('sheep', 8)}
-          </div>
-          <div class="splash__layer splash__duo" aria-hidden="true">
-            ${film('duo', 8)}
-          </div>
+        <div class="splash-redesign" data-splash-redesign>
+          <canvas class="splash-redesign__canvas" aria-label="Kissne 开屏动画"></canvas>
+          <div class="splash-redesign__hint">Kissne</div>
         </div>
       </div>`;
     },
     mount: function (root, ctx) {
+      var stage = root.querySelector('[data-splash-redesign]');
+      var canvas = stage && stage.querySelector('canvas');
+      if (!stage || !canvas) return null;
+      var g = canvas.getContext('2d');
       var state = ctx.state || 'final';
-      var timers = [];
-      function film(name) {
-        return root.querySelector('[data-splash-film="' + name + '"]');
+      var disposed = false;
+      var raf = 0;
+      var started = performance.now();
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var files = { logo: 4, fox: 8, sheep: 8, duo: 8 };
+      var images = { logo: [], fox: [], sheep: [], duo: [] };
+      var loaded = 0;
+      var total = 0;
+
+      function resize() {
+        var box = stage.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.max(1, Math.round(box.width * dpr));
+        canvas.height = Math.max(1, Math.round(box.height * dpr));
+        canvas.style.width = box.width + 'px';
+        canvas.style.height = box.height + 'px';
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
-      function show(name, index) {
-        var box = film(name);
-        if (!box) return;
-        var imgs = box.querySelectorAll('img');
-        for (var i = 0; i < imgs.length; i++) imgs[i].hidden = i !== index;
+      function loadAll() {
+        Object.keys(files).forEach(function (kind) {
+          for (var i = 0; i < files[kind]; i++) {
+            total++;
+            var img = new Image();
+            img.onload = function () { loaded++; };
+            img.src = 'assets/real/splash-generated/frames/' + kind + '/frame-' + i + '.png?v=20260920d';
+            images[kind][i] = img;
+          }
+        });
       }
-      function play(name, delay, every, count) {
-        var timer = setTimeout(function () {
-          var i = 0;
-          show(name, 0);
-          var interval = setInterval(function () {
-            i += 1;
-            if (i >= count) { clearInterval(interval); return; }
-            show(name, i);
-          }, every);
-          timers.push(interval);
-        }, delay);
-        timers.push(timer);
+      function fit(img, x, y, w, h, alpha) {
+        if (!img || !img.naturalWidth) return;
+        var scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+        var dw = img.naturalWidth * scale;
+        var dh = img.naturalHeight * scale;
+        g.globalAlpha = alpha == null ? 1 : alpha;
+        g.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+        g.globalAlpha = 1;
       }
-      if (state === 'intro') {
-        show('logo', 0);
-        show('duo', 0);
-      } else if (state === 'final') {
-        show('logo', 0);
-        show('duo', 7);
-      } else {
-        show('logo', 0);
-        show('fox', 0);
-        show('sheep', 0);
-        show('duo', 0);
-        play('logo', 80, 170, 4);
-        play('fox', 920, 125, 8);
-        play('sheep', 920, 125, 8);
-        play('duo', 2140, 135, 8);
+      function ease(t) {
+        return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       }
-      return function () {
-        for (var i = 0; i < timers.length; i++) {
-          clearTimeout(timers[i]);
-          clearInterval(timers[i]);
+      function frame(kind, index) {
+        var list = images[kind] || [];
+        return list[Math.max(0, Math.min(list.length - 1, index))];
+      }
+      function drawLogo(t, w, h) {
+        var p = Math.min(1, t / 1900);
+        var i = Math.min(3, Math.floor(p * 4));
+        var fade = p < .12 ? p / .12 : 1;
+        fit(frame('logo', i), w * .18, h * .28, w * .64, h * .22, fade);
+      }
+      function drawActors(t, w, h) {
+        var p = Math.min(1, Math.max(0, (t - 1800) / 2300));
+        var q = ease(p);
+        var i = Math.min(7, Math.floor(p * 8));
+        var size = Math.min(170, w * .39);
+        var y = h * .47;
+        var foxX = -size * .7 + (w * .5 - size * 1.05) * q;
+        var sheepX = w + size * .7 - (w * .5 - size * 1.05) * q;
+        var alpha = Math.min(1, p * 5) * (p > .86 ? (1 - p) / .14 : 1);
+        fit(frame('fox', i), foxX, y, size, size, alpha);
+        fit(frame('sheep', i), sheepX, y, size, size, alpha);
+      }
+      function drawDuo(t, w, h) {
+        var p = Math.min(1, Math.max(0, (t - 4000) / 2400));
+        var i = Math.min(7, Math.floor(p * 8));
+        var alpha = Math.min(1, p * 5);
+        fit(frame('duo', i), w * .08, h * .43, w * .84, h * .30, alpha);
+      }
+      function draw(now) {
+        if (disposed) return;
+        var box = stage.getBoundingClientRect();
+        var w = box.width, h = box.height;
+        if (!canvas.width || canvas.width !== Math.round(w * dpr)) resize();
+        g.clearRect(0, 0, w, h);
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, w, h);
+        var t = now - started;
+        if (state === 'intro') drawLogo(1200, w, h);
+        else if (state === 'final') drawDuo(6200, w, h);
+        else {
+          drawLogo(t, w, h);
+          drawActors(t, w, h);
+          drawDuo(t, w, h);
         }
+        raf = requestAnimationFrame(draw);
+      }
+      resize();
+      loadAll();
+      window.addEventListener('resize', resize);
+      raf = requestAnimationFrame(draw);
+      return function () {
+        disposed = true;
+        cancelAnimationFrame(raf);
+        window.removeEventListener('resize', resize);
       };
     }
   });

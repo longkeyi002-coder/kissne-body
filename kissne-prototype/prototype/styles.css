@@ -1242,67 +1242,26 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .empty404 b{font-size:15px;color:var(--ink)}
 
 /* =====================================================================
-   开屏页（入口页）— 四组真实分镜组成完整动画
-   Logo → 两个角色入场 → 靠近 → 双人贴贴
+   开屏页（全新连续动画舞台）
+   不再使用旧的快速闪烁 DOM / 雪碧图切换。
    ===================================================================== */
 .screen--splash{background:#fff}
-.splash{flex:1;position:relative;overflow:hidden;background:#fff}
-.splash__layer{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
-.splash__film{position:relative;flex:none}
-.splash__film img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
-.splash__film img[hidden]{display:none}
-.splash__film--logo{width:min(78vw,250px);height:150px}
-.splash__logo{z-index:3}
-.splash__actors{z-index:2;gap:10px;opacity:0}
-.splash__film--fox,.splash__film--sheep{width:146px;height:146px}
-.splash__film--fox{transform:translateX(-42px)}
-.splash__film--sheep{transform:translateX(42px)}
-.splash__duo{z-index:4;opacity:0}
-.splash__film--duo{width:min(88vw,340px);height:min(62vw,250px)}
-@keyframes splashLogoIn{
-  0%{opacity:0;transform:scale(.72)}
-  14%{opacity:1;transform:scale(1)}
-  52%{opacity:1;transform:scale(1)}
-  70%{opacity:0;transform:scale(.82)}
-  100%{opacity:0;transform:scale(.82)}
+.splash-redesign{
+  position:relative;flex:1;min-height:100%;
+  overflow:hidden;background:#fff;
 }
-@keyframes splashActorsIn{
-  0%,31%{opacity:0}
-  45%{opacity:1}
-  73%{opacity:1}
-  82%,100%{opacity:0}
+.splash-redesign__canvas{
+  position:absolute;inset:0;width:100%;height:100%;
+  display:block;
 }
-@keyframes splashFoxApproach{
-  0%{transform:translateX(-90px) scale(.88)}
-  42%{transform:translateX(-42px) scale(1)}
-  70%,100%{transform:translateX(-12px) scale(1)}
+.splash-redesign__hint{
+  position:absolute;left:0;right:0;bottom:12%;
+  text-align:center;color:rgba(55,124,188,.22);
+  font-size:11px;letter-spacing:.22em;
+  pointer-events:none;
 }
-@keyframes splashSheepApproach{
-  0%{transform:translateX(90px) scale(.88)}
-  42%{transform:translateX(42px) scale(1)}
-  70%,100%{transform:translateX(12px) scale(1)}
-}
-@keyframes splashDuoIn{
-  0%,66%{opacity:0;transform:scale(.76) translateY(18px)}
-  82%{opacity:1;transform:scale(1) translateY(0)}
-  100%{opacity:1;transform:scale(1) translateY(0)}
-}
-.splash.is-animate .splash__logo{animation:splashLogoIn 2.9s cubic-bezier(.4,0,.2,1) forwards}
-.splash.is-animate .splash__actors{animation:splashActorsIn 2.9s cubic-bezier(.4,0,.2,1) forwards}
-.splash.is-animate .splash__film--fox{animation:splashFoxApproach 2.9s cubic-bezier(.2,.8,.2,1) forwards}
-.splash.is-animate .splash__film--sheep{animation:splashSheepApproach 2.9s cubic-bezier(.2,.8,.2,1) forwards}
-.splash.is-animate .splash__duo{animation:splashDuoIn 2.9s cubic-bezier(.2,.8,.2,1) forwards}
-.splash.is-intro .splash__logo{opacity:1}
-.splash.is-intro .splash__actors,.splash.is-intro .splash__duo{opacity:0}
-.splash.is-final .splash__logo{opacity:1}
-.splash.is-final .splash__actors{display:none}
-.splash.is-final .splash__duo{opacity:1}
 @media (prefers-reduced-motion:reduce){
-  .splash.is-animate .splash__logo{animation:none;opacity:1}
-  .splash.is-animate .splash__actors{animation:none;opacity:0}
-  .splash.is-animate .splash__duo{animation:none;opacity:1}
-  .splash.is-final .splash__logo{animation:none;opacity:1}
-  .splash.is-final .splash__duo{animation:none;opacity:1}
+  .splash-redesign__hint{display:none}
 }
 
 /* =====================================================================
