@@ -827,9 +827,7 @@
         </header>
         ${topBanner}
         <div class="chatbody">${emptyBlock}${base}</div>
-        <!-- 输入区整组（表情面板 + 磁吸快捷条 + 输入框）：**悬浮**在页面上（绝对定位、不占文档流），
-             框外不铺任何底色 —— 背景和聊天记录从它周围照常透出来。
-             打字时整组抬起，打完字自动落回；原型里不画键盘，没有任何"键盘块"。 -->
+        <!-- 输入区位于聊天页 flex 文档流底部；真机键盘由浏览器 viewport 自然处理。 -->
         <div class="composerwrap">
           <!-- 未读胶囊：浮在输入区上方，点了跳到**最早**那条未读 -->
           <button class="unread" data-unread type="button"${UNREAD.n ? '' : ' hidden'}>
@@ -1235,6 +1233,15 @@
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         pushLog({ who: 'me', html: html, time: clockNow() });
+        /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
+           先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
+        if (live) {
+          T.sendText('[表情包：' + s2.label + ']').then(function (accepted) {
+            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            scheduleLivePoll(0);
+          }).catch(function () {});
+        }
         location.hash = '#/chat?state=' + stkState;      /* 收起面板 */
       }
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
