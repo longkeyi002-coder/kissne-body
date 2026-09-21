@@ -367,7 +367,40 @@ class DeviceStore:
     # deliberately free of conversation truth: a "turn" is a transport concept and no
     # installation→conversation mapping is kept here (see the module docstring).
 
-    @staticmethod
+    def create_device_token(self, installation_id: str) -> str:
+        """Create a device token directly (no pairing code needed). Used in auto_pair mode."""
+        installation = self._installation(installation_id)
+        token = secrets.token_urlsafe(32)
+        token_hash = _digest(token)
+        now = time.time()
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT INTO devices (token_hash, installation_id, scope, created_at) VALUES (?, ?, 'device', ?)",
+                (token_hash, installation, now),
+            )
+            conn.commit()
+        logger.info("[kissne_mobile] auto-paired installation %s with device token %s",
+                    installation, _fingerprint(token_hash))
+        return token
+
+    def lookup_installation(self, installation_id: str) -> Optional[Dict[str, Any]]:
+        """Return device info for an installation, or None if not paired."""
+        installation = self._installation(installation_id)
+        with self._lock:
+            conn = self._db()
+            row = conn.execute(
+                "SELECT token_hash, installation_id, created_at, last_seen_at FROM devices WHERE installation_id = ? AND revoked_at IS NULL",
+                (installation,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "installation_id": str(row["installation_id"]),
+                "created_at": float(row["created_at"]),
+                "last_seen_at": float(row["last_seen_at"]) if row["last_seen_at"] else None,
+            }
+
     def _installation(value: str) -> str:
         installation = str(value or "").strip()
         if not installation:
