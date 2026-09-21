@@ -18,6 +18,7 @@ class PrototypeBridge(
      * and sendText behind modelOptions, making the send button look dead.
      */
     private val transportExecutor = Executors.newSingleThreadExecutor()
+    private val backgroundExecutor = Executors.newSingleThreadExecutor()
     private val controlExecutor = Executors.newFixedThreadPool(2)
 
     private fun baseUrl(): String = store.apiBase.ifBlank { BuildConfig.MOBILE_BASE_URL }.trimEnd('/')
@@ -156,8 +157,9 @@ class PrototypeBridge(
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         val executor = when (bridgeLane(action)) {
-            BridgeLane.CONTROL -> controlExecutor
             BridgeLane.TRANSPORT -> transportExecutor
+            BridgeLane.BACKGROUND -> backgroundExecutor
+            BridgeLane.CONTROL -> controlExecutor
         }
         executor.execute {
             val body = try {
@@ -216,6 +218,7 @@ class PrototypeBridge(
 
     fun close() {
         transportExecutor.shutdownNow()
+        backgroundExecutor.shutdownNow()
         controlExecutor.shutdownNow()
     }
 }
