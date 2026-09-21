@@ -239,6 +239,137 @@
   });
 
   /* =====================================================================
+     08b 会话列表 —— 直接读取 /admin/sessions
+     ===================================================================== */
+  function sessionsPageRows(query) {
+    var idx = window.KissneSessionIndex || {};
+    var sessions = Array.isArray(idx.sessions) ? idx.sessions.slice() : [];
+    var q = String(query || '').trim().toLowerCase();
+
+    if (!idx.loaded && idx.error) {
+      return card('<div class="sessiondrawer__empty">暂时无法读取服务器会话列表</div>');
+    }
+    if (!sessions.length) {
+      return card('<div class="sessiondrawer__empty">' + (idx.loaded ? '服务器暂无会话' : '正在读取会话…') + '</div>');
+    }
+
+    if (q) {
+      sessions = sessions.filter(function (s) {
+        return (String(s.title || '') + ' ' + String(s.key || '') + ' ' + String(s.source || ''))
+          .toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    if (!sessions.length) {
+      return card('<div class="sessiondrawer__empty">没有匹配的会话</div>');
+    }
+
+    sessions.sort(function (x, y) {
+      var ax = new Date(x.updatedAt || x.createdAt || 0).getTime() || 0;
+      var ay = new Date(y.updatedAt || y.createdAt || 0).getTime() || 0;
+      return ay - ax;
+    });
+
+    return card(sessions.map(function (s) {
+      var parts = [];
+      if (s.messageCount) parts.push(s.messageCount + ' 条消息');
+      var when = s.updatedAt || s.createdAt;
+      if (when) {
+        var d = new Date(when);
+        parts.push(isNaN(d.getTime()) ? String(when) : d.toLocaleString([], {
+          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+        }));
+      }
+      if (s.source) parts.push(String(s.source));
+      return listRow({
+        title: s.title || '未命名会话',
+        sub: parts.join(' · ') || '服务器会话',
+        icon: 'chat',
+        right: s.active ? chip('当前', 'solid') : ''
+      });
+    }).join(''), { tight: true });
+  }
+
+  K.registerScreen({
+    no: '08b', id: 'sessions', name: '会话列表', route: '#/sessions', tab: null,
+    purpose: '读取 /admin/sessions，查看 Hermes Runtime 中属于当前安装的全部对话。',
+    out: ['#/home', '#/chat'],
+    states: [{ key: 'default', label: '全部会话' }],
+    render: function () {
+      return `
+      <div class="screen">
+        ${appbar({
+          title: '会话列表',
+          sub: '全部对话',
+          back: '#/home',
+          right: '<button class="iconbtn" data-sessions-refresh aria-label="刷新会话">' + icon('refresh') + '</button>'
+        })}
+        <div class="screen__body">
+          <div class="srchbox">
+            ${icon('search', 15)}
+            <input class="srchbox__in" data-sessions-search type="text" placeholder="搜索会话" aria-label="搜索会话">
+          </div>
+          <div class="adminnotice" data-sessions-notice hidden></div>
+          <div data-sessions-page-list>${sessionsPageRows('')}</div>
+          ${note('数据来自 /mobile/admin/sessions。当前先用于查看全部对话；历史会话安全切换需要服务端稳定返回 session_id 后再接入。')}
+        </div>
+      </div>`;
+    },
+    mount: function (root) {
+      var search = root.querySelector('[data-sessions-search]');
+      var refresh = root.querySelector('[data-sessions-refresh]');
+      var host = root.querySelector('[data-sessions-page-list]');
+      var notice = root.querySelector('[data-sessions-notice]');
+      var stopped = false;
+
+      function paint() {
+        if (!host || stopped) return;
+        host.innerHTML = sessionsPageRows(search ? search.value : '');
+      }
+      function show(text) {
+        if (!notice) return;
+        notice.hidden = !text;
+        notice.textContent = text || '';
+      }
+      async function reload() {
+        if (typeof window.KissneRefreshSessions !== 'function') {
+          show('Mobile Transport 暂不可用');
+          return;
+        }
+        show('正在刷新会话…');
+        try {
+          await window.KissneRefreshSessions();
+          if (!stopped) {
+            show('');
+            paint();
+          }
+        } catch (e) {
+          if (!stopped) {
+            show('会话列表刷新失败');
+            paint();
+          }
+        }
+      }
+      function onSearch() { paint(); }
+      function onRefresh(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        reload();
+      }
+
+      if (search) search.addEventListener('input', onSearch);
+      if (refresh) refresh.addEventListener('click', onRefresh);
+      paint();
+      reload();
+
+      return function () {
+        stopped = true;
+        if (search) search.removeEventListener('input', onSearch);
+        if (refresh) refresh.removeEventListener('click', onRefresh);
+      };
+    }
+  });
+
+  /* =====================================================================
      09 设置页
      ===================================================================== */
   K.registerScreen({
@@ -261,6 +392,7 @@
           ${card(
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
             + listRow({ title: '设备管理', sub: '当前设备', icon: 'plug', to: '#/device' })
+            + listRow({ title: '会话列表', sub: '查看服务器上的全部对话', icon: 'chat', to: '#/sessions' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
             + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
             + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })

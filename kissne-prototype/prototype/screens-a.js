@@ -110,7 +110,7 @@
       var showMore = ctx.state === 'more';
       var APPS = showMore ? [
         { t: '语音设置', ic: 'mic',     to: '#/settings' },
-        { t: '对话记录', ic: 'clock',   to: '#/chat' },
+        { t: '对话记录', ic: 'clock',   to: '#/sessions' },
         { t: '账号安全', ic: 'user',    to: '#/settings' },
         { t: '数据备份', ic: 'refresh', to: '#/settings' },
         { t: '关于',     ic: 'info',    to: '#/settings' },
@@ -118,7 +118,7 @@
       ] : [
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: '设备管理', ic: 'plug',   to: '#/device' },
-        { t: '模型设置', ic: 'cpu',    to: '#/settings' },
+        { t: '会话列表', ic: 'chat',   to: '#/sessions' },
         { t: '通知',     ic: 'bell',   to: '#/notifications' },
         { t: '运维',     ic: 'server', to: '#/admin' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
