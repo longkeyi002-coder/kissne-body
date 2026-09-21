@@ -59,7 +59,6 @@
         if (ok) waiter.resolve(payload);
         else {
           var status = Number(payload && payload.status) || 0;
-          if (status === 401) { try { Native.clearToken(); } catch (e2) {} }
           waiter.reject(new NativeApiError(status, payload, payload && payload.error));
         }
       }
@@ -204,7 +203,7 @@
       try { payload = JSON.parse(raw); } catch (e) { payload = { raw: raw }; }
     }
     if (!res.ok) {
-      if (res.status === 401) clearToken();
+      if (res.status === 401 && opts.clearAuthOn401 !== false) clearToken();
       throw new ApiError(res.status, payload, payload && payload.error);
     }
     return payload;
@@ -243,11 +242,12 @@
     return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
   function modelOptions() {
-    return request('/mobile/model-options', { method: 'GET' });
+    return request('/mobile/model-options', { method: 'GET', clearAuthOn401: false });
   }
   function setModel(model, effort) {
     return request('/mobile/set-model', {
       method: 'POST',
+      clearAuthOn401: false,
       body: {
         model: String(model || ''),
         effort: String(effort || '')
@@ -265,19 +265,20 @@
     });
   }
   function adminStatus() {
-    return request('/admin/status', { method: 'GET', base: adminBase() });
+    return request('/admin/status', { method: 'GET', base: adminBase(), clearAuthOn401: false });
   }
   function adminMerge() {
-    return request('/admin/merge', { method: 'POST', base: adminBase() });
+    return request('/admin/merge', { method: 'POST', base: adminBase(), clearAuthOn401: false });
   }
   function adminRollback() {
-    return request('/admin/rollback', { method: 'POST', base: adminBase() });
+    return request('/admin/rollback', { method: 'POST', base: adminBase(), clearAuthOn401: false });
   }
   function adminDeployLog(lines) {
     var n = Math.max(1, Math.min(500, Number(lines) || 100));
     return request('/admin/deploy-log?lines=' + encodeURIComponent(n), {
       method: 'GET',
-      base: adminBase()
+      base: adminBase(),
+      clearAuthOn401: false
     });
   }
 
