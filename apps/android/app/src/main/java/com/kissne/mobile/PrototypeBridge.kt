@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 class PrototypeBridge(
     private val webView: WebView,
     private val store: MobileSessionStore,
+    private val checkUpdates: () -> Unit = {},
 ) {
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -34,6 +35,11 @@ class PrototypeBridge(
     @JavascriptInterface fun getSessionKey(): String = store.sessionKey
     @JavascriptInterface fun setSessionKey(value: String) { store.sessionKey = value }
     @JavascriptInterface fun getCursor(): Long = store.cursor
+
+    @JavascriptInterface
+    fun checkForUpdates() {
+        webView.post { checkUpdates() }
+    }
 
     @JavascriptInterface
     fun haptic() {
