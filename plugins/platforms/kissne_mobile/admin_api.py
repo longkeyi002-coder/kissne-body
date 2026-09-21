@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import time
@@ -17,11 +18,14 @@ ADMIN_PATH_STATUS = "/admin/status"
 ADMIN_PATH_MERGE = "/admin/merge"
 ADMIN_PATH_ROLLBACK = "/admin/rollback"
 ADMIN_PATH_DEPLOY_LOG = "/admin/deploy-log"
+ADMIN_PATH_SESSIONS = "/admin/sessions"
 
 INSTALL = Path("/home/admin/.hermes/hermes-agent")
 DEPLOY_SCRIPT = Path("/home/admin/kissne-workspace/backups/deploy-upstream-merge.sh")
 DEPLOY_LOG_DIR = Path("/home/admin/kissne-workspace/backups")
 ROLLBACK_LOG = DEPLOY_LOG_DIR / "rollback.log"
+
+logger = logging.getLogger(__name__)
 
 # In-memory state for active deploy operation
 _deploy_state: dict = {
@@ -88,6 +92,7 @@ def _register_admin_routes(app: Any) -> None:
     app.router.add_post(ADMIN_PATH_MERGE, _handle_admin_merge)
     app.router.add_post(ADMIN_PATH_ROLLBACK, _handle_admin_rollback)
     app.router.add_get(ADMIN_PATH_DEPLOY_LOG, _handle_admin_deploy_log)
+    app.router.add_get(ADMIN_PATH_SESSIONS, _handle_admin_sessions)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +251,51 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
         "started_at": _deploy_state["started_at"],
         "finished_at": _deploy_state["finished_at"],
         "log": log_content,
+    })
+
+
+# --- GET /admin/sessions ---
+async def _handle_admin_sessions(request: Any) -> Any:
+    """Return all sessions bound to this installation (the APP's conversation list)."""
+    from aiohttp import web
+
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    adapter = _adapter_ref
+    if adapter is None:
+        return web.json_response({"error": "adapter not ready"}, status=503)
+
+    session_store = getattr(adapter, "_session_store", None)
+    if session_store is None:
+        return web.json_response({"error": "session store not available"}, status=503)
+
+    # Look up all sessions that belong to this installation
+    sessions = []
+    try:
+        # Use the session store's list method, filter by installation_id in session_key
+        store = session_store._store if hasattr(session_store, '_store') else session_store
+        if hasattr(store, 'list_sessions_rich'):
+            all_sessions = store.list_sessions_rich(limit=200, compact_rows=True)
+            for s in all_sessions:
+                key = s.get("session_key", "")
+                if installation in key:
+                    sessions.append({
+                        "session_key": key,
+                        "title": s.get("title", s.get("display_name", "")),
+                        "created_at": s.get("created_at"),
+                        "last_active": s.get("last_active"),
+                        "message_count": s.get("message_count", 0),
+                        "source": s.get("source", ""),
+                    })
+    except Exception as exc:
+        logger.warning("[kissne_mobile] failed to list sessions: %s", exc, exc_info=True)
+
+    return web.json_response({
+        "ok": True,
+        "installation_id": installation,
+        "sessions": sessions,
     })
 
 
