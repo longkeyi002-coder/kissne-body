@@ -13,13 +13,13 @@ try {
 </script>
 <!-- 资源带版本号：静态托管/CDN 会缓存裸路径，不发版号会拿到旧文件造成新旧混装。
      每次改动后把 v= 的值换一个即可。 -->
-<link rel="stylesheet" href="styles.css?v=20260921c">
+<link rel="stylesheet" href="styles.css?v=20260921d">
 </head>
 <body>
 
 <div class="workbench">
 
-  <!-- ============ 侧栏：路由表 / 状态切换 / 占位图例 ============ -->
+  <!-- ============ 侧栏：路由表 / 状态切换 ============ -->
   <aside class="panel">
     <div class="panel__head">
       <div class="panel__title">Kissne · 手机端低保真原型</div>
@@ -37,15 +37,12 @@ try {
       <div style="margin-top:8px" id="outList"></div>
     </div>
 
-    <div class="panel__label">素材占位标记</div>
-    <div id="legendList"></div>
   </aside>
 
   <!-- ============ 舞台 ============ -->
   <main class="stage">
     <div class="stage__bar">
       <button class="ghost" data-nav="#/overview">全部页面总览</button>
-      <button class="ghost" id="annotBtn">标注：开</button>
       <span class="stage__route" id="routeLabel">#/welcome</span>
     </div>
     <div class="stage__body" id="stageBody"></div>
@@ -82,13 +79,13 @@ try {
   if (!window.KSN) { document.getElementById('loadFail').style.display = 'block'; }
 });</script>
 
-<script src="core.js?v=20260921c"></script>
-<script src="assets/_manifest.js?v=20260921c"></script>
-<script src="assets/icons/sprite-data.js?v=20260921c"></script>
-<script src="assets.js?v=20260921c"></script>
-<script src="transport.js?v=20260921c"></script>
-<script src="screens-a.js?v=20260921c"></script>
-<script src="screens-b.js?v=20260921c"></script>
-<script src="app.js?v=20260921c"></script>
+<script src="core.js?v=20260921d"></script>
+<script src="assets/_manifest.js?v=20260921d"></script>
+<script src="assets/icons/sprite-data.js?v=20260921d"></script>
+<script src="assets.js?v=20260921d"></script>
+<script src="transport.js?v=20260921d"></script>
+<script src="screens-a.js?v=20260921d"></script>
+<script src="screens-b.js?v=20260921d"></script>
+<script src="app.js?v=20260921d"></script>
 </body>
 </html>

@@ -84,16 +84,18 @@ class MobileTransportClient(
         )
     }
 
-    fun pairPayload(pairingCode: String, installationId: String, sessionKey: String? = null): JSONObject {
-        val body = JSONObject()
-            .put("pairing_code", pairingCode)
-            .put("installation_id", installationId)
-        sessionKey?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
-        return request("POST", "/pair", body, auth = false)
-    }
+    fun pairPayload(pairingCode: String, installationId: String): JSONObject =
+        request(
+            "POST",
+            "/pair",
+            JSONObject()
+                .put("pairing_code", pairingCode)
+                .put("installation_id", installationId),
+            auth = false,
+        )
 
-    fun pair(pairingCode: String, installationId: String, sessionKey: String? = null): String =
-        pairPayload(pairingCode, installationId, sessionKey).getString("device_token")
+    fun pair(pairingCode: String, installationId: String): String =
+        pairPayload(pairingCode, installationId).getString("device_token")
 
     fun sendPayload(messageId: String, text: String): JSONObject =
         request(

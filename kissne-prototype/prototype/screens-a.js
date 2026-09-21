@@ -172,7 +172,6 @@
     { key: 'connecting',         label: '正在连接' },
     { key: 'success',            label: '连接成功' },
     { key: 'code-error',         label: '配对码错误' },
-    { key: 'key-error',          label: 'Key 错误' },
     { key: 'network-error',      label: '网络错误' },
     { key: 'device-unavailable', label: '设备不可用' },
     { key: 'advanced',           label: '高级设置展开' }
@@ -180,33 +179,31 @@
 
   K.registerScreen({
     no: '02', id: 'connect', name: '设备连接页', route: '#/connect', tab: null,
-    purpose: '填写配对码与 Key 完成设备连接，覆盖 8 种输入/连接状态。',
+    purpose: '使用配对码与服务器地址完成设备连接。',
     out: ['#/welcome', '#/connect/success', '#/device'],
     states: CONNECT_STATES,
     render: function (ctx) {
       var s = ctx.state || 'idle';
-      var filled = ['connecting', 'key-error', 'network-error', 'device-unavailable', 'success'].indexOf(s) >= 0;
+      var filled = ['connecting', 'network-error', 'device-unavailable', 'success'].indexOf(s) >= 0;
       var plain = (s === 'idle' || s === 'advanced');
       var codeVal = filled ? 'KS-7391' : (plain ? '' : 'KS-739');
-      var keyVal  = filled ? '••••••••••••4f2a' : '';
-      var codeErr = s === 'code-error' ? '配对码错误，请重新核对设备上显示的 6 位配对码' : '';
-      var keyErr  = s === 'key-error' ? 'Key 校验失败，请确认设备 Key 是否已更新' : '';
-      var incErr  = s === 'incomplete' ? '请填写配对码' : '';
+      var codeErr = s === 'code-error' ? '配对码错误，请重新核对设备上显示的配对码' : '';
+      var incErr = s === 'incomplete' ? '请输入完整配对码' : '';
       var connecting = s === 'connecting';
       var ok = s === 'success';
 
       var topBanner = '';
       if (s === 'network-error') {
         topBanner = banner({ icon: 'wifioff', kind: 'warn', title: '网络错误',
-          body: '无法访问服务器地址，请检查网络或服务器地址是否正确。',
+          body: '无法访问服务器，请检查网络或服务器地址是否正确。',
           action: { label: '重试', action: 'connect' } });
       } else if (s === 'device-unavailable') {
         topBanner = banner({ icon: 'alert', kind: 'warn', title: '设备不可用',
-          body: '该设备当前不可达或已被其他连接占用。',
+          body: '设备已配对，但当前会话暂未就绪。',
           action: { label: '重新连接', action: 'connect' } });
       } else if (ok) {
         topBanner = banner({ icon: 'check', kind: 'ok', title: '连接成功',
-          body: '已与 Kissne 设备建立连接。',
+          body: '已与 Kissne 建立安全连接。',
           action: { label: '下一步', to: '#/connect/success' } });
       }
 
@@ -217,31 +214,27 @@
             block: true, kind: 'primary', action: 'connect',
             disabled: connecting, icon: connecting ? 'sync' : undefined
           })
-          + (connecting ? '<div class="hintline">' + icon('sync', 14) + '<span>正在与设备握手，请勿关闭页面…</span></div>' : '');
+          + (connecting ? '<div class="hintline">' + icon('sync', 14) + '<span>正在验证配对码并建立连接…</span></div>' : '');
 
-      /* 高级设置展开态：单独一个状态位，方便逐项核对展开后的内容 */
       var advOpen = s === 'advanced';
 
       return `
       <div class="screen">
-        ${appbar({ title: '设备连接', sub: '连接一台 Kissne 设备', back: '#/welcome' })}
+        ${appbar({ title: '设备连接', sub: '连接 Kissne', back: '#/welcome' })}
         <div class="screen__body">
           ${topBanner}
-          ${note('配对码必填；会话 Key 可选。留空时会自动建立并绑定手机会话。')}
           <div class="connectlive" data-connect-live hidden></div>
-          ${field({ label: '配对码', required: true, value: codeVal, placeholder: '6 位配对码',
+          ${field({ label: '配对码', required: true, value: codeVal, placeholder: '一次性配对码',
                     error: codeErr || incErr,
-                    hint: '请在 Kissne 设备或电脑端查看配对码。' })}
-          ${field({ label: '会话 Key（可选）', value: keyVal, placeholder: '留空则自动创建手机会话', error: keyErr })}
-          ${field({ label: '服务器地址', value: filled ? '192.168.1.24:8420' : '', placeholder: 'host:port',
-                    hint: '局域网直连时留空将自动发现设备' })}
+                    hint: '请在 Kissne 服务端查看当前配对码。' })}
+          ${field({ label: '服务器地址', value: filled ? 'https://yeqingxu.cyou/mobile' : '', placeholder: 'https://…',
+                    hint: 'App 已有默认地址；仅在更换服务器时修改。' })}
           <details class="adv"${advOpen ? ' open' : ''}>
             <summary>${icon('gear', 16)}<span>高级设置</span>${icon('chevron', 16)}</summary>
             <div class="adv__body">
               ${field({ label: '连接超时（秒）', value: '10' })}
               ${field({ label: '使用加密通道', value: '开启' })}
               ${field({ label: '断线自动重连', value: '开启' })}
-              ${field({ label: '连接方式', value: '局域网直连' })}
             </div>
           </details>
         </div>
@@ -253,18 +246,16 @@
       var T = window.KissneTransport;
       if (!T) return null;
       var inputs = root.querySelectorAll('.field__input');
-      if (inputs.length < 3) return null;
-      var code = inputs[0], key = inputs[1], address = inputs[2];
+      if (inputs.length < 2) return null;
+      var code = inputs[0], address = inputs[1];
       var feedback = root.querySelector('[data-connect-live]');
       var actions = Array.prototype.slice.call(root.querySelectorAll('[data-action="connect"]'));
       var primary = root.querySelector('.screen__foot [data-action="connect"]');
       var busy = false;
 
       code.readOnly = false;
-      key.readOnly = false;
       address.readOnly = false;
       code.value = '';
-      key.value = T.sessionKey() || '';
       address.value = T.base() || '';
 
       function showFeedback(kind, text) {
@@ -291,7 +282,6 @@
         e.stopPropagation();
         if (busy) return;
         var pairingCode = (code.value || '').trim();
-        var sessionKey = (key.value || '').trim();
         var apiBase = (address.value || '').trim();
         if (!pairingCode) {
           showFeedback('error', '请输入配对码。');
@@ -302,9 +292,8 @@
         setBusy(true);
         showFeedback('working', '正在验证配对码并建立安全连接…');
         try {
-          T.setSessionKey(sessionKey);
           if (apiBase) T.setBase(apiBase);
-          await T.pair({ pairingCode: pairingCode, sessionKey: sessionKey, apiBase: apiBase });
+          await T.pair({ pairingCode: pairingCode, apiBase: apiBase });
           if (!T.hasToken()) throw new Error('pairing_failed');
           showFeedback('working', '配对成功，正在同步会话…');
           var boot = await T.bootstrap();
@@ -321,9 +310,6 @@
               : '配对码无效，请重新核对。');
             code.focus();
             if (code.select) code.select();
-          } else if (name === 'conversation_not_bound' || name === 'installation_not_bound_to_a_runtime_conversation') {
-            showFeedback('error', '指定的会话 Key 无法绑定。可以清空 Key 后重新连接。');
-            key.focus();
           } else {
             showFeedback('error', '连接失败，请检查网络和服务器地址后重试。');
           }
@@ -333,7 +319,7 @@
       }
 
       actions.forEach(function (el) { el.addEventListener('click', onConnect); });
-      [code, key, address].forEach(function (input) {
+      [code, address].forEach(function (input) {
         input.addEventListener('keydown', function (e) {
           if (e.key === 'Enter') onConnect(e);
         });

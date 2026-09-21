@@ -159,16 +159,12 @@ window.KSN = (function () {
       cls.push('ph--img');
       return '<div class="' + cls.join(' ') + '" style="' + st.join(';') + '"'
         + ' data-placeholder="' + esc(code) + '" data-state="' + esc(opts.state || '') + '"'
-        + ' title="' + esc(code + (opts.state ? '.' + opts.state : '') + ' · ' + (opts.label || meta.label)) + '">'
-        + '<img class="ph__asset" src="' + esc(assetRel(path)) + '" alt="' + esc(opts.label || meta.label) + '"'
+        + '>'
+        + '<img class="ph__asset" src="' + esc(assetRel(path)) + '" alt="' + esc(opts.alt || '') + '"'
         + ' loading="lazy" onerror="KSN.assetBroken(this,\'' + esc(code).replace(/'/g, "\\'") + '\')"></div>';
     }
-    var inner = opts.compact
-      ? '<span class="ph__code">' + esc(opts.tag || code) + '</span>'
-      : '<span class="ph__code">' + esc(code) + '</span><span class="ph__label">' + esc(opts.label || meta.label) + '</span>';
     return '<div class="' + cls.join(' ') + '" style="' + st.join(';') + '"'
-      + ' data-placeholder="' + esc(code) + '" title="' + esc(code + ' · ' + (opts.label || meta.label)) + '">'
-      + inner + '</div>';
+      + ' data-placeholder="' + esc(code) + '" aria-hidden="true"></div>';
   }
 
   /* ---------- 5. 基础组件 ---------- */

@@ -32,8 +32,6 @@ class PrototypeBridge(
     @JavascriptInterface fun isConnected(): Boolean =
         !store.deviceToken.isNullOrBlank() && store.connectionReady
     @JavascriptInterface fun clearToken() = store.clearToken()
-    @JavascriptInterface fun getSessionKey(): String = store.sessionKey
-    @JavascriptInterface fun setSessionKey(value: String) { store.sessionKey = value }
     @JavascriptInterface fun getCursor(): Long = store.cursor
 
     @JavascriptInterface
@@ -56,11 +54,9 @@ class PrototypeBridge(
                 val result = when (action) {
                     "pair" -> {
                         body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
-                        body.optString("session_key").takeIf { it.isNotBlank() }?.let { store.sessionKey = it }
                         val paired = client().pairPayload(
                             pairingCode = body.optString("pairing_code"),
                             installationId = store.installationId(),
-                            sessionKey = store.sessionKey.ifBlank { null },
                         )
                         paired.optString("device_token").takeIf { it.isNotBlank() }?.let(store::saveToken)
                         JSONObject()

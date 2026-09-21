@@ -9,14 +9,11 @@
 
   var $routeList = document.getElementById('routeList');
   var $stateList = document.getElementById('stateList');
-  var $legendList = document.getElementById('legendList');
   var $stageBody = document.getElementById('stageBody');
   var $routeLabel = document.getElementById('routeLabel');
   var $purpose = document.getElementById('screenPurpose');
   var $outList = document.getElementById('outList');
-  var $annotBtn = document.getElementById('annotBtn');
 
-  var annotate = true;
 
   /* ---------------- 冷启动开屏 ----------------
      冷启动（= 本次页面加载）才播放开屏动画，播完自动进下一页。
@@ -130,13 +127,6 @@
     $stateList.innerHTML = screen.states.map(function (st) {
       return '<button class="stchip' + (st.key === cur ? ' is-active' : '') + '" data-state="' + st.key + '">'
         + esc(st.label) + '</button>';
-    }).join('');
-  }
-
-  function renderLegend() {
-    $legendList.innerHTML = Object.keys(K.PLACEHOLDERS).map(function (code) {
-      return '<div class="lg"><code>' + esc(code) + '</code>'
-        + '<span>' + esc(K.PLACEHOLDERS[code].label) + '</span></div>';
     }).join('');
   }
 
@@ -301,14 +291,6 @@
   }
   if ($drawerScrim) $drawerScrim.addEventListener('click', function () { openDrawer(false); });
 
-  if ($annotBtn) {
-    $annotBtn.addEventListener('click', function () {
-      annotate = !annotate;
-      document.body.classList.toggle('no-annot', !annotate);
-      $annotBtn.textContent = annotate ? '标注：开' : '标注：关';
-    });
-  }
-
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { openDrawer(false); return; }
     var current = parseHash();
@@ -328,7 +310,6 @@
   if (new URLSearchParams(location.search).get('shot')) {
     document.body.classList.add('is-shot');
   }
-  renderLegend();
   /* 冷启动走开屏动画，其余情况直接落到开屏页的定格态 */
   if (!location.hash || location.hash === '#') {
     location.hash = COLD ? '#/welcome?state=animate' : '#/welcome';

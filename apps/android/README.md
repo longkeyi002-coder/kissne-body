@@ -17,7 +17,7 @@ confined to `appassets.androidplatform.net`.
 
 ## Connection state
 
-A device token and an actually usable conversation are separate states. After
+Pairing exchanges the one-time code for a device token; users never enter API, provider, runtime, or session keys. A device token and an actually usable conversation are separate states. After
 pairing, the native layer marks the connection ready only after
 `/bootstrap` returns `bound=true`. A temporarily unbound conversation no
 longer causes the UI to bounce repeatedly back to the connection page.

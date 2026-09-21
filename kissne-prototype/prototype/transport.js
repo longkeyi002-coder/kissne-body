@@ -74,8 +74,6 @@
       hasToken: function () { return !!Native.hasToken(); },
       isConnected: function () { return typeof Native.isConnected === 'function' ? !!Native.isConnected() : !!Native.hasToken(); },
       clearToken: function () { Native.clearToken(); },
-      sessionKey: function () { return String(Native.getSessionKey() || ''); },
-      setSessionKey: function (value) { Native.setSessionKey(String(value || '').trim()); },
       cursor: function () {
         var n = Number(Native.getCursor());
         return isFinite(n) && n >= 0 ? n : 0;
@@ -84,10 +82,8 @@
         opts = opts || {};
         var base = nativeBase(opts.apiBase || '');
         if (base) Native.setBase(base);
-        if (opts.sessionKey) Native.setSessionKey(String(opts.sessionKey).trim());
         return nativeCall('pair', {
           pairing_code: String(opts.pairingCode || '').trim(),
-          session_key: String(opts.sessionKey || '').trim(),
           api_base: base
         });
       },
@@ -100,7 +96,7 @@
       },
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
-      cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); }
+      cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
       revoke: function () { return nativeCall('revoke', {}); }
     };
     return;
@@ -109,7 +105,6 @@
     base: 'kissne.web.api_base',
     installation: 'kissne.web.installation_id',
     token: 'kissne.web.device_token',
-    session: 'kissne.web.session_key',
     cursor: 'kissne.web.cursor'
   };
   function get(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
@@ -143,8 +138,6 @@
     return id;
   }
   function deviceToken() { return get(KEY.token); }
-  function sessionKey() { return get(KEY.session); }
-  function setSessionKey(value) { set(KEY.session, String(value || '').trim()); }
   function cursor() {
     var n = parseInt(get(KEY.cursor) || '0', 10);
     return isFinite(n) && n >= 0 ? n : 0;
@@ -196,12 +189,9 @@
   async function pair(opts) {
     opts = opts || {};
     var code = String(opts.pairingCode || '').trim();
-    var sk = String(opts.sessionKey || '').trim();
     var base = setBase(opts.apiBase || '');
     if (!code) throw new ApiError(400, { error: 'pairing_code_required' }, 'pairing_code_required');
-    if (sk) setSessionKey(sk);
     var body = { pairing_code: code, installation_id: installationId() };
-    if (sk) body.session_key = sk;
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) { set(KEY.token, out.device_token); set(KEY.cursor, '0'); }
     return out;
@@ -215,8 +205,6 @@
   }
   function sendText(text, messageId) {
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
-    var sk = sessionKey();
-    if (sk) body.session_key = sk;
     return request('/mobile/messages', { method: 'POST', body: body });
   }
   function poll() { return request('/mobile/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
@@ -240,8 +228,6 @@
     hasToken: function () { return !!deviceToken(); },
     isConnected: function () { return !!deviceToken(); },
     clearToken: clearToken,
-    sessionKey: sessionKey,
-    setSessionKey: setSessionKey,
     cursor: cursor,
     pair: pair,
     bootstrap: bootstrap,

@@ -1,7 +1,6 @@
 /* =====================================================================
    Kissne 手机端低保真原型 · screens-b.js
    页面 07–10：记忆库 / 设备管理 / 设置 / 通知与弹窗
-   附加：素材占位总表（占位标记登记页）
    ===================================================================== */
 (function () {
   'use strict';
@@ -176,7 +175,7 @@
           ${sectionTitle('连接操作')}
           ${card(
             listRow({ title: '重新连接', sub: '重新与设备建立连接', icon: 'refresh', to: '#/device?state=reconnecting' })
-            + listRow({ title: '连接设置', sub: '配对码 / Key / 服务器地址', icon: 'link', to: '#/connect' })
+            + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
             + listRow({ title: '断开设备', sub: '断开后聊天与同步将不可用', icon: 'off', tone: 'danger', to: '#/device?state=disconnect-confirm' })
           , { tight: true })}
           ${note('断开设备必须弹出确认框。')}
@@ -200,7 +199,7 @@
   K.registerScreen({
     no: '09', id: 'settings', name: '设置页', route: '#/settings', tab: null,
     purpose: '账号信息、设备、连接、通知与版本更新入口。',
-    out: ['#/home', '#/device', '#/connect', '#/assets'],
+    out: ['#/home', '#/device', '#/connect'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return `
@@ -219,9 +218,8 @@
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user', right: chip('后续页面', 'warn') })
             + listRow({ title: '设备管理', sub: '当前设备 · 待接入', icon: 'plug', to: '#/device' })
             + listRow({ title: '模型设置', sub: '默认模型（待接入）', icon: 'cpu', right: chip('后续页面', 'warn') })
-            + listRow({ title: '连接设置', sub: '配对码 / Key / 服务器地址', icon: 'link', to: '#/connect' })
+            + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
             + listRow({ title: '通知设置', sub: '新消息 / 连接状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
-            + listRow({ title: '素材占位总表', sub: '全部占位标记的登记与说明', icon: 'box', to: '#/assets' })
           , { tight: true })}
           ${card(
             listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
@@ -281,67 +279,4 @@
     }
   });
 
-  /* =====================================================================
-     附加：素材占位总表
-     ===================================================================== */
-  K.registerScreen({
-    no: '11', id: 'assets', name: '素材占位总表', route: '#/assets', tab: null,
-    excludeFromOverview: false,
-    purpose: '登记本原型中全部占位标记：代码、用途、出现位置、尺寸、当前状态。正式素材确认后按代码替换。',
-    out: ['#/home'],
-    states: [{ key: 'default', label: '默认' }],
-    render: function () {
-      var rows = Object.keys(K.PLACEHOLDERS).map(function (code) {
-        var m = K.PLACEHOLDERS[code];
-        return '<div class="prow">'
-          + '<div class="prow__head"><code>' + esc(code) + '</code>' + chip('待接入', 'warn') + '</div>'
-          + '<div class="prow__meta">' + esc(m.label) + ' · 尺寸 ' + esc(m.size) + '</div>'
-          + '<div class="prow__where">' + esc(m.where) + '</div>'
-          + '</div>';
-      }).join('');
-
-      /* 统一素材目录结构（与 assets/ 物理目录一致；角色/背景/动画/图标/特效都从这里引用） */
-      var assetTree = '<div class="assetdir">'
-        + '<div><b>assets/</b></div>'
-        + '<div class="d">├─ characters/ → yeqingxu（avatar·expressions·actions·notifications）· sheep · duo</div>'
-        + '<div class="d">├─ animations/ → entry · chat · aiworld · memory · transitions</div>'
-        + '<div class="d">├─ backgrounds/ → 房间 / 室外 / 星球</div>'
-        + '<div class="d">├─ icons/ → 单文件 + 精灵 sprites.svg（currentColor，主题可继承）</div>'
-        + '<div class="d">├─ effects/ → glow · ripple · pulse · shimmer</div>'
-        + '<div class="d">└─ placeholders/ → 插画占位</div>'
-        + '</div>';
-
-      /* 动画占位展示：每个都带 prefers-reduced-motion 静态降级 */
-      var animKeys = ['entry/logo-morph', 'chat/typing', 'aiworld/orbit',
-        'memory/sync', 'transitions/page-fade', 'transitions/route-push'];
-      var animGrid = '<div class="animgrid">' + animKeys.map(function (k) {
-        return '<div class="animgrid__i">'
-          + '<div class="animgrid__box">' + K.anim(k) + '</div>'
-          + '<div class="animgrid__t"><code>' + esc(k) + '</code><span class="tag">静态兜底</span></div>'
-          + '</div>';
-      }).join('') + '</div>';
-
-      return `
-      <div class="screen">
-        ${appbar({ title: '素材占位总表', sub: Object.keys(K.PLACEHOLDERS).length + ' 个占位标记 · 正式素材确认后替换', back: '#/home' })}
-        <div class="screen__body">
-          ${banner({ icon: 'box', title: '替换方式',
-            body: '正式素材完成后，按 data-placeholder 代码替换 assets/ 下同名文件即可，页面结构不变。' })}
-          ${sectionTitle('统一素材目录（assets/）')}
-          ${card(assetTree, { tight: true })}
-          ${sectionTitle('动画占位（均带静态 fallback）')}
-          ${animGrid}
-          ${note('动画占位用轻量 CSS/SVG 实现；开启系统「减少动态效果」即自动退化为静态首帧，不会闪、不会动。')}
-          ${sectionTitle('占位标记登记')}
-          ${card(rows, { tight: true })}
-          ${sectionTitle('小羊羔素材说明')}
-          ${card(
-            '<div class="prow__head"><code>SHEEP_CHARACTER_RESERVED</code>' + chip('保留入口', 'warn') + '</div>'
-            + '<p class="prow__note">小羊羔暂不放入核心聊天页面。后续可用于双角色页面、特殊状态、关于页面、组合通知、小机星或关系展示页面。当前只保留素材入口，不自行生成或修改小羊羔形象。</p>'
-          )}
-          ${note('本页只登记占位，不包含任何最终角色或插画素材。')}
-        </div>
-      </div>`;
-    }
-  });
 })();

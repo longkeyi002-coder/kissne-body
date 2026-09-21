@@ -35,12 +35,6 @@ class MobileSessionStore(context: Context) {
             prefs.edit().putString("api_base", normalized).apply()
         }
 
-    var sessionKey: String
-        get() = prefs.getString("session_key", null).orEmpty()
-        set(value) {
-            prefs.edit().putString("session_key", value.trim()).apply()
-        }
-
     fun installationId(): String {
         val existing = prefs.getString("installation_id", null)
         if (existing != null) return existing
