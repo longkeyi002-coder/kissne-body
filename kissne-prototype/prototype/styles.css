@@ -1408,18 +1408,62 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 }
 
 /* Android 壳模式：保留原型页面本身，移除仅供网页 review 使用的控制抽屉。 */
+html.is-native-shell,
+html.is-native-shell body{
+  width:100%;
+  height:100%;
+  min-width:0;
+  margin:0;
+  overflow:hidden;
+  background:#fff;
+}
 html.is-native-shell .panel,
 html.is-native-shell .drawer-btn,
 html.is-native-shell .drawer-scrim{display:none!important}
-html.is-native-shell .stage{width:100%;height:100%}
-html.is-native-shell .stage__body{padding:0;height:100%}
+html.is-native-shell .workbench{
+  display:block;
+  width:100%;
+  height:100%;
+  min-width:0;
+}
+html.is-native-shell .stage{
+  width:100%;
+  height:100%;
+  min-width:0;
+}
+html.is-native-shell .stage__body{
+  width:100%;
+  height:100%;
+  min-width:0;
+  padding:0;
+  align-items:stretch;
+  justify-content:stretch;
+}
+html.is-native-shell .stage__inner{
+  width:100%;
+  height:100%;
+  min-width:0;
+  min-height:0;
+  flex:1 1 auto;
+  align-items:stretch;
+  justify-content:stretch;
+}
 
 /* Native compact density — 只压缩状态栏下方的 App 内容，不改系统状态栏。 */
 html.is-native-shell .workbench,
 html.is-native-shell .stage,
 html.is-native-shell .stage__body,
+html.is-native-shell .stage__inner,
 html.is-native-shell .phone{height:100%;min-height:0}
-html.is-native-shell .phone{width:100%;border:0;border-radius:0;box-shadow:none}
+html.is-native-shell .phone{
+  width:100%;
+  max-width:none;
+  min-width:0;
+  flex:1 1 auto;
+  border:0;
+  border-radius:0;
+  box-shadow:none;
+}
 
 html.is-native-shell .appbar{height:46px;padding:0 9px}
 html.is-native-shell .appbar--brand{height:48px}
