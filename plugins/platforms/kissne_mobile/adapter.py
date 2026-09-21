@@ -723,7 +723,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return None
 
     async def _handle_pair(self, request: web.Request) -> web.Response:
-        """One-time pairing code -> device token. Nothing else registers an installation."""
+        """One-time pairing code -> device token. Nothing else registers an installation.
+
+        When ``auto_pair`` is enabled in platform config, pairing_code is optional:
+        any request with an installation_id gets a token directly.
+        """
         retry_after = self._pair_throttle(request)
         if retry_after is not None:
             logger.warning("[kissne_mobile] pairing attempts from %s throttled for %.1fs",
@@ -737,13 +741,53 @@ class KissneMobileAdapter(BasePlatformAdapter):
         body = payload or {}
         code = str(body.get("pairing_code") or "").strip()
         installation = str(body.get("installation_id") or "").strip()
-        if not code or not installation:
-            return _error_response("pairing_code_and_installation_id_required", 400)
+        if not installation:
+            return _error_response("installation_id_required", 400)
         try:
             store = self.device_store()
         except Exception:
             logger.error("[kissne_mobile] device store unavailable; refusing to pair", exc_info=True)
             return _error_response("device_store_unavailable", 503)
+
+        # --- auto_pair mode: skip pairing code validation ---
+        auto_pair = self._config.get("auto_pair", False)
+        if auto_pair and not code:
+            # Check if this installation already has a token — return it directly
+            existing = store.lookup_installation(installation)
+            if existing is not None:
+                # Already paired, just rebind and return
+                conversation_key = str(body.get("session_key") or "").strip()
+                if conversation_key:
+                    bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
+                else:
+                    own_key = self.mobile_session_key(installation)
+                    bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
+                return _json_response({
+                    "ok": True,
+                    "installation_id": installation,
+                    "device_token": existing["device_token"],
+                    "token_type": "Bearer",
+                    "conversation_bound": bound,
+                })
+            # New installation — create token directly without pairing code
+            token = await asyncio.to_thread(store.create_device_token, installation)
+            conversation_key = str(body.get("session_key") or "").strip()
+            if conversation_key:
+                bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
+            else:
+                own_key = self.mobile_session_key(installation)
+                bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
+            return _json_response({
+                "ok": True,
+                "installation_id": installation,
+                "device_token": token,
+                "token_type": "Bearer",
+                "conversation_bound": bound,
+            }, status=201)
+
+        # --- standard pairing flow (requires code) ---
+        if not code:
+            return _error_response("pairing_code_required", 400)
         try:
             token = await asyncio.to_thread(store.redeem_pairing_code, code, installation)
         except PairingCodeInvalid:
