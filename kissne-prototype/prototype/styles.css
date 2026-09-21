@@ -275,6 +275,8 @@ code{font-family:var(--mono)}
 }
 .card.is-tight .row:last-child{border-bottom:0}
 .row.is-tappable:hover{background:var(--g1)}
+.sessionpage__row{width:100%;border-top:0;border-left:0;border-right:0;background:transparent;
+  text-align:left;font:inherit;color:inherit;-webkit-appearance:none;appearance:none;cursor:pointer}
 .row--plain{border-bottom:0;padding:2px 0}
 .row__icon{width:30px;height:30px;flex:none;border-radius:9px;background:var(--g2);
   display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
@@ -1039,7 +1041,8 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .memdetail{display:flex;flex-direction:column;gap:12px}
 .memdetail__t{font-size:18px;font-weight:700;margin:0}
 .memdetail__meta{display:flex;align-items:center;gap:7px;font-size:11px}
-.memdetail__body{font-size:13.5px;line-height:1.7;color:var(--ink);margin:0}
+.memdetail__body{font-size:13.5px;line-height:1.7;color:var(--ink);margin:0;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 /* 搜索 / 筛选是界面占位：明确标注「待实现」，别让人以为点了会有反应 */
 .searchbar.is-todo{background:var(--g2)}
 .searchbar__tag{
