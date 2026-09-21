@@ -1712,3 +1712,32 @@ html.is-native-shell .composerwrap{
 }
 html.is-native-shell .msg__ava,
 html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
+
+
+/* Admin / real device status */
+.adminnotice{
+  padding:8px 10px;border:1px solid var(--line-2);border-radius:10px;
+  background:var(--g1);font-size:11px;line-height:1.45;color:var(--ink-2)
+}
+.adminnotice[hidden]{display:none}
+.adminnotice.is-working{background:var(--blue-wash);border-color:var(--blue-line);color:var(--blue-deep)}
+.adminnotice.is-ok{background:#f3faf4;border-color:#cfe6cf;color:#426b48}
+.adminnotice.is-error{background:#fff;border-style:dashed;color:var(--ink)}
+.adminops{display:flex;flex-direction:column;gap:7px}
+.adminconfirm{
+  display:flex;flex-direction:column;gap:9px;padding:11px 12px;
+  border:1px solid var(--line-2);border-radius:13px;background:#fff
+}
+.adminconfirm[hidden]{display:none}
+.adminconfirm__title{font-size:13px;font-weight:700;color:var(--ink)}
+.adminconfirm__body{font-size:11px;line-height:1.5;color:var(--ink-2)}
+.adminconfirm__actions{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.adminlog{
+  min-height:126px;max-height:230px;overflow:auto;margin:0;padding:10px 11px;
+  border:1px solid var(--line-2);border-radius:12px;background:var(--g1);
+  font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--ink-2);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word
+}
+.screen--admin code,[data-device-id]{
+  font-family:var(--mono);font-size:10px;overflow-wrap:anywhere;word-break:break-all
+}
