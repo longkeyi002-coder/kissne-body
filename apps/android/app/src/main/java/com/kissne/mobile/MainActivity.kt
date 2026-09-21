@@ -36,7 +36,7 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         setContentView(webView)
-        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html?native=1")
     }
 
     @Deprecated("Deprecated in Java")
