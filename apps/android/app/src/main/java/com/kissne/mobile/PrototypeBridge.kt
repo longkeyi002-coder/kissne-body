@@ -163,10 +163,10 @@ class PrototypeBridge(
             }
             "bootstrap" -> {
                 val force = body.optBoolean("force", false)
-                if (!force) {
-                    cachedBootstrapPayload()?.let { return it }
-                }
-                rememberBootstrap(client().bootstrapPayload(body.optLong("cursor", store.cursor)))
+                val cached = if (force) null else cachedBootstrapPayload()
+                cached ?: rememberBootstrap(
+                    client().bootstrapPayload(body.optLong("cursor", store.cursor))
+                )
             }
             "sendText" -> client().sendPayload(
                 messageId = body.optString("message_id"),
