@@ -475,15 +475,24 @@
             log.scrollTop = log.scrollHeight;
           }
           var running = !!data.running;
+          var success = data.success;
           setBusy(running);
           setText('[data-admin-deploy]', running
             ? ((data.type === 'rollback' ? '回滚' : '合并') + '进行中')
-            : (data.success ? '部署成功' : '部署失败'));
+            : (success === true ? '部署成功' : (success === false ? '部署失败' : '状态待确认')));
           if (running) {
             showNotice('working', '部署正在进行，日志每 3 秒自动刷新。');
             schedulePoll(3000);
+          } else if (success === true) {
+            showNotice('ok', '部署成功。');
+            loadStatus();
+          } else if (success === false) {
+            showNotice('error', '部署失败，请查看日志。');
+            loadStatus();
           } else {
-            showNotice(data.success ? 'ok' : 'error', data.success ? '部署成功。' : '部署失败，请查看日志。');
+            /* Gateway restart resets in-memory deploy state. Do not turn an
+               unknown post-restart state into a false failure. */
+            showNotice('working', '网关已恢复，正在重新确认部署状态。');
             loadStatus();
           }
         } catch (err) {
