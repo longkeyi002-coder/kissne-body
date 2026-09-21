@@ -151,7 +151,7 @@ class PrototypeBridge(
                     "sessions", "selectSession", "bootstrap", "sendText", "poll", "ack",
                     "cancel", "approval", "revoke",
                 )
-                if (status == 401 && coreAuthAction) store.clearToken()
+                if (status == 401 && coreAuthAction) store.invalidateToken()
                 val payloadJson = JSONObject()
                     .put("status", status)
                     .put("error", error.message ?: "native_transport_error")
