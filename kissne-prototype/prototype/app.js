@@ -27,6 +27,12 @@
        已经配对过：直接进入入口页。启动阶段不 bootstrap、不自动跳聊天。 */
     return T && typeof T.hasToken === 'function' && T.hasToken() ? '#/home' : '#/connect';
   }
+  function finishSplash() {
+    if (!COLD) return;
+    COLD = false;
+    clearTimeout(splashTimer);
+    nav(splashNext());
+  }
 
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {
@@ -68,9 +74,7 @@
   document.addEventListener('kissne:splash-end', function () {
     var cur = parseHash();
     if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
-    COLD = false;
-    clearTimeout(splashTimer);
-    nav(splashNext());
+    finishSplash();
   });
 
   /* ---------------- 手机外壳 ---------------- */
@@ -162,6 +166,10 @@
   /* ---------------- 主渲染 ---------------- */
   function render() {
     var current = parseHash();
+    if (COLD && current.path !== '/welcome') {
+      COLD = false;
+      clearTimeout(splashTimer);
+    }
     var isOverview = current.path === '/overview';
     var screen = findScreen(current.path);
 
@@ -191,10 +199,7 @@
       /* 冷启动：开屏动画播完自动进下一页；此后不再重播 */
       clearTimeout(splashTimer);
       if (screen.id === 'welcome' && state === 'animate' && COLD) {
-        splashTimer = setTimeout(function () {
-          COLD = false;
-          nav(splashNext());
-        }, SPLASH_MS);
+        splashTimer = setTimeout(finishSplash, SPLASH_MS);
       }
     }
     renderRouteList(current);
@@ -229,6 +234,9 @@
       if (a === 'connect') {
         /* 真 Transport 的 connect 由连接页 mount 处理；这里只保留纯静态总览的兜底。 */
         if (!window.KissneTransport) nav('#/connect/success');
+      }
+      else if (a === 'splash-skip') {
+        finishSplash();
       }
       else if (a === 'check-update') {
         try {
