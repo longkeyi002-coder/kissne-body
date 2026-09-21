@@ -75,7 +75,7 @@ class PrototypeBridge(
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         val executor = when (action) {
-            "modelOptions", "setModel", "selectSession",
+            "modelOptions", "setModel", "sessions", "selectSession",
             "adminStatus", "adminMerge", "adminRollback", "adminDeployLog" -> controlExecutor
             else -> transportExecutor
         }
