@@ -83,7 +83,20 @@ class MainActivity : AppCompatActivity() {
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            /*
+             * Keep the WebView below the real status bar and above the IME.
+             * maxOf() avoids double-counting the gesture/navigation inset when
+             * the keyboard is visible. The child WebView is laid out inside
+             * this padded root, so CSS 100%/flex automatically follows the
+             * visible Android viewport.
+             */
+            view.setPadding(
+                bars.left,
+                bars.top,
+                bars.right,
+                maxOf(bars.bottom, ime.bottom),
+            )
             insets
         }
         ViewCompat.requestApplyInsets(root)
