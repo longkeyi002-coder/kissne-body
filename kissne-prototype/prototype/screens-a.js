@@ -896,10 +896,10 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
-            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-nav="#/chat?state=model-menu&from=${origin}">
+            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
-            <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-nav="#/chat?state=effort-menu&from=${origin}">
+            <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
               <span class="hsel__k">思考强度</span><span class="hsel__v">${esc(curEffort.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
           </div>
@@ -913,7 +913,7 @@
             <span data-unread-n>${UNREAD.n || 0}</span> 条新消息 ↓
           </button>
           ${stkPanel}${quickbar}${composer}</div>
-        ${menuLayer}
+        <div data-chat-menu-host>${menuLayer}</div>
         ${bs === 'request-enter' ? modal({
           title: '小机星 · 进入请示',
           body: '<p>叶青栩：可以，我开门给你。</p>'
@@ -1025,6 +1025,42 @@
       var retryMessageText = '';
       var liveApprovals = Object.create(null);
 
+      var menuHost = root.querySelector('[data-chat-menu-host]');
+      var openMenu = menu === 'model' || menu === 'effort' ? menu : null;
+
+      function updateHeaderControls() {
+        var m = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
+        var e = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
+        var mb = root.querySelector('[data-chat-menu="model"]');
+        var eb = root.querySelector('[data-chat-menu="effort"]');
+        if (mb) {
+          var mv = mb.querySelector('.hsel__v');
+          if (mv) mv.textContent = m.v || '—';
+          mb.classList.toggle('is-open', openMenu === 'model');
+        }
+        if (eb) {
+          var ev = eb.querySelector('.hsel__v');
+          if (ev) ev.textContent = e.v || '—';
+          eb.classList.toggle('is-open', openMenu === 'effort');
+        }
+      }
+
+      function paintChatMenu(kind) {
+        openMenu = kind || null;
+        updateHeaderControls();
+        if (!menuHost) return;
+        if (!openMenu) {
+          menuHost.innerHTML = '';
+          return;
+        }
+        var m = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
+        var e = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
+        menuHost.innerHTML = '<div class="menuscrim" data-chat-menu-close></div>'
+          + (openMenu === 'model'
+              ? dropdown('模型', MODELS, m.k, 'model', 'normal')
+              : dropdown('思考强度', EFFORTS, e.k, 'effort', 'normal'));
+      }
+
       function refreshHermesModelControls(force) {
         if (!live || !T || typeof T.modelOptions !== 'function') return;
         if (MODEL_OPTIONS_LOADING) return;
@@ -1032,14 +1068,33 @@
         MODEL_OPTIONS_LOADING = true;
         T.modelOptions().then(function (payload) {
           applyHermesModelOptions(payload);
-          document.dispatchEvent(new CustomEvent('kissne:model-options-updated'));
+          updateHeaderControls();
+          if (openMenu) paintChatMenu(openMenu);
         }).catch(function () {
           MODEL_OPTIONS_ERROR = '无法读取 Hermes 模型列表';
           MODEL_OPTIONS_LOADED_AT = Date.now();
-          document.dispatchEvent(new CustomEvent('kissne:model-options-updated'));
+          if (openMenu) paintChatMenu(openMenu);
         }).finally(function () {
           MODEL_OPTIONS_LOADING = false;
         });
+      }
+
+      function onChatMenuTap(e) {
+        var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
+        if (toggle && root.contains(toggle)) {
+          e.preventDefault();
+          e.stopPropagation();
+          var kind = String(toggle.getAttribute('data-chat-menu') || '');
+          paintChatMenu(openMenu === kind ? null : kind);
+          if (kind) refreshHermesModelControls(false);
+          return;
+        }
+        var close = e.target && e.target.closest ? e.target.closest('[data-chat-menu-close]') : null;
+        if (close && root.contains(close)) {
+          e.preventDefault();
+          e.stopPropagation();
+          paintChatMenu(null);
+        }
       }
 
       function onHermesControl(e) {
@@ -1061,7 +1116,8 @@
             if (kind === 'model') MODEL_CURRENT = value;
             if (kind === 'effort') EFFORT_CURRENT = value;
             MODEL_OPTIONS_LOADED_AT = 0;
-            location.hash = '#/chat?state=' + encodeURIComponent(origin);
+            paintChatMenu(null);
+            updateHeaderControls();
           })
           .catch(function (err) {
             el.disabled = false;
@@ -1072,7 +1128,9 @@
           });
       }
 
+      root.addEventListener('click', onChatMenuTap);
       root.addEventListener('click', onHermesControl);
+      updateHeaderControls();
       refreshHermesModelControls(false);
 
       function historyClock(raw) {
@@ -1556,6 +1614,7 @@
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
       return function () {
+        root.removeEventListener('click', onChatMenuTap);
         root.removeEventListener('click', onHermesControl);
         input.removeEventListener('keydown', onKey);
         input.removeEventListener('focus', onFocus);
