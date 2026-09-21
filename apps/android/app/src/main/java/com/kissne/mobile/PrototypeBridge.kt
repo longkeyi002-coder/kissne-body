@@ -96,6 +96,12 @@ class PrototypeBridge(
                         store.clearToken()
                         result
                     }
+                    "adminStatus" -> client().adminStatusPayload()
+                    "adminMerge" -> client().adminMergePayload()
+                    "adminRollback" -> client().adminRollbackPayload()
+                    "adminDeployLog" -> client().adminDeployLogPayload(
+                        body.optInt("lines", 100),
+                    )
                     else -> throw IllegalArgumentException("unknown_native_action")
                 }
                 resolve(id, true, result)
