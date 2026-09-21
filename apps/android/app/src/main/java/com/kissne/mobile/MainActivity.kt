@@ -54,11 +54,14 @@ class MainActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(webView)
 
-        bridge = PrototypeBridge(webView, store)
+        bridge = PrototypeBridge(webView, store) {
+            updateManager.checkForUpdates()
+        }
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         setContentView(webView)
         webView.loadUrl("https://appassets.androidplatform.net/assets/index.html?native=1")
+        webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
 
     override fun onResume() {
