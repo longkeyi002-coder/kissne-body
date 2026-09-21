@@ -1,164 +1,56 @@
 package com.kissne.mobile
 
+import android.annotation.SuppressLint
 import android.os.Bundle
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import androidx.webkit.WebViewAssetLoader
 
 class MainActivity : AppCompatActivity() {
-    private val requestExecutor = Executors.newSingleThreadExecutor()
-    private val pollExecutor = Executors.newSingleThreadExecutor()
-    private lateinit var store: MobileSessionStore
-    private lateinit var client: MobileTransportClient
-    private lateinit var ui: ChatUi
-    private val polling = AtomicBoolean(false)
-    private val state = ChatState()
+    private lateinit var webView: WebView
+    private lateinit var bridge: PrototypeBridge
 
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = MobileSessionStore(this)
-        client = MobileTransportClient(
-            baseUrl = BuildConfig.MOBILE_BASE_URL,
-            tokenProvider = { store.deviceToken }
-        )
-        ui = ChatUi(this, ::pair, ::sendMessage, ::cancelTurn)
-        setContentView(ui.root)
 
-        if (store.deviceToken.isNullOrBlank()) {
-            ui.showPairing("需要设备配对")
-        } else {
-            bootstrap()
-        }
-    }
+        val store = MobileSessionStore(this)
+        val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
 
-    private fun pair() {
-        val code = ui.pairingCodeValue()
-        if (code.isEmpty()) return
-
-        requestExecutor.execute {
-            try {
-                store.saveToken(client.pair(code, store.installationId()))
-                runOnUiThread { bootstrap() }
-            } catch (error: Exception) {
-                runOnUiThread {
-                    ui.showPairing("配对失败：${error.message ?: "未知错误"}")
-                }
+        webView = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
+                    assetLoader.shouldInterceptRequest(request.url)
             }
         }
+
+        bridge = PrototypeBridge(webView, store)
+        webView.addJavascriptInterface(bridge, "KissneNativeTransport")
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        setContentView(webView)
+        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
     }
 
-    private fun bootstrap() {
-        state.beginBootstrap()
-        ui.showChat()
-        ui.render(state)
-
-        requestExecutor.execute {
-            try {
-                val result = client.bootstrap(store.cursor)
-                if (result.coveredEventSeqs.isNotEmpty()) {
-                    store.cursor = maxOf(store.cursor, result.coveredEventSeqs.max())
-                    client.ack(store.cursor)
-                }
-                state.bootstrapLoaded(result)
-                runOnUiThread {
-                    if (result.bound) {
-                        ui.showChat()
-                        ui.render(state)
-                        startPolling()
-                    } else {
-                        ui.showPairing("未绑定当前 Conversation，请重新配对或等待绑定")
-                        ui.render(state)
-                    }
-                }
-            } catch (error: Exception) {
-                state.failed()
-                runOnUiThread {
-                    ui.showPairing("未连接：${error.message ?: "未知错误"}")
-                    ui.render(state)
-                }
-            }
-        }
-    }
-
-    private fun sendMessage() {
-        val text = ui.consumeInput()
-        val retrying = state.status == ChatState.Status.ERROR && state.lastOutbound != null
-        if (text.isEmpty() && !retrying) return
-
-        val outbound = state.lastOutbound
-            ?: OutboundMessage("android-${System.currentTimeMillis()}", text)
-        if (!retrying) {
-            state.messages += HistoryMessage("user", outbound.text, outbound.messageId)
-            state.remember(outbound)
-        }
-        state.sent(SendReceipt(outbound.messageId, "", false))
-        ui.render(state)
-
-        requestExecutor.execute {
-            try {
-                state.sent(client.send(outbound.messageId, outbound.text))
-                runOnUiThread { ui.render(state) }
-            } catch (_: Exception) {
-                state.failed()
-                runOnUiThread { ui.render(state) }
-            }
-        }
-    }
-
-    private fun startPolling() {
-        if (!polling.compareAndSet(false, true)) return
-
-        pollExecutor.execute {
-            while (polling.get() && !isFinishing) {
-                try {
-                    val events = client.poll(store.cursor)
-                    for (event in events) {
-                        when (event.type) {
-                            MobileEventType.PENDING -> state.pending(event.turnId)
-                            MobileEventType.DELTA -> state.delta(event.text)
-                            MobileEventType.COMPLETED -> state.completed(event.text)
-                            MobileEventType.CANCELLED -> state.cancelled()
-                            MobileEventType.ERROR -> state.failed()
-                        }
-                        store.cursor = maxOf(store.cursor, event.seq)
-                        runOnUiThread { ui.render(state) }
-                    }
-                    if (events.isNotEmpty()) client.ack(store.cursor)
-                    Thread.sleep(1200)
-                } catch (_: InterruptedException) {
-                    break
-                } catch (_: Exception) {
-                    state.failed()
-                    runOnUiThread { ui.render(state) }
-                    try {
-                        Thread.sleep(2500)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
-                }
-            }
-            polling.set(false)
-        }
-    }
-
-    private fun cancelTurn() {
-        val turnId = state.activeTurnId ?: return
-        requestExecutor.execute {
-            try {
-                client.cancel(turnId)
-                state.cancelled()
-                runOnUiThread { ui.render(state) }
-            } catch (_: Exception) {
-                state.failed()
-                runOnUiThread { ui.render(state) }
-            }
-        }
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
-        polling.set(false)
-        requestExecutor.shutdownNow()
-        pollExecutor.shutdownNow()
+        if (::bridge.isInitialized) bridge.close()
+        if (::webView.isInitialized) {
+            webView.removeJavascriptInterface("KissneNativeTransport")
+            webView.stopLoading()
+            webView.destroy()
+        }
         super.onDestroy()
     }
 }
