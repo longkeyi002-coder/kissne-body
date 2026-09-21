@@ -111,6 +111,12 @@
           scope: String(scope || 'once')
         });
       },
+      adminStatus: function () { return nativeCall('adminStatus', {}); },
+      adminMerge: function () { return nativeCall('adminMerge', {}); },
+      adminRollback: function () { return nativeCall('adminRollback', {}); },
+      adminDeployLog: function (lines) {
+        return nativeCall('adminDeployLog', { lines: Number(lines) || 100 });
+      },
       revoke: function () { return nativeCall('revoke', {}); }
     };
     return;
@@ -140,6 +146,10 @@
     return v.replace(/\/+$/, '');
   }
   function apiBase() { return normalizeBase(''); }
+  function adminBase() {
+    var base = normalizeBase('');
+    return /\/mobile$/i.test(base) ? base.replace(/\/mobile$/i, '') : base;
+  }
   function setBase(value) { var v = normalizeBase(value); set(KEY.base, v); return v; }
   function installationId() {
     var id = get(KEY.installation);
@@ -254,6 +264,22 @@
       }
     });
   }
+  function adminStatus() {
+    return request('/admin/status', { method: 'GET', base: adminBase() });
+  }
+  function adminMerge() {
+    return request('/admin/merge', { method: 'POST', base: adminBase() });
+  }
+  function adminRollback() {
+    return request('/admin/rollback', { method: 'POST', base: adminBase() });
+  }
+  function adminDeployLog(lines) {
+    var n = Math.max(1, Math.min(500, Number(lines) || 100));
+    return request('/admin/deploy-log?lines=' + encodeURIComponent(n), {
+      method: 'GET',
+      base: adminBase()
+    });
+  }
 
   window.KissneTransport = {
     ApiError: ApiError,
@@ -273,6 +299,10 @@
     cancel: cancel,
     modelOptions: modelOptions,
     setModel: setModel,
-    respondApproval: respondApproval
+    respondApproval: respondApproval,
+    adminStatus: adminStatus,
+    adminMerge: adminMerge,
+    adminRollback: adminRollback,
+    adminDeployLog: adminDeployLog
   };
 })();
