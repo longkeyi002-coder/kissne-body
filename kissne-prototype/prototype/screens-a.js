@@ -178,11 +178,15 @@
           if (apiBase) T.setBase(apiBase);
           await T.pair({ pairingCode: pairingCode, apiBase: apiBase });
           if (!T.hasToken()) throw new Error('pairing_failed');
-          showFeedback('working', '配对成功，正在同步会话…');
-          var boot = await T.bootstrap();
-          if (!boot || !boot.bound) {
-            showFeedback('error', '设备已配对，但会话尚未就绪。请稍后重试。');
-            return;
+          showFeedback('working', '配对成功，正在进入 Kissne…');
+          /*
+           * Pairing and session readiness are different states.
+           * A valid device token means pairing is complete even when bootstrap
+           * has no currently bindable Hermes session. Do not trap the user on
+           * the connection page; chat bootstrap will keep retrying in place.
+           */
+          try { await T.bootstrap(); } catch (bootstrapErr) {
+            /* Non-fatal here: the chat page owns session-readiness retry. */
           }
           location.replace('#/connect/success');
         } catch (err) {
