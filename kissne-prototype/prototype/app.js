@@ -24,20 +24,7 @@
   var COLD = true;
   var splashTimer = null;
   var SPLASH_MS = 12000;         /* 正式开屏约 7.4s；12s 仅作为素材解码失败时的兜底 */
-  var SPLASH_NEXT = '#/connect';  /* 无凭据 / bootstrap 失败时的落点 */
-  var splashTarget = null;
-  function resolveSplashTarget() {
-    if (splashTarget) return splashTarget;
-    var T = window.KissneTransport;
-    if (!T || !T.hasToken()) {
-      splashTarget = Promise.resolve(SPLASH_NEXT);
-      return splashTarget;
-    }
-    splashTarget = T.bootstrap().then(function (payload) {
-      return payload && payload.bound ? '#/chat' : SPLASH_NEXT;
-    }).catch(function () { return SPLASH_NEXT; });
-    return splashTarget;
-  }
+  var SPLASH_NEXT = '#/home';     /* 开屏结束后固定进入入口页 */
 
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {
@@ -81,7 +68,7 @@
     if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
     COLD = false;
     clearTimeout(splashTimer);
-    resolveSplashTarget().then(function (to) { nav(to || SPLASH_NEXT); });
+    nav(SPLASH_NEXT);
   });
 
   /* ---------------- 手机外壳 ---------------- */
@@ -209,10 +196,9 @@
       /* 冷启动：开屏动画播完自动进下一页；此后不再重播 */
       clearTimeout(splashTimer);
       if (screen.id === 'welcome' && state === 'animate' && COLD) {
-        var target = resolveSplashTarget();
         splashTimer = setTimeout(function () {
           COLD = false;
-          target.then(function (to) { nav(to || SPLASH_NEXT); });
+          nav(SPLASH_NEXT);
         }, SPLASH_MS);
       }
     }
