@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:theme="@style/Theme.Kissne"
-        android:label="Kissne"
+        android:label="${appLabel}"
         android:usesCleartextTraffic="false"
         android:hardwareAccelerated="true">
         <activity
