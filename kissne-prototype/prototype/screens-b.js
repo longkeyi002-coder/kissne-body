@@ -14,120 +14,157 @@
      07 记忆库页
      ===================================================================== */
   var MEMORY_STATES = [
-    { key: 'list',            label: '记忆列表' },
-    { key: 'empty',           label: '暂无记忆' },
-    { key: 'syncing',         label: '正在同步' },
-    { key: 'sync-ok',         label: '同步成功' },
-    { key: 'sync-fail',       label: '同步失败' },
-    { key: 'detail',          label: '记忆详情' },
-    { key: 'edit',            label: '编辑记忆' },
-    { key: 'delete-confirm',  label: '删除确认' }
+    { key: 'list', label: '记忆列表' },
+    { key: 'detail', label: '记忆详情' },
+    { key: 'delete-confirm', label: '删除确认' }
   ];
+  var MEMORY_INDEX = { items: [], loaded: false, error: '' };
 
-  var MEMORY_ITEMS = [
-    { t: '周末计划',      s: '「周六去美术馆，周日下午收拾房间」', c: '生活', time: '今天' },
-    { t: '项目代号',      s: '「内部代号定为 Kissne」',            c: '工作', time: '昨天' },
-    { t: '饮食偏好',      s: '「不吃香菜，喜欢偏甜口」',            c: '偏好', time: '3 天前' }
-  ];
+  function memoryItemById(id) {
+    id = String(id || '');
+    for (var i = 0; i < MEMORY_INDEX.items.length; i++) {
+      if (String(MEMORY_INDEX.items[i].id || '') === id) return MEMORY_INDEX.items[i];
+    }
+    return null;
+  }
+  function memoryTitle(item) {
+    var text = String(item && item.text || '').replace(/\s+/g, ' ').trim();
+    return text.length > 34 ? text.slice(0, 34) + '…' : (text || '未命名记忆');
+  }
+  function memoryListHtml() {
+    if (!MEMORY_INDEX.loaded && MEMORY_INDEX.error) {
+      return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div>'
+        + '<div class="mempty__s">这里只显示 Hermes 的真实记忆，不再使用演示数据。</div></div>';
+    }
+    if (!MEMORY_INDEX.loaded) {
+      return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
+    }
+    if (!MEMORY_INDEX.items.length) {
+      return '<div class="mempty">' + ph('MEMORY_EMPTY_ILLUSTRATION', { size: 140 })
+        + '<div class="mempty__t">暂无记忆</div>'
+        + '<div class="mempty__s">这里只显示真实写入 MEMORY.md / USER.md 的内容。</div></div>';
+    }
+    return card(MEMORY_INDEX.items.map(function (item) {
+      var source = item.target === 'user' ? '用户资料' : '长期记忆';
+      return listRow({
+        title: memoryTitle(item),
+        sub: source + ' · ' + String(item.source || ''),
+        to: '#/memory?state=detail&id=' + encodeURIComponent(String(item.id || '')),
+        right: icon('chevron', 16)
+      });
+    }).join(''), { tight: true });
+  }
 
   K.registerScreen({
     no: '07', id: 'memory', name: '记忆库页', route: '#/memory', tab: null,
-    purpose: '记忆列表 / 分类筛选 / 详情 / 编辑 / 删除二次确认，覆盖空、同步中、同步成功与失败状态。',
+    purpose: '直接读取 Hermes 的真实 MEMORY.md / USER.md；支持查看和真实删除，不展示演示记忆。',
     out: ['#/home', '#/memory?state=detail'],
     states: MEMORY_STATES,
     render: function (ctx) {
       var s = ctx.state || 'list';
+      var id = ctx.params && ctx.params.get('id') || '';
+      var item = memoryItemById(id);
 
-      /* --- 详情 --- */
-      if (s === 'detail') {
-        return `
-        <div class="screen">
-          ${appbar({ title: '记忆详情', back: '#/memory',
-                     right: '<button class="iconbtn" data-nav="#/memory?state=edit" aria-label="编辑">' + icon('edit') + '</button>' })}
-          <div class="screen__body">
-            <div class="memdetail">
-              <h2 class="memdetail__t">周末计划</h2>
-              <div class="memdetail__meta">${chip('生活')}${chip('已同步', 'warn')}<span class="muted">更新于今天 09:12</span></div>
-              <p class="memdetail__body">周六去美术馆，周日下午收拾房间。用户希望上午出发、避开人流高峰。</p>
-              ${card(
-                kv('来源', '聊天页 · 叶青栩')
-                + kv('写入方式', '自动提取')
-                + kv('记忆 ID', 'mem_20260917_001')
-              )}
-            </div>
-          </div>
-          <div class="screen__foot">
-            ${btn('编辑记忆', { to: '#/memory?state=edit', block: true, kind: 'ghost' })}
-            ${btn('删除记忆', { to: '#/memory?state=delete-confirm', block: true, kind: 'danger' })}
-          </div>
-        </div>`;
-      }
-
-      /* --- 编辑 --- */
-      if (s === 'edit') {
-        return `
-        <div class="screen">
-          ${appbar({ title: '编辑记忆', back: '#/memory?state=detail' })}
-          <div class="screen__body">
-            ${field({ label: '标题', value: '周末计划' })}
-            ${field({ label: '内容', value: '周六去美术馆，周日下午收拾房间。' })}
-            ${field({ label: '分类', value: '生活' })}
-            </div>
-          <div class="screen__foot">
-            ${btn('保存', { to: '#/memory?state=sync-ok', block: true, kind: 'primary' })}
-            ${btn('取消', { to: '#/memory?state=detail', block: true, kind: 'ghost' })}
-          </div>
-        </div>`;
-      }
-
-      /* --- 列表 / 空 / 同步 --- */
-      var topBanner = '';
-      if (s === 'syncing')  topBanner = banner({ icon: 'sync', title: '正在同步', body: '正在与设备同步记忆库…' });
-      if (s === 'sync-ok')  topBanner = banner({ icon: 'check', kind: 'ok', title: '同步成功', body: '记忆库已是最新（12 条）。' });
-      if (s === 'sync-fail') topBanner = banner({ icon: 'alert', kind: 'warn', title: '同步失败',
-        body: '无法访问设备，请检查连接后重试。', action: { label: '重试', action: 'sync' } });
-
-      var body;
-      if (s === 'empty') {
-        body = '<div class="mempty">'
-          + ph('MEMORY_EMPTY_ILLUSTRATION', { size: 140 })
-          + '<div class="mempty__t">暂无记忆</div>'
-          + '<div class="mempty__s">对话中值得保留的内容会自动写入这里。</div>'
+      if (s === 'detail' || s === 'delete-confirm') {
+        var detail = item
+          ? '<div class="memdetail"><h2 class="memdetail__t">' + esc(memoryTitle(item)) + '</h2>'
+            + '<div class="memdetail__meta">' + chip(item.target === 'user' ? '用户资料' : '长期记忆')
+            + '<span class="muted">' + esc(item.source || '') + '</span></div>'
+            + '<p class="memdetail__body">' + esc(item.text || '') + '</p></div>'
+          : '<div class="mempty"><div class="mempty__t">这条记忆不存在</div></div>';
+        return '<div class="screen">'
+          + appbar({ title: '记忆详情', back: '#/memory' })
+          + '<div class="screen__body">' + detail + '</div>'
+          + (item ? '<div class="screen__foot">'
+              + btn('删除记忆', { to: '#/memory?state=delete-confirm&id=' + encodeURIComponent(id), block: true, kind: 'danger' })
+              + '</div>' : '')
+          + (s === 'delete-confirm' && item ? modal({
+              title: '删除这条记忆？',
+              kind: 'danger',
+              body: '<p>将从 Hermes 的真实记忆文件中永久删除这条内容。</p>',
+              actions: [
+                { label: '取消', to: '#/memory?state=detail&id=' + encodeURIComponent(id), kind: 'ghost' },
+                { label: '确认删除', action: 'delete-memory', kind: 'danger' }
+              ]
+            }) : '')
           + '</div>';
-      } else {
-        body = '<div class="searchbar is-todo">' + icon('search', 17)
-          + '<span class="searchbar__ph">搜索记忆</span>'
-
-          + '<span class="searchbar__filter">' + icon('box', 17) + '筛选</span></div>'
-          + '<div class="chips is-todo">' + chip('全部', 'solid') + chip('生活') + chip('工作') + chip('偏好')
-          + '</div>'
-          + sectionTitle('全部记忆', '<span class="muted">12 条</span>')
-          + card(MEMORY_ITEMS.map(function (m) {
-              return listRow({
-                title: m.t, sub: m.s, to: '#/memory?state=detail',
-                right: '<span class="row__time">' + m.time + '</span>'
-              });
-            }).join(''), { tight: true });
       }
 
-      return `
-      <div class="screen">
-        ${appbar({ title: '记忆库', sub: 'Kissne · 已同步',
-                   right: '<button class="iconbtn" data-action="sync" aria-label="同步">' + icon('sync') + '</button>' })}
-        ${topBanner}
-        <div class="screen__body">
-          ${body}
-        </div>
-        ${s === 'delete-confirm' ? modal({
-          title: '删除这条记忆？',
-          kind: 'danger',
-          body: '<p>「周末计划」将被永久删除，且无法恢复。</p><p class="muted">删除操作需要二次确认。</p>',
-          actions: [
-            { label: '取消', to: '#/memory?state=list', kind: 'ghost' },
-            { label: '确认删除', to: '#/memory?state=empty', kind: 'danger' }
-          ]
-        }) : ''}
-      </div>`;
+      return '<div class="screen">'
+        + appbar({
+            title: '记忆库',
+            sub: MEMORY_INDEX.loaded ? ('真实记忆 · ' + MEMORY_INDEX.items.length + ' 条') : 'Hermes 真实记忆',
+            back: '#/home',
+            right: '<button class="iconbtn" data-memory-refresh aria-label="刷新">' + icon('sync') + '</button>'
+          })
+        + '<div class="screen__body"><div class="adminnotice" data-memory-notice hidden></div>'
+        + '<div data-memory-list>' + memoryListHtml() + '</div></div></div>';
+    },
+    mount: function (root, ctx) {
+      var T = window.KissneTransport;
+      var host = root.querySelector('[data-memory-list]');
+      var refresh = root.querySelector('[data-memory-refresh]');
+      var notice = root.querySelector('[data-memory-notice]');
+      var del = root.querySelector('[data-action="delete-memory"]');
+      var stopped = false;
+
+      function show(text) {
+        if (!notice) return;
+        notice.hidden = !text;
+        notice.textContent = text || '';
+      }
+      function paint() {
+        if (host && !stopped) host.innerHTML = memoryListHtml();
+      }
+      async function reload() {
+        if (!T || typeof T.memories !== 'function') {
+          MEMORY_INDEX.loaded = false;
+          MEMORY_INDEX.error = 'transport_unavailable';
+          paint();
+          return;
+        }
+        show('正在读取真实记忆…');
+        try {
+          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          var payload = await T.memories();
+          MEMORY_INDEX.items = Array.isArray(payload && payload.items) ? payload.items : [];
+          MEMORY_INDEX.loaded = true;
+          MEMORY_INDEX.error = '';
+          if (!stopped) { show(''); paint(); }
+        } catch (err) {
+          MEMORY_INDEX.loaded = false;
+          MEMORY_INDEX.error = String(err && err.message || 'memory_unavailable');
+          if (!stopped) { show('记忆库读取失败'); paint(); }
+        }
+      }
+      async function onDelete(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var id = ctx && ctx.params && ctx.params.get('id') || '';
+        if (!id || !T || typeof T.deleteMemory !== 'function') return;
+        del.disabled = true;
+        try {
+          await T.deleteMemory(id);
+          MEMORY_INDEX.items = MEMORY_INDEX.items.filter(function (entry) {
+            return String(entry.id || '') !== String(id);
+          });
+          location.hash = '#/memory';
+        } catch (err) {
+          del.disabled = false;
+          del.textContent = '删除失败 · 重试';
+        }
+      }
+      function onRefresh(e) { e.preventDefault(); e.stopPropagation(); reload(); }
+
+      if (refresh) refresh.addEventListener('click', onRefresh);
+      if (del) del.addEventListener('click', onDelete);
+      if ((ctx && ctx.state || 'list') === 'list') reload();
+
+      return function () {
+        stopped = true;
+        if (refresh) refresh.removeEventListener('click', onRefresh);
+        if (del) del.removeEventListener('click', onDelete);
+      };
     }
   });
 
@@ -280,12 +317,14 @@
         }));
       }
       if (s.source) parts.push(String(s.source));
-      return listRow({
-        title: s.title || '未命名会话',
-        sub: parts.join(' · ') || '服务器会话',
-        icon: 'chat',
-        right: s.active ? chip('当前', 'solid') : ''
-      });
+      return '<button type="button" class="row is-tappable sessionpage__row"'
+        + ' data-session-page-id="' + esc(s.id || '') + '" data-session-page-key="' + esc(s.key || '') + '"'
+        + ' data-session-page-active="' + (s.active ? '1' : '0') + '">'
+        + '<span class="row__icon">' + icon('chat') + '</span>'
+        + '<span class="row__main"><span class="row__title">' + esc(s.title || '未命名会话') + '</span>'
+        + '<span class="row__sub">' + esc(parts.join(' · ') || '服务器会话') + '</span></span>'
+        + '<span class="row__right">' + (s.active ? chip('当前', 'solid') : icon('chevron', 18)) + '</span>'
+        + '</button>';
     }).join(''), { tight: true });
   }
 
@@ -310,7 +349,7 @@
           </div>
           <div class="adminnotice" data-sessions-notice hidden></div>
           <div data-sessions-page-list>${sessionsPageRows('')}</div>
-          ${note('数据来自 /mobile/admin/sessions。当前先用于查看全部对话；历史会话安全切换需要服务端稳定返回 session_id 后再接入。')}
+          ${note('数据来自 /mobile/admin/sessions；点按历史会话会按稳定 session_id 切换到对应 Hermes 对话。')}
         </div>
       </div>`;
     },
@@ -349,6 +388,28 @@
           }
         }
       }
+      async function onSessionSelect(e) {
+        var row = e.target && e.target.closest ? e.target.closest('[data-session-page-id]') : null;
+        if (!row || !host || !host.contains(row)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (row.getAttribute('data-session-page-active') === '1') {
+          location.hash = '#/chat';
+          return;
+        }
+        var id = String(row.getAttribute('data-session-page-id') || '');
+        var key = String(row.getAttribute('data-session-page-key') || '');
+        var T = window.KissneTransport;
+        if (!T || typeof T.selectSession !== 'function') { show('当前版本无法切换会话'); return; }
+        show('正在切换会话…');
+        try {
+          await T.selectSession(key, id);
+          if (typeof window.KissneRefreshSessions === 'function') await window.KissneRefreshSessions();
+          location.hash = '#/chat';
+        } catch (err) {
+          show('会话切换失败，请重试');
+        }
+      }
       function onSearch() { paint(); }
       function onRefresh(e) {
         e.preventDefault();
@@ -358,6 +419,7 @@
 
       if (search) search.addEventListener('input', onSearch);
       if (refresh) refresh.addEventListener('click', onRefresh);
+      if (host) host.addEventListener('click', onSessionSelect);
       paint();
       reload();
 
@@ -365,6 +427,7 @@
         stopped = true;
         if (search) search.removeEventListener('input', onSearch);
         if (refresh) refresh.removeEventListener('click', onRefresh);
+        if (host) host.removeEventListener('click', onSessionSelect);
       };
     }
   });
