@@ -28,6 +28,8 @@ class PrototypeBridge(
 
     @JavascriptInterface fun installationId(): String = store.installationId()
     @JavascriptInterface fun hasToken(): Boolean = !store.deviceToken.isNullOrBlank()
+    @JavascriptInterface fun isConnected(): Boolean =
+        !store.deviceToken.isNullOrBlank() && store.connectionReady
     @JavascriptInterface fun clearToken() = store.clearToken()
     @JavascriptInterface fun getSessionKey(): String = store.sessionKey
     @JavascriptInterface fun setSessionKey(value: String) { store.sessionKey = value }
@@ -60,7 +62,11 @@ class PrototypeBridge(
                             .put("installation_id", paired.optString("installation_id"))
                             .put("conversation_bound", paired.optBoolean("conversation_bound", false))
                     }
-                    "bootstrap" -> client().bootstrapPayload(body.optLong("cursor", store.cursor))
+                    "bootstrap" -> {
+                        val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
+                        store.markConnectionReady(boot.optBoolean("bound", false))
+                        boot
+                    }
                     "sendText" -> client().sendPayload(
                         messageId = body.optString("message_id"),
                         text = body.optString("text"),
@@ -78,6 +84,7 @@ class PrototypeBridge(
                 resolve(id, true, result)
             } catch (error: Throwable) {
                 val status = (error as? MobileTransportException)?.status ?: 0
+                if (status == 401) store.clearToken()
                 val payloadJson = JSONObject()
                     .put("status", status)
                     .put("error", error.message ?: "native_transport_error")
