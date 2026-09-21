@@ -61,7 +61,6 @@
 
   function nav(to) {
     if (!to) return;
-    if (String(to).indexOf('#/connect') === 0) to = '#/home';
     if (!COLD && String(to).indexOf('#/welcome') === 0) {
       to = '#/home';
     }
@@ -254,11 +253,7 @@
       nativeTap();
       var a = actEl.getAttribute('data-action');
       var cur = parseHash();
-      if (a === 'connect') {
-        /* 真 Transport 的 connect 由连接页 mount 处理；这里只保留纯静态总览的兜底。 */
-        if (!window.KissneTransport) nav('#/connect/success');
-      }
-      else if (a === 'splash-skip') {
+      if (a === 'splash-skip') {
         finishSplash();
       }
       else if (a === 'check-update') {
