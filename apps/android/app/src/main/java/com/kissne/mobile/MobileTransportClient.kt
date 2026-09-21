@@ -13,7 +13,7 @@ class MobileTransportClient(
     private val baseUrl: String,
     private val tokenProvider: () -> String?,
     private val connectTimeoutMs: Int = 10_000,
-    private val readTimeoutMs: Int = 30_000
+    private val readTimeoutMs: Int = 30_000,
 ) {
     private fun nullableString(json: JSONObject, key: String): String? =
         if (json.isNull(key)) null else json.optString(key).ifBlank { null }
@@ -50,8 +50,11 @@ class MobileTransportClient(
         }
     }
 
+    fun bootstrapPayload(cursor: Long): JSONObject =
+        request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
+
     fun bootstrap(cursor: Long): Bootstrap {
-        val json = request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
+        val json = bootstrapPayload(cursor)
         val conversation = json.optJSONObject("conversation")
         val history = mutableListOf<HistoryMessage>()
         val array = json.optJSONArray("history") ?: JSONArray()
@@ -61,7 +64,7 @@ class MobileTransportClient(
             history += HistoryMessage(
                 role = item.optString("role", "assistant"),
                 text = nullableString(item, "text").orEmpty(),
-                messageId = nullableString(item, "message_id")
+                messageId = nullableString(item, "message_id"),
             )
         }
 
@@ -77,35 +80,41 @@ class MobileTransportClient(
             conversationTitle = nullableString(conversation ?: JSONObject(), "session_key"),
             history = history,
             pendingTurnId = nullableString(json, "pending_turn_id"),
-            coveredEventSeqs = covered
+            coveredEventSeqs = covered,
         )
     }
 
-    fun pair(pairingCode: String, installationId: String): String =
+    fun pairPayload(pairingCode: String, installationId: String, sessionKey: String? = null): JSONObject {
+        val body = JSONObject()
+            .put("pairing_code", pairingCode)
+            .put("installation_id", installationId)
+        sessionKey?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
+        return request("POST", "/pair", body)
+    }
+
+    fun pair(pairingCode: String, installationId: String, sessionKey: String? = null): String =
+        pairPayload(pairingCode, installationId, sessionKey).getString("device_token")
+
+    fun sendPayload(messageId: String, text: String): JSONObject =
         request(
             "POST",
-            "/pair",
-            JSONObject()
-                .put("pairing_code", pairingCode)
-                .put("installation_id", installationId)
-        ).getString("device_token")
+            "/messages",
+            JSONObject().put("message_id", messageId).put("text", text),
+        )
 
     fun send(messageId: String, text: String): SendReceipt {
-        val json = request(
-            "POST",
-            "/messages",
-            JSONObject().put("message_id", messageId).put("text", text)
-        )
+        val json = sendPayload(messageId, text)
         return SendReceipt(
             messageId = messageId,
             turnId = json.optString("turn_id"),
-            duplicate = json.optBoolean("duplicate", false)
+            duplicate = json.optBoolean("duplicate", false),
         )
     }
 
+    fun pollPayload(cursor: Long): JSONObject = request("GET", "/messages?cursor=$cursor")
+
     fun poll(cursor: Long): List<MobileEvent> {
-        val array = request("GET", "/messages?cursor=$cursor")
-            .optJSONArray("events") ?: JSONArray()
+        val array = pollPayload(cursor).optJSONArray("events") ?: JSONArray()
         val events = mutableListOf<MobileEvent>()
 
         for (i in 0 until array.length()) {
@@ -116,7 +125,7 @@ class MobileTransportClient(
                 turnId = nullableString(item, "turn_id"),
                 messageId = nullableString(item, "message_id"),
                 replyTo = nullableString(item, "reply_to"),
-                text = nullableString(item, "text")
+                text = nullableString(item, "text"),
             )
         }
         return events
@@ -126,7 +135,8 @@ class MobileTransportClient(
         request("POST", "/messages", JSONObject().put("ack", JSONObject().put("cursor", cursor)))
     }
 
-    fun cancel(turnId: String): String =
+    fun cancelPayload(turnId: String): JSONObject =
         request("POST", "/cancel", JSONObject().put("turn_id", turnId))
-            .optString("state", "cancelled")
+
+    fun cancel(turnId: String): String = cancelPayload(turnId).optString("state", "cancelled")
 }
