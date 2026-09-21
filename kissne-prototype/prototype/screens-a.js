@@ -1583,8 +1583,8 @@
         e.preventDefault();
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
-        if (!key) return;
-        if ((id && id === CURRENT_SESSION_ID) || key === CURRENT_SESSION_KEY) {
+        if (!key && !id) return;
+        if ((id && id === CURRENT_SESSION_ID) || (key && key === CURRENT_SESSION_KEY)) {
           setSessionDrawer(false);
           return;
         }
