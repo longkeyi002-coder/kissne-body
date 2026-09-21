@@ -291,9 +291,14 @@
   function applyHermesModelOptions(payload) {
     payload = payload || {};
     var nextModels = (payload.models || []).map(function (item) {
+      if (typeof item === 'string') {
+        var value = String(item || '').trim();
+        return { k: value, v: value, d: 'Hermes' };
+      }
+      item = item || {};
       var provider = String(item.provider || '');
-      var model = String(item.model || '');
-      var key = provider ? provider + '/' + model : model;
+      var model = String(item.model || item.id || item.value || '');
+      var key = provider && model.indexOf('/') < 0 ? provider + '/' + model : model;
       return {
         k: key,
         v: String(item.label || model || key),
@@ -301,9 +306,15 @@
       };
     }).filter(function (item) { return !!item.k; });
     var nextEfforts = (payload.efforts || []).map(function (item) {
+      if (typeof item === 'string') {
+        var value = String(item || '').trim();
+        return { k: value, v: value, d: 'Hermes reasoning effort' };
+      }
+      item = item || {};
+      var value = String(item.value || item.key || item.effort || '');
       return {
-        k: String(item.value || ''),
-        v: String(item.label || item.value || ''),
+        k: value,
+        v: String(item.label || value),
         d: 'Hermes reasoning effort'
       };
     }).filter(function (item) { return !!item.k; });
