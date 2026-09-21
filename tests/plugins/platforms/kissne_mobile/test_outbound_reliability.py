@@ -212,3 +212,33 @@ def test_unacked_replies_survive_a_runtime_restart_and_acked_ones_do_not(tmp_pat
     assert "unacked reply" not in texts, (
         "an acked reply came back after the restart — the ack cursor is not durable: "
         f"{after.get('events')}")
+
+
+def test_tool_progress_is_typed_as_non_chat_presentation(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                await adapter.edit_message(
+                    INSTALLATION,
+                    "gateway-progress-1",
+                    "terminal ``` ls ~/.hermes/memories/ ```",
+                )
+                return await _drain(port, token, 0)
+            finally:
+                await stop(adapter)
+
+    payload = run(scenario())
+    events = payload.get("events") or []
+    progress = [event for event in events if event.get("presentation") == "tool_progress"]
+    assert len(progress) == 1, (
+        "gateway progress must be explicitly typed so clients cannot confuse it with assistant "
+        f"chat text: {events}"
+    )
+    assert progress[0].get("type") == "delta"
+    assert progress[0].get("text", "").startswith("terminal")
