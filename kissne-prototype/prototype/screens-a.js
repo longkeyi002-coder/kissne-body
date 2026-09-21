@@ -56,224 +56,13 @@
   });
 
   /* =====================================================================
-     02 设备连接页
-     ===================================================================== */
-  var CONNECT_STATES = [
-    { key: 'idle',               label: '等待输入' },
-    { key: 'incomplete',         label: '输入不完整' },
-    { key: 'connecting',         label: '正在连接' },
-    { key: 'success',            label: '连接成功' },
-    { key: 'code-error',         label: '配对码错误' },
-    { key: 'network-error',      label: '网络错误' },
-    { key: 'device-unavailable', label: '设备不可用' },
-    { key: 'advanced',           label: '高级设置展开' }
-  ];
-
-  K.registerScreen({
-    no: '02', id: 'connect', name: '设备连接页', route: '#/connect', tab: null,
-    purpose: '使用配对码与服务器地址完成设备连接。',
-    out: ['#/home', '#/connect/success', '#/device'],
-    states: CONNECT_STATES,
-    render: function (ctx) {
-      var s = ctx.state || 'idle';
-      var filled = ['connecting', 'network-error', 'device-unavailable', 'success'].indexOf(s) >= 0;
-      var plain = (s === 'idle' || s === 'advanced');
-      var codeVal = filled ? 'KS-7391' : (plain ? '' : 'KS-739');
-      var codeErr = s === 'code-error' ? '配对码错误，请重新核对设备上显示的配对码' : '';
-      var incErr = s === 'incomplete' ? '请输入完整配对码' : '';
-      var connecting = s === 'connecting';
-      var ok = s === 'success';
-
-      var topBanner = '';
-      if (s === 'network-error') {
-        topBanner = banner({ icon: 'wifioff', kind: 'warn', title: '网络错误',
-          body: '无法访问服务器，请检查网络或服务器地址是否正确。',
-          action: { label: '重试', action: 'connect' } });
-      } else if (s === 'device-unavailable') {
-        topBanner = banner({ icon: 'alert', kind: 'warn', title: '设备不可用',
-          body: '设备已配对，但当前会话暂未就绪。',
-          action: { label: '重新连接', action: 'connect' } });
-      } else if (ok) {
-        topBanner = banner({ icon: 'check', kind: 'ok', title: '连接成功',
-          body: '已与 Kissne 建立安全连接。',
-          action: { label: '下一步', to: '#/connect/success' } });
-      }
-
-      var foot = ok
-        ? btn('进入聊天', { to: '#/chat', block: true, kind: 'primary' })
-          + btn('管理设备', { to: '#/device', block: true, kind: 'ghost' })
-        : btn(connecting ? '正在连接…' : '连接设备', {
-            block: true, kind: 'primary', action: 'connect',
-            disabled: connecting, icon: connecting ? 'sync' : undefined
-          })
-          + (connecting ? '<div class="hintline">' + icon('sync', 14) + '<span>正在验证配对码并建立连接…</span></div>' : '')
-          + (!connecting ? btn('稍后连接，先进入 Kissne', {
-              to: '#/home', block: true, kind: 'ghost'
-            }) : '');
-
-      var advOpen = s === 'advanced';
-
-      return `
-      <div class="screen">
-        ${appbar({ title: '设备连接', sub: '连接 Kissne', back: '#/home' })}
-        <div class="screen__body">
-          ${topBanner}
-          <div class="connectlive" data-connect-live hidden></div>
-          ${field({ label: '配对码', required: true, value: codeVal, placeholder: '一次性配对码',
-                    error: codeErr || incErr,
-                    hint: '请在 Kissne 服务端查看当前配对码。' })}
-          ${field({ label: '服务器地址', value: filled ? 'https://yeqingxu.cyou/mobile' : '', placeholder: 'https://…',
-                    hint: 'App 已有默认地址；仅在更换服务器时修改。' })}
-          <details class="adv"${advOpen ? ' open' : ''}>
-            <summary>${icon('gear', 16)}<span>高级设置</span>${icon('chevron', 16)}</summary>
-            <div class="adv__body">
-              ${field({ label: '连接超时（秒）', value: '10' })}
-              ${field({ label: '使用加密通道', value: '开启' })}
-              ${field({ label: '断线自动重连', value: '开启' })}
-            </div>
-          </details>
-        </div>
-        <div class="screen__foot">${foot}</div>
-      </div>`;
-    },
-
-    mount: function (root) {
-      var T = window.KissneTransport;
-      if (!T) return null;
-      var inputs = root.querySelectorAll('.field__input');
-      if (inputs.length < 2) return null;
-      var code = inputs[0], address = inputs[1];
-      var feedback = root.querySelector('[data-connect-live]');
-      var actions = Array.prototype.slice.call(root.querySelectorAll('[data-action="connect"]'));
-      var primary = root.querySelector('.screen__foot [data-action="connect"]');
-      var busy = false;
-
-      code.readOnly = false;
-      address.readOnly = false;
-      code.value = '';
-      address.value = T.base() || '';
-
-      function showFeedback(kind, text) {
-        if (!feedback) return;
-        feedback.hidden = !text;
-        feedback.className = 'connectlive' + (kind ? ' is-' + kind : '');
-        feedback.textContent = text || '';
-      }
-      function setBusy(on) {
-        busy = !!on;
-        root.classList.toggle('is-connecting', busy);
-        actions.forEach(function (el) {
-          el.disabled = busy;
-          el.setAttribute('aria-busy', busy ? 'true' : 'false');
-        });
-        if (primary) {
-          var label = primary.querySelector('span');
-          if (label) label.textContent = busy ? '正在连接…' : '连接设备';
-        }
-      }
-
-      async function onConnect(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (busy) return;
-        var pairingCode = (code.value || '').trim();
-        var apiBase = (address.value || '').trim();
-        if (!pairingCode) {
-          showFeedback('error', '请输入配对码。');
-          code.focus();
-          return;
-        }
-
-        setBusy(true);
-        showFeedback('working', '正在验证配对码并建立安全连接…');
-        try {
-          if (apiBase) T.setBase(apiBase);
-          await T.pair({ pairingCode: pairingCode, apiBase: apiBase });
-          if (!T.hasToken()) throw new Error('pairing_failed');
-          showFeedback('working', '配对成功，正在进入 Kissne…');
-          /*
-           * Pairing and session readiness are different states.
-           * A valid device token means pairing is complete even when bootstrap
-           * has no currently bindable Hermes session. Do not trap the user on
-           * the connection page; chat bootstrap will keep retrying in place.
-           */
-          try { await T.bootstrap(); } catch (bootstrapErr) {
-            /* Non-fatal here: the chat page owns session-readiness retry. */
-          }
-          location.replace('#/connect/success');
-        } catch (err) {
-          var name = (err && err.payload && err.payload.error) || (err && err.message) || '';
-          if (name === 'invalid_pairing_code' || name === 'pairing_code_expired' || name === 'pairing_code_replayed') {
-            showFeedback('error', name === 'pairing_code_expired'
-              ? '配对码已过期，请生成新的配对码。'
-              : '配对码无效，请重新核对。');
-            code.focus();
-            if (code.select) code.select();
-          } else {
-            showFeedback('error', '连接失败，请检查网络和服务器地址后重试。');
-          }
-        } finally {
-          setBusy(false);
-        }
-      }
-
-      actions.forEach(function (el) { el.addEventListener('click', onConnect); });
-      [code, address].forEach(function (input) {
-        input.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') onConnect(e);
-        });
-      });
-      return function () {
-        actions.forEach(function (el) { el.removeEventListener('click', onConnect); });
-      };
-    }
-  });
-
-  /* =====================================================================
-     03 连接成功页
-     ===================================================================== */
-  K.registerScreen({
-    no: '03', id: 'connect-success', name: '连接成功页', route: '#/connect/success', tab: null,
-    purpose: '确认设备已连接，展示设备名称 / 在线状态 / 当前模型 / 最近同步时间。',
-    out: ['#/home', '#/chat', '#/device'],
-    states: [{ key: 'default', label: '默认' }],
-    render: function () {
-      return `
-      <div class="screen">
-        ${appbar({ title: '连接成功', back: '#/home' })}
-        <div class="screen__body screen__body--center">
-          <div class="succ__hero">${ph('CONNECTION_SUCCESS_ILLUSTRATION', { size: 112 })}</div>
-          <div class="succ__head">
-            <h2 class="succ__title">设备已连接</h2>
-            <p class="succ__sub">Kissne 已与你的设备建立连接。</p>
-          </div>
-          ${card(
-            kv('设备名称', '人人星')
-            + kv('在线状态', chip('在线', 'ok'))
-            + kv('当前模型', '跟随 Hermes')
-            + kv('最近同步时间', '刚刚')
-          )}
-          ${note('配对成功后，设备信息由系统自动返回。')}
-        </div>
-        <div class="screen__foot">
-          ${btn('进入聊天', { to: '#/chat', block: true, kind: 'primary' })}
-          ${btn('管理设备', { to: '#/device', block: true, kind: 'ghost' })}
-        </div>
-      </div>`;
-    }
-  });
-
-  /* =====================================================================
      04 首页 / 控制台
      ===================================================================== */
-  /* 首页两张星卡用的是**整幅插画**（自带背景），白天 / 夜晚各一版。
-     默认按本机时间自动切（6:00–18:00 算白天）；day / night 两个状态是给review用的强制开关。 */
   var HOME_STATES = [
-    { key: 'online',  label: '设备在线（昼 / 夜按本机时间自动）' },
-    { key: 'day',     label: '白天外观（强制）' },
-    { key: 'night',   label: '夜晚外观（强制）' },
-    { key: 'more',    label: '更多功能' },
-    { key: 'offline', label: '设备离线' }
+    { key: 'online', label: '自动状态（昼 / 夜按本机时间）' },
+    { key: 'day',    label: '白天外观（强制）' },
+    { key: 'night',  label: '夜晚外观（强制）' },
+    { key: 'more',   label: '更多功能' }
   ];
   function dayPart(ctx) {
     if (ctx.state === 'day' || ctx.state === 'night') return ctx.state;
@@ -283,13 +72,11 @@
 
   K.registerScreen({
     no: '04', id: 'home', name: '首页 / 控制台', route: '#/home', tab: 'entry',
-    purpose: '手机桌面式入口页。最上方左侧「人人星」（小羊素材）→ 聊天页，右侧「小机星」（叶青栩素材）→ AI World；两张星卡是整幅插画，白天 / 夜晚各一版，按本机时间自动切。其余功能以手机桌面式图标网格排列。只有桌面内容，不做列表式的最近活动。白蓝配色。',
-    out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/connect', '#/notifications'],
+    purpose: 'Kissne 入口页。设备在线状态来自真实 Mobile bootstrap 探测，不再使用演示状态。',
+    out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/notifications'],
     states: HOME_STATES,
     render: function (ctx) {
-      var offline = ctx.state === 'offline';
-      var part = dayPart(ctx);        /* 'day' | 'night' —— 星卡插画用哪一版 */
-
+      var part = dayPart(ctx);
       var head = `
         <header class="appbar appbar--brand">
           <div class="appbar__l"><span class="brand">Kissne</span></div>
@@ -300,44 +87,26 @@
           </div>
         </header>`;
 
-      /* —— 最上方：人人星 ｜ 小机星，左右各占一半，整幅插画素材 —— */
-      /* 两张星卡**只有素材**：不放名称、不放箭头、也不再加爪印/蹄印那些提示 ——
-         素材本身就是辨认依据（左边小羊 = 人人星，右边叶青栩 = 小机星），点素材进对应页面。
-         插画白天/夜晚各一版，用 part 决定（见 dayPart）。 */
       var stars = `
         <div class="starcards">
-          <div class="starcard starcard--sheep${offline ? ' is-disabled' : ''}"${offline ? '' : ' data-nav="#/chat"'}>
-            <div class="starcard__art">
-              ${ph('SHEEP_CHARACTER_RESERVED', { state: part })}
-            </div>
+          <div class="starcard starcard--sheep" data-nav="#/chat">
+            <div class="starcard__art">${ph('SHEEP_CHARACTER_RESERVED', { state: part })}</div>
           </div>
           <div class="starcard" data-nav="#/universe">
-            <div class="starcard__art">
-              ${ph('FOX_HOME_CHARACTER', { state: part })}
-            </div>
+            <div class="starcard__art">${ph('FOX_HOME_CHARACTER', { state: part })}</div>
           </div>
         </div>`;
 
       var devstrip = `
-        <div class="devstrip">
+        <div class="devstrip" data-home-device>
           <span class="devstrip__ic">${icon('server', 18)}</span>
           <span class="devstrip__main">
-            <span class="devstrip__t">当前设备 ${chip(offline ? '离线' : '在线', offline ? 'warn' : 'solid')}</span>
-            <span class="devstrip__s">人人星 · 跟随 Hermes</span>
+            <span class="devstrip__t">当前设备 <span class="chip chip--warn" data-home-status><i class="dot"></i><span data-home-status-text>检测中</span></span></span>
+            <span class="devstrip__s" data-home-status-detail>正在验证服务器与 device token…</span>
           </span>
-          ${offline ? btn('重连', { small: true, kind: 'ghost', to: '#/connect?state=connecting' }) : ''}
+          <button type="button" class="btn btn--ghost is-small" data-home-refresh><span>刷新</span></button>
         </div>`;
 
-      var offlineBlock = offline
-        ? '<div class="offline">'
-          +   ph('OFFLINE_ILLUSTRATION', { size: 104 })
-          +   '<div class="offline__title">设备已离线</div>'
-          +   '<div class="offline__sub">聊天与记忆同步暂时不可用，请先重新连接设备。</div>'
-          + '</div>'
-        : '';
-
-      /* —— 其余功能：默认只放两行常用项；低频功能进入「更多」——
-         真机首页不再一次塞满 12 个入口，避免纵向过长。 */
       var showMore = ctx.state === 'more';
       var APPS = showMore ? [
         { t: '语音设置', ic: 'mic',     to: '#/settings' },
@@ -349,9 +118,9 @@
       ] : [
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: '设备管理', ic: 'plug',   to: '#/device' },
-        { t: '连接设置', ic: 'link',   to: '#/connect' },
         { t: '模型设置', ic: 'cpu',    to: '#/settings' },
         { t: '通知',     ic: 'bell',   to: '#/notifications' },
+        { t: '运维',     ic: 'server', to: '#/admin' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
         { t: '表情包',   ic: 'smile',  to: '#/stickers' },
         { t: '更多',     ic: 'box',    to: '#/home?state=more' }
@@ -368,13 +137,63 @@
         <div class="screen__body">
           ${stars}
           ${devstrip}
-          ${offlineBlock}
           ${sectionTitle(showMore ? '更多功能' : '全部功能')}
           ${appgrid}
           <div class="motifrow">${icon('paw', 15)}${icon('hoof', 15)}${icon('paw', 15)}</div>
-          ${offline ? note('设备离线时「人人星」不可进入，避免误以为仍可聊天。') : ''}
         </div>
       </div>`;
+    },
+    mount: function (root) {
+      var T = window.KissneTransport;
+      var badge = root.querySelector('[data-home-status]');
+      var label = root.querySelector('[data-home-status-text]');
+      var detail = root.querySelector('[data-home-status-detail]');
+      var refresh = root.querySelector('[data-home-refresh]');
+      var stopped = false;
+      var timer = null;
+
+      function paint(kind, text, sub) {
+        if (badge) {
+          badge.className = 'chip' + (kind === 'online' ? ' chip--solid' : ' chip--warn');
+        }
+        if (label) label.textContent = text;
+        if (detail) detail.textContent = sub;
+      }
+      async function probe() {
+        if (!T || typeof T.bootstrap !== 'function') {
+          paint('offline', '离线', 'Mobile Transport 不可用');
+          return;
+        }
+        paint('checking', '检测中', '正在验证服务器与 device token…');
+        try {
+          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          await T.bootstrap();
+          if (!stopped) paint('online', '在线', '服务器可达 · device token 有效 · 跟随 Hermes');
+        } catch (err) {
+          if (err && err.status === 401 && typeof T.ensureToken === 'function') {
+            try {
+              await T.ensureToken(true);
+              await T.bootstrap();
+              if (!stopped) paint('online', '在线', '已自动刷新 device token · 跟随 Hermes');
+              return;
+            } catch (retryErr) {}
+          }
+          if (!stopped) paint('offline', '离线', '无法连接服务器，点击刷新重试');
+        }
+      }
+      function onRefresh(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        probe();
+      }
+      if (refresh) refresh.addEventListener('click', onRefresh);
+      probe();
+      timer = setInterval(probe, 15000);
+      return function () {
+        stopped = true;
+        clearInterval(timer);
+        if (refresh) refresh.removeEventListener('click', onRefresh);
+      };
     }
   });
 
