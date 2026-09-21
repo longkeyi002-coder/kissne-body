@@ -39,7 +39,10 @@
         id: String(item.session_id || item.id || item.sessionId || ''),
         key: String(item.session_key || item.key || item.sessionKey || ''),
         title: String(item.title || item.name || item.label || item.session_key || item.session_id || ('会话 ' + (index + 1))),
-        updatedAt: item.updated_at || item.last_active || item.updatedAt || null,
+        updatedAt: item.last_active || item.updated_at || item.updatedAt || null,
+        createdAt: item.created_at || item.createdAt || null,
+        messageCount: Number(item.message_count || item.messageCount || 0) || 0,
+        source: String(item.source || ''),
         active: item.active === true || item.current === true || item.is_current === true
       };
     }).filter(function (item) { return !!(item.id || item.key); });
