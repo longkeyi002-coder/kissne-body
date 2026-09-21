@@ -81,6 +81,9 @@
       installationId: function () { return String(Native.installationId() || ''); },
       token: function () { return Native.hasToken() ? 'native-secure' : ''; },
       hasToken: function () { return !!Native.hasToken(); },
+      hasBootstrapCache: function () {
+        return typeof Native.hasBootstrapCache === 'function' && !!Native.hasBootstrapCache();
+      },
       isConnected: function () { return typeof Native.isConnected === 'function' ? !!Native.isConnected() : !!Native.hasToken(); },
       clearToken: function () { Native.clearToken(); },
       cursor: function () {
@@ -107,7 +110,12 @@
           session_id: String(sessionId || '')
         });
       },
-      bootstrap: function () { return nativeCall('bootstrap', { cursor: Number(Native.getCursor()) || 0 }); },
+      bootstrap: function (force) {
+        return nativeCall('bootstrap', {
+          cursor: Number(Native.getCursor()) || 0,
+          force: !!force
+        });
+      },
       sendText: function (text, messageId) {
         return nativeCall('sendText', {
           text: String(text || ''),
@@ -147,6 +155,8 @@
     token: 'kissne.web.device_token',
     cursor: 'kissne.web.cursor'
   };
+  var webBootstrapCache = null;
+  var webBootstrapToken = '';
   function get(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
   function set(k, v) {
     try {
@@ -154,7 +164,12 @@
       else localStorage.setItem(k, String(v));
     } catch (e) {}
   }
-  function clearToken() { set(KEY.token, ''); set(KEY.cursor, ''); }
+  function clearToken() {
+    webBootstrapCache = null;
+    webBootstrapToken = '';
+    set(KEY.token, '');
+    set(KEY.cursor, '');
+  }
   function normalizeBase(value) {
     var v = String(value || '').trim();
     if (!v) {
@@ -234,7 +249,12 @@
     var base = setBase(opts.apiBase || '');
     var body = { installation_id: installationId() };
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
-    if (out.device_token) { set(KEY.token, out.device_token); set(KEY.cursor, '0'); }
+    if (out.device_token) {
+      webBootstrapCache = null;
+      webBootstrapToken = '';
+      set(KEY.token, out.device_token);
+      set(KEY.cursor, '0');
+    }
     return out;
   }
   async function ensureToken(force) {
@@ -271,12 +291,32 @@
       body: body,
       auth: false
     });
+    webBootstrapCache = null;
+    webBootstrapToken = '';
     if (out.device_token && out.device_token !== oldToken) {
       set(KEY.token, out.device_token);
     }
     return out;
   }
-  function bootstrap() { return request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
+  function hasBootstrapCache() {
+    return !!webBootstrapCache && !!deviceToken() && webBootstrapToken === deviceToken();
+  }
+  async function bootstrap(force) {
+    if (!force && hasBootstrapCache()) {
+      var cached = Object.assign({}, webBootstrapCache);
+      cached.cached = true;
+      return cached;
+    }
+    var out = await request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } });
+    if (out && out.bound) {
+      webBootstrapCache = out;
+      webBootstrapToken = deviceToken();
+    } else {
+      webBootstrapCache = null;
+      webBootstrapToken = '';
+    }
+    return out;
+  }
   function makeMessageId() {
     var r = '';
     try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -346,7 +386,8 @@
     installationId: installationId,
     token: deviceToken,
     hasToken: function () { return !!deviceToken(); },
-    isConnected: function () { return !!deviceToken(); },
+    hasBootstrapCache: hasBootstrapCache,
+    isConnected: function () { return hasBootstrapCache(); },
     clearToken: clearToken,
     cursor: cursor,
     pair: pair,
