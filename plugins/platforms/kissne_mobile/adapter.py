@@ -1092,6 +1092,29 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return ""
         return str(getattr(entry, "session_key", "") or "")
 
+    @staticmethod
+    def _mobile_visible_transcript_row(row: Dict[str, Any]) -> bool:
+        """Whether one durable transcript row belongs in the human-visible Mobile chat.
+
+        Provider reasoning fields stay durable for replay but are never projected to Mobile.
+        Tool-call/internal-notification rows are operational trace, not assistant chat text.
+        """
+        if not isinstance(row, dict):
+            return False
+        role = str(row.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            return False
+        display_kind = str(row.get("display_kind") or "").strip().lower()
+        if display_kind in {"internal_notification", "tool_progress", "reasoning"}:
+            return False
+        if role == "assistant" and (
+            row.get("tool_name")
+            or row.get("tool_call_id")
+            or row.get("tool_calls")
+        ):
+            return False
+        return True
+
     def _bootstrap_history_snapshot(
         self, session_id: str
     ) -> Tuple[List[Dict[str, Any]], bool, set[str]]:
@@ -1111,11 +1134,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return [], False, set()
         items: List[Dict[str, Any]] = []
         for row in rows:
-            if not isinstance(row, dict):
+            if not self._mobile_visible_transcript_row(row):
                 continue
             role = str(row.get("role") or "").strip().lower()
-            if role not in {"user", "assistant"}:
-                continue
             text = row.get("content", row.get("text"))
             if not isinstance(text, str) or not text.strip():
                 continue
@@ -1252,11 +1273,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
             active_mobile_turn = ""
             for index, row in enumerate(transcript):
-                if not isinstance(row, dict):
+                if not self._mobile_visible_transcript_row(row):
                     continue
                 role = str(row.get("role") or "").strip().lower()
-                if role not in {"user", "assistant"}:
-                    continue
 
                 mobile_turn = ""
                 if role == "user":
