@@ -64,7 +64,7 @@
   K.registerScreen({
     no: '02', id: 'connect', name: '设备连接页', route: '#/connect', tab: null,
     purpose: '使用配对码与服务器地址完成设备连接。',
-    out: ['#/welcome', '#/connect/success', '#/device'],
+    out: ['#/home', '#/connect/success', '#/device'],
     states: CONNECT_STATES,
     render: function (ctx) {
       var s = ctx.state || 'idle';
@@ -666,6 +666,7 @@
       var menu = s === 'model-menu' ? 'model'
                : (s === 'effort-menu' ? 'effort' : (s === 'plus-menu' ? 'plus' : null));
       var bs = menu ? 'normal' : s;   /* 消息列表按这个状态渲染 */
+      if (bs === 'empty' && CHAT_LOG.length) bs = 'normal';
       var typing = s === 'keyboard';  /* 打字态：悬浮的输入区整组抬起（不画键盘，那段高度全透明） */
 
       /* 「我」这一侧的小羊头像换表情：离线/断网=睡着，上一条没发出去=委屈 */
@@ -727,8 +728,9 @@
       /* 菜单是从哪个状态点开的：选中后回到那里（从侧栏直接切到菜单态时兜底到空态） */
       var origin = (q && q.get('from')) || '';
       if (!origin || origin === 'model-menu' || origin === 'effort-menu') {
-        origin = menu ? 'empty' : s;
+        origin = menu ? (CHAT_LOG.length ? 'normal' : 'empty') : s;
       }
+      if (origin === 'empty' && CHAT_LOG.length) origin = 'normal';
 
       /* --- 消息列表：来自模块级聊天记录（切页不丢）--- */
       var base = '';
