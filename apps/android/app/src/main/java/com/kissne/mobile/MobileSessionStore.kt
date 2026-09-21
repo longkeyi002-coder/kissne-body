@@ -54,6 +54,8 @@ class MobileSessionStore(context: Context) {
         prefs.edit()
             .putString("device_token", token)
             .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
             .apply()
     }
 
