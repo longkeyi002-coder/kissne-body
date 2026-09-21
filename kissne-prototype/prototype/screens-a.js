@@ -167,13 +167,21 @@
         paint('checking', '检测中', '正在验证服务器与 device token…');
         try {
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          await T.bootstrap();
+          var boot = await T.bootstrap();
+          if (!boot || !boot.bound) {
+            if (!stopped) paint('checking', '准备中', '服务器可达 · 会话尚未绑定');
+            return;
+          }
           if (!stopped) paint('online', '在线', '服务器可达 · device token 有效 · 跟随 Hermes');
         } catch (err) {
           if (err && err.status === 401 && typeof T.ensureToken === 'function') {
             try {
               await T.ensureToken(true);
-              await T.bootstrap();
+              var retryBoot = await T.bootstrap();
+              if (!retryBoot || !retryBoot.bound) {
+                if (!stopped) paint('checking', '准备中', '认证已恢复 · 会话尚未绑定');
+                return;
+              }
               if (!stopped) paint('online', '在线', '已自动刷新 device token · 跟随 Hermes');
               return;
             } catch (retryErr) {}

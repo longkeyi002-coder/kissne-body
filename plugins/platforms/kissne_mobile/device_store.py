@@ -450,6 +450,7 @@ class DeviceStore:
                 "last_seen_at": float(row["last_seen_at"]) if row["last_seen_at"] else None,
             }
 
+    @staticmethod
     def _installation(value: str) -> str:
         installation = str(value or "").strip()
         if not installation:

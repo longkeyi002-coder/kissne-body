@@ -186,7 +186,14 @@
         show('', '');
         try {
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          await T.bootstrap();
+          var boot = await T.bootstrap();
+          if (!boot || !boot.bound) {
+            if (!stopped) {
+              setText('[data-device-status]', '准备中');
+              setText('[data-device-auth]', 'device token 有效 · 会话尚未绑定');
+            }
+            return;
+          }
           if (!stopped) {
             setText('[data-device-status]', '在线');
             setText('[data-device-auth]', 'device token 有效');
@@ -195,7 +202,14 @@
           if (err && err.status === 401 && typeof T.ensureToken === 'function') {
             try {
               await T.ensureToken(true);
-              await T.bootstrap();
+              var retryBoot = await T.bootstrap();
+              if (!retryBoot || !retryBoot.bound) {
+                if (!stopped) {
+                  setText('[data-device-status]', '准备中');
+                  setText('[data-device-auth]', 'token 已刷新 · 会话尚未绑定');
+                }
+                return;
+              }
               if (!stopped) {
                 setText('[data-device-status]', '在线');
                 setText('[data-device-auth]', 'device token 已自动刷新');
