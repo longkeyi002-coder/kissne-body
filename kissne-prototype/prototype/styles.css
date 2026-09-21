@@ -1407,6 +1407,13 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   }
 }
 
+/* Android 壳模式：保留原型页面本身，移除仅供网页 review 使用的控制抽屉。 */
+html.is-native-shell .panel,
+html.is-native-shell .drawer-btn,
+html.is-native-shell .drawer-scrim{display:none!important}
+html.is-native-shell .stage{width:100%;height:100%}
+html.is-native-shell .stage__body{padding:0;height:100%}
+
 /* 截图模式要保留假状态栏（真机断点会把它隐藏掉） */
 body.is-shot .statusbar{display:flex}
 
