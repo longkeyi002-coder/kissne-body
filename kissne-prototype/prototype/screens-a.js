@@ -535,42 +535,7 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* ============ 思考过程 / 工具调用：一行小字 + 一条装饰分割线 ============
-     两者**同一个组件**（.tlog）：没有气泡、没有底色，字号 12px（比正文小一号），
-     平时收起、点一下展开。收起后每条下面压一条分割线 —— 「思考 + 工具」正好两根。
-     真实思考内容 / 工具参数一律由 Hermes 返回，原型里都是占位。 */
-  var TLOG_GLYPH = 'ˋˏ✄ ❤︎ ✄ˏˋ';   /* 分割线中间那枚小符号；想换风格只改这里：
-                                        '☆♪ 🤍 ♪☆' / '𐙚 𓏵𓏵𓏵𓏵𐙚' / '⋆｡ﾟ☁︎｡⋆｡ ﾟ☾ ﾟ｡⋆' 都行 */
-  function tlogSep() {
-    return '<div class="tlog__sep" aria-hidden="true"><i>' + TLOG_GLYPH + '</i></div>';
-  }
-  function tlogBlock(kind, title, bodyHtml, open) {
-    return '<div class="tlog' + (open ? ' is-open' : '') + '" data-tlog-block="' + kind + '">'
-      + '<button class="tlog__row" type="button" data-tlog-toggle>'
-      + '<span class="tlog__t"' + (kind === 'think' ? ' data-tlog-t' : '') + '>'
-      + title + '</span><i class="tlog__car">▼</i></button>'
-      + '<div class="tlog__body">' + bodyHtml + '</div>'
-      + tlogSep()
-      + '</div>';
-  }
-  /* 思考过程（示例）。opts.head 换标题 —— 演"正在思考…"那一步时用它。 */
-  function cotBlock(opts) {
-    opts = opts || {};
-    var head = opts.head || ('已深度思考 · 用时 ' + (opts.cost || '1.1s'));
-    var lines = (opts.lines || []).map(function (l) {
-      return '<div class="tlog__line">' + l + '</div>';
-    }).join('');
-    return tlogBlock('think', head, lines, opts.open);
-  }
-  /* 工具调用（示例）。status 不传就是"已完成 · 耗时"；演"调用中"那一步时传进来。 */
-  function toolCard(name, rows, cost, status, open) {
-    var kv = rows.map(function (r) {
-      return '<div class="tlog__kv"><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
-    }).join('')
-      + '<div class="tlog__kv"><span>状态</span><b data-tool-status>'
-      + (status || ('已完成 · ' + (cost || '0.8s'))) + '</b></div>';
-    return tlogBlock('tool', '调用工具 · ' + name, kv, open);
-  }
+  /* 真机只显示简短运行状态；不渲染原始思考链或演示工具详情。 */
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
      之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
@@ -1237,108 +1202,6 @@
           if (err && err.status === 409) { liveCurrentTurn = ''; liveSetCancel(false); }
         }
       }
-      /* ===== 发一条消息后，**现场演一遍**叶青栩这一回合 =====
-         ① 思考过程：正在思考… → 已深度思考 + 内容
-         ② 工具调用：调用中… → 已完成
-         ③ 回复
-         三段都长在**同一条** AI 消息里（一个回合只有一个头像）。
-         演的时候两块是**展开**的（好让你看清内容），演完**自动收起**成
-         两行小字 + 两根分割线。纯前端定时器演的，不发真实请求；
-         挑哪个工具只是按关键词瞎猜，只为把几个例子都演一遍 ——
-         真实流程与工具一律由 Hermes 决定，参数与返回都是占位。 */
-      var seqTs = [];                       /* 演出用的一串定时器，切页时要全清掉 */
-      var THINK_COST = '1.1s';
-      function pickTool(v) {
-        if (/天气|查|搜|新闻|价格|多少|怎么样/.test(v))
-          return { name: '联网搜索', tag: '联网', arg: '关键词', cost: '1.2s' };
-        if (/日程|安排|几点|时间|会议|约会|行程/.test(v))
-          return { name: '查看日程', tag: '日程', arg: '范围',   cost: '0.4s' };
-        if (/记|备忘|提醒|别忘了|写下来/.test(v))
-          return { name: '写备忘录', tag: '便签', arg: '内容',   cost: '0.6s' };
-        return { name: '记忆检索', tag: '记忆', arg: '关键词', cost: '0.8s' };
-      }
-      function thoughtLines(v) {
-        return [
-          '用户说：「' + esc(v) + '」',
-          '先看记忆库里有没有和这件事相关的',
-          '有就顺着接，没有就说实话'
-        ];
-      }
-      function toolRows(t, v) { return [[t.arg, '「' + esc(v) + '」'], ['返回', '由 Hermes 返回']]; }
-      function toolCardFor(t, v, status, open) {
-        return toolCard(t.name, toolRows(t, v), t.cost, status, open);
-      }
-      function replyText(v) { return '<div>我收到了：' + esc(v) + '</div>'; }
-
-      function runTurn(v) {
-        var t = pickTool(v), t0 = clockNow();
-        /* 先落一条 AI 消息，里面留一个空槽 [data-steps]，后面往里"长"东西。
-           每个阶段都整块重画 —— 比一点点改 DOM 稳妥，也不会把状态改岔。 */
-        append(aiMsg('<div data-steps></div>', '', t0, '思考', 'think'));
-        var el = list.lastElementChild;
-        if (!el) return;
-        var steps = el.querySelector('[data-steps]');
-        if (!steps) return;
-        var turn = { head: '正在思考' + dots(), lines: [], tool: null, reply: false, open: true };
-        function paint() {
-          steps.innerHTML =
-              cotBlock({ head: turn.head, lines: turn.lines, open: turn.open })
-            + (turn.tool ? toolCardFor(t, v, turn.tool, turn.open) : '')
-            + (turn.reply ? replyText(v) : '');
-          jumpTo(list.scrollHeight);
-        }
-        /* 头像跟着这一步**换图**（不是换文字）—— 这就是"头像是活的"。
-           state 没对应素材时 K.swapAsset 会自动回落兜底图，不会空掉。 */
-        function setAva(state, txt) {
-          var phBox = el.querySelector('.msg__ava .ph');
-          if (phBox) phBox.setAttribute('data-state', state);
-          K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
-          var c = el.querySelector('.msg__ava .ph__code');
-          if (c) c.textContent = txt;   /* 只有占位盒才看得见；上了真图就纯当备注 */
-        }
-        function step(fn, ms) { seqTs.push(setTimeout(fn, ms)); }
-        paint();
-
-        /* ① 思考过程长出内容 */
-        step(function () {
-          setAva('think', '思考');
-          turn.head = '已深度思考 · 用时 ' + THINK_COST;
-          turn.lines = thoughtLines(v);
-          paint();
-        }, 800);
-
-        /* ② 调用工具：先"调用中…"，700ms 后变"已完成" */
-        step(function () {
-          setAva('work', t.tag);
-          turn.tool = '调用中' + dots();
-          paint();
-          seqTs.push(setTimeout(function () {
-            turn.tool = '已完成 · ' + t.cost;
-            paint();
-          }, 700));
-        }, 1600);
-
-        /* ③ 回复 */
-        step(function () {
-          setAva('talk', '说话');
-          turn.reply = true;
-          paint();
-        }, 2700);
-
-        /* ④ 演完自动收起：两块收成两行小字，各压一条分割线 */
-        step(function () {
-          setAva('happy', '开心');
-          turn.open = false;
-          paint();
-        }, 4000);
-
-        /* 聊天记录里存**演完的完整一版**（收起态）——
-           这样切页回来、去历史搜索里看到的就是完整的一回合，不会卡在"正在思考"。 */
-        pushLog({ who: 'ai', time: t0,
-          html: cotBlock({ cost: THINK_COST, lines: thoughtLines(v) })
-            + toolCardFor(t, v) + replyText(v) });
-        paintPill();
-      }
       async function push() {
         if (live && send.getAttribute('data-live-cancel') === '1') {
           await liveCancel();
@@ -1346,6 +1209,11 @@
         }
         var v = (input.value || '').trim();
         if (!v) return;
+        if (!live) {
+          setSessionStatus('尚未连接 Kissne，连接后才能发送消息。');
+          return;
+        }
+        setSessionStatus('');
         var retrying = retryMessageText === v && !!retryMessageId;
         var messageId = retrying ? retryMessageId : '';
         if (!messageId) {
@@ -1378,10 +1246,6 @@
           }
           return;
         }
-
-        for (var st = 0; st < seqTs.length; st++) clearTimeout(seqTs[st]);
-        seqTs = [];
-        runTurn(v);
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
