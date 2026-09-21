@@ -1094,6 +1094,21 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .qbtn svg{flex:none}
 .qbtn.is-on{background:var(--g8);border-color:var(--g8);color:#fff}
 
+.chatstatus{
+  flex:none;
+  min-height:0;
+  padding:4px 12px 2px;
+  background:transparent;
+  color:var(--ink-3);
+  font-size:10px;
+  line-height:1.35;
+  text-align:center;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.chatstatus[hidden]{display:none!important}
+
 /* 输入区整组（表情面板 + 快捷条 + 输入框）：**悬浮**在页面上 ——
    绝对定位、不占文档流，既不会把聊天记录顶上去，框外也不铺任何底色；
    所以背景和聊天记录从它周围照常透出来。
