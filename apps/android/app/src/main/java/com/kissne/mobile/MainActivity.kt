@@ -106,10 +106,26 @@ class MainActivity : AppCompatActivity() {
         }
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        clearWebViewCacheAfterUpgrade()
         webView.loadUrl(
-            "https://appassets.androidplatform.net/assets/index.html?native=1#/welcome?state=animate"
+            "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}#/welcome?state=animate"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
+
+    private fun clearWebViewCacheAfterUpgrade() {
+        val prefs = getSharedPreferences("kissne_webview", MODE_PRIVATE)
+        val key = "asset_version_code"
+        val previousVersionCode = prefs.getInt(key, 0)
+        val currentVersionCode = BuildConfig.VERSION_CODE
+
+        if (previousVersionCode != 0 && previousVersionCode != currentVersionCode) {
+            webView.clearCache(true)
+            webView.clearHistory()
+        }
+        if (previousVersionCode != currentVersionCode) {
+            prefs.edit().putInt(key, currentVersionCode).apply()
+        }
     }
 
     override fun onResume() {

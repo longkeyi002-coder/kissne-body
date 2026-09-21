@@ -57,6 +57,27 @@ jobs:
           node --check ../../kissne-prototype/prototype/screens-a.js
           node --check ../../kissne-prototype/prototype/screens-b.js
           node --check ../../kissne-prototype/prototype/app.js
+
+      - name: Reject legacy splash implementation
+        shell: bash
+        run: |
+          PROTO="../../kissne-prototype/prototype"
+          test -f "$PROTO/splash/index.html"
+          for legacy in \
+            "$PROTO/assets/real/splash-generated/characters" \
+            "$PROTO/assets/real/splash-generated/logo" \
+            "$PROTO/assets/real/splash-generated/orbs"; do
+            if [[ -e "$legacy" ]]; then
+              echo "::error::Legacy splash asset tree must not return: $legacy"
+              exit 1
+            fi
+          done
+          if grep -R -n -E 'splash-redesign|fox-with-orb|sheep-with-orb|duo-final|logo/frame-[0-9]|blue-pill|green-pill|orb-pair' \
+            "$PROTO" --include='*.js' --include='*.html' --include='*.css'; then
+            echo "::error::Legacy splash implementation reference detected"
+            exit 1
+          fi
+
       - run: gradle test
       - run: gradle assembleDebug
       - name: Verify built APK uses fixed debug signer
