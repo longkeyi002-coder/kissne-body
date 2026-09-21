@@ -24,19 +24,22 @@
   var splashTimer = null;
   var SPLASH_MS = 9000;          /* 动画播放完成后的兜底计时 */
   function splashNext() {
-    var T = window.KissneTransport;
-    /* 首次使用、没有本地设备凭据：进入连接页。
-       已经配对过：直接进入入口页。启动阶段不 bootstrap、不自动跳聊天。 */
-    return T && typeof T.hasToken === 'function' && T.hasToken() ? '#/home' : '#/connect';
+    return '#/home';
   }
   function finishSplash() {
     if (!COLD) return;
     COLD = false;
     try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
     clearTimeout(splashTimer);
-    /* 开屏是启动过渡，不属于 App 导航历史。
-       replace 掉 welcome，后续连接页/首页返回时绝不会翻回开屏。 */
-    location.replace(splashNext());
+    var T = window.KissneTransport;
+    var enterHome = function () { location.replace(splashNext()); };
+    /* 新协议无需配对码：冷启动直接用 installation_id 领取/刷新 device token。
+       无论网络此刻是否可达都进入首页，首页会显示真实连接状态并自动重试。 */
+    if (T && typeof T.ensureToken === 'function') {
+      T.ensureToken(true).then(enterHome).catch(enterHome);
+    } else {
+      enterHome();
+    }
   }
 
   /* ---------------- 路由解析 ---------------- */
@@ -58,6 +61,7 @@
 
   function nav(to) {
     if (!to) return;
+    if (String(to).indexOf('#/connect') === 0) to = '#/home';
     if (!COLD && String(to).indexOf('#/welcome') === 0) {
       to = '#/home';
     }
@@ -106,7 +110,7 @@
     var ctx = { state: state, nav: nav, params: params || null };
     /* 全局底栏：每个页面都显示，所以在外壳里统一挂载。
        只有开屏页（启动画面）不挂 —— 全屏品牌动画上压一条导航条会把它弄脏。 */
-    var showTab = ['welcome', 'connect', 'connect-success'].indexOf(screen.id) < 0;
+    var showTab = screen.id !== 'welcome';
     /* 流体云（活动胶囊）：通话 / 屏幕共享在后台继续时，顶部留一条可点回来的提示。
        和底栏一样挂在**外壳层**，所以切任何页面都在。由页面层提供内容（K.activityPill）。 */
     var pill = (interactive !== false && K.activityPill) ? K.activityPill() : '';
