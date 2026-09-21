@@ -33,6 +33,10 @@
       splashTarget = Promise.resolve(SPLASH_NEXT);
       return splashTarget;
     }
+    if (typeof T.isConnected === 'function' && T.isConnected()) {
+      splashTarget = Promise.resolve('#/chat');
+      return splashTarget;
+    }
     splashTarget = T.bootstrap().then(function (payload) {
       return payload && payload.bound ? '#/chat' : SPLASH_NEXT;
     }).catch(function (err) {
