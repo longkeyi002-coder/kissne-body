@@ -113,6 +113,8 @@ MESSAGES_PATH = "/messages"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
+MODEL_OPTIONS_PATH = "/model-options"
+SET_MODEL_PATH = "/set-model"
 
 #: How many history messages a fresh app launch may ask for (§0.3.16: bootstrap returns a BOUNDED tail).
 DEFAULT_HISTORY_CAP = 50
@@ -333,6 +335,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
+        app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
+        app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
         # is this platform's native client, so that is what handler factories receive.
@@ -540,6 +544,107 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "platform": PLATFORM_NAME,
             "listening": self._runner is not None,
             "live_devices": devices,
+        })
+
+    # ---- /model-options & /set-model ----
+
+    @staticmethod
+    def _read_hermes_config() -> dict:
+        """Read ~/.hermes/config.yaml (non-mutating)."""
+        import yaml
+        cfg_path = _Path.home() / ".hermes" / "config.yaml"
+        with open(cfg_path) as f:
+            return yaml.safe_load(f) or {}
+
+    @staticmethod
+    def _write_hermes_config(cfg: dict) -> None:
+        """Write ~/.hermes/config.yaml."""
+        import yaml
+        cfg_path = _Path.home() / ".hermes" / "config.yaml"
+        with open(cfg_path, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    async def _handle_model_options(self, request: web.Request) -> web.Response:
+        """GET /model-options — available models, efforts, current values."""
+        identity = await self._authenticated_installation(request)
+        if not identity:
+            return _json_response({"error": "unauthorized"}, 401)
+
+        cfg = self._read_hermes_config()
+
+        # --- models from providers ---
+        models: list[str] = []
+        providers = cfg.get("providers", {})
+        for pname, pdef in providers.items():
+            if isinstance(pdef, dict):
+                for m in pdef.get("models", []):
+                    if m not in models:
+                        models.append(m)
+
+        # also include the default model
+        default_model = cfg.get("model", {}).get("default", "")
+        if default_model and default_model not in models:
+            models.append(default_model)
+
+        # --- efforts ---
+        efforts = ["minimal", "low", "medium", "high"]
+        current_effort = (
+            cfg.get("agent", {}).get("reasoning_effort")
+            or cfg.get("model", {}).get("reasoning_effort")
+            or "minimal"
+        )
+
+        return _json_response({
+            "ok": True,
+            "models": models,
+            "efforts": efforts,
+            "current_model": default_model,
+            "current_effort": current_effort,
+        })
+
+    async def _handle_set_model(self, request: web.Request) -> web.Response:
+        """POST /set-model — switch model or reasoning effort."""
+        identity = await self._authenticated_installation(request)
+        if not identity:
+            return _json_response({"error": "unauthorized"}, 401)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_response({"error": "invalid_json"}, 400)
+
+        cfg = self._read_hermes_config()
+        changed: list[str] = []
+
+        new_model = body.get("model")
+        if new_model:
+            providers = cfg.get("providers", {})
+            matched_provider = ""
+            for pname, pdef in providers.items():
+                if isinstance(pdef, dict) and new_model in pdef.get("models", []):
+                    matched_provider = pname
+                    break
+            if matched_provider:
+                cfg.setdefault("model", {})["default"] = new_model
+                cfg["model"]["provider"] = matched_provider
+            else:
+                cfg.setdefault("model", {})["default"] = new_model
+            changed.append("model")
+
+        new_effort = body.get("reasoning_effort") or body.get("effort")
+        if new_effort:
+            cfg.setdefault("agent", {})["reasoning_effort"] = new_effort
+            changed.append("reasoning_effort")
+
+        if changed:
+            self._write_hermes_config(cfg)
+            logger.info("[kissne_mobile] config updated via /set-model: %s", changed)
+
+        return _json_response({
+            "ok": True,
+            "changed": changed,
+            "current_model": cfg.get("model", {}).get("default", ""),
+            "current_effort": cfg.get("agent", {}).get("reasoning_effort", "minimal"),
         })
 
     def _client_address(self, request: web.Request) -> str:
