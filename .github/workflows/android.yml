@@ -13,6 +13,9 @@ on:
       - "kissne-prototype/prototype/**"
       - ".github/workflows/android.yml"
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -30,3 +33,95 @@ jobs:
         with:
           name: kissne-android-debug
           path: apps/android/app/build/outputs/apk/debug/app-debug.apk
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/kissne-main'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      SIGNING_KEYSTORE_B64: ${{ secrets.KISSNE_ANDROID_KEYSTORE_B64 }}
+      KISSNE_ANDROID_STORE_PASSWORD: ${{ secrets.KISSNE_ANDROID_STORE_PASSWORD }}
+      KISSNE_ANDROID_KEY_ALIAS: ${{ secrets.KISSNE_ANDROID_KEY_ALIAS }}
+      KISSNE_ANDROID_KEY_PASSWORD: ${{ secrets.KISSNE_ANDROID_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.10" }
+
+      - name: Detect stable signing
+        id: signing
+        shell: bash
+        run: |
+          if [[ -n "$SIGNING_KEYSTORE_B64" && -n "$KISSNE_ANDROID_STORE_PASSWORD" && -n "$KISSNE_ANDROID_KEY_ALIAS" && -n "$KISSNE_ANDROID_KEY_PASSWORD" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stable Android signing secrets are not configured; release publishing is skipped."
+          fi
+
+      - name: Restore release keystore
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          KEYSTORE="$RUNNER_TEMP/kissne-release.jks"
+          printf '%s' "$SIGNING_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          echo "KISSNE_ANDROID_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: apps/android
+        run: gradle assembleRelease
+
+      - name: Prepare release metadata
+        if: steps.signing.outputs.enabled == 'true'
+        id: meta
+        shell: bash
+        run: |
+          APK="apps/android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          cp "$APK" "$RUNNER_TEMP/kissne-android.apk"
+          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' apps/android/app/build.gradle.kts | head -1)
+          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' apps/android/app/build.gradle.kts | head -1)
+          test -n "$VERSION_CODE"
+          test -n "$VERSION_NAME"
+          {
+            echo "versionCode=$VERSION_CODE"
+            echo "versionName=$VERSION_NAME"
+          } >> "$GITHUB_OUTPUT"
+          cat > "$RUNNER_TEMP/release-notes.txt" <<EOF
+          versionCode=$VERSION_CODE
+          versionName=$VERSION_NAME
+          notes=Kissne Android 自动更新版本。安装时由 Android 系统校验固定应用签名。
+          EOF
+
+      - name: Publish stable update channel
+        if: steps.signing.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          git tag -f kissne-android-latest "$GITHUB_SHA"
+          git push origin refs/tags/kissne-android-latest --force
+          if gh release view kissne-android-latest >/dev/null 2>&1; then
+            gh release edit kissne-android-latest \
+              --title "Kissne Android ${{ steps.meta.outputs.versionName }}" \
+              --notes-file "$RUNNER_TEMP/release-notes.txt"
+          else
+            gh release create kissne-android-latest \
+              --title "Kissne Android ${{ steps.meta.outputs.versionName }}" \
+              --notes-file "$RUNNER_TEMP/release-notes.txt"
+          fi
+          gh release upload kissne-android-latest \
+            "$RUNNER_TEMP/kissne-android.apk#kissne-android.apk" --clobber
+
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          name: kissne-android-release
+          path: ${{ runner.temp }}/kissne-android.apk
