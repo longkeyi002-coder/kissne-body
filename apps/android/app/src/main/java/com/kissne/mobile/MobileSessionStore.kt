@@ -25,6 +25,19 @@ class MobileSessionStore(context: Context) {
             prefs.edit().putLong("cursor", value).apply()
         }
 
+    var apiBase: String
+        get() = prefs.getString("api_base", null).orEmpty()
+        set(value) {
+            val normalized = value.trim().trimEnd('/')
+            prefs.edit().putString("api_base", normalized).apply()
+        }
+
+    var sessionKey: String
+        get() = prefs.getString("session_key", null).orEmpty()
+        set(value) {
+            prefs.edit().putString("session_key", value.trim()).apply()
+        }
+
     fun installationId(): String {
         val existing = prefs.getString("installation_id", null)
         if (existing != null) return existing
@@ -35,10 +48,16 @@ class MobileSessionStore(context: Context) {
     }
 
     fun saveToken(token: String) {
-        prefs.edit().putString("device_token", token).apply()
+        prefs.edit()
+            .putString("device_token", token)
+            .putLong("cursor", 0L)
+            .apply()
     }
 
     fun clearToken() {
-        prefs.edit().remove("device_token").apply()
+        prefs.edit()
+            .remove("device_token")
+            .putLong("cursor", 0L)
+            .apply()
     }
 }
