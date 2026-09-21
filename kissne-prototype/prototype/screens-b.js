@@ -187,7 +187,7 @@
           body: '<p>断开后将无法聊天，记忆同步也会暂停。</p><p class="muted">你可以随时重新连接。</p>',
           actions: [
             { label: '取消', to: '#/device?state=normal', kind: 'ghost' },
-            { label: '确认断开', to: '#/home?state=offline', kind: 'danger' }
+            { label: '确认断开', to: '#/home?state=offline', action: 'disconnect', kind: 'danger' }
           ]
         }) : ''}
       </div>`;
