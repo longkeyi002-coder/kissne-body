@@ -22,6 +22,12 @@ class MobileSessionStore(context: Context) {
     val connectionReady: Boolean
         get() = prefs.getBoolean("connection_ready", false)
 
+    val cachedSessionId: String?
+        get() = prefs.getString("bootstrap_session_id", null)
+
+    val cachedSessionKey: String?
+        get() = prefs.getString("bootstrap_session_key", null)
+
     var cursor: Long
         get() = prefs.getLong("cursor", 0L)
         set(value) {
@@ -55,17 +61,39 @@ class MobileSessionStore(context: Context) {
         prefs.edit()
             .remove("device_token")
             .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
+            .apply()
+    }
+
+    fun saveBootstrapSession(sessionId: String?, sessionKey: String?) {
+        val editor = prefs.edit().putBoolean("connection_ready", true)
+        if (sessionId.isNullOrBlank()) editor.remove("bootstrap_session_id")
+        else editor.putString("bootstrap_session_id", sessionId)
+        if (sessionKey.isNullOrBlank()) editor.remove("bootstrap_session_key")
+        else editor.putString("bootstrap_session_key", sessionKey)
+        editor.apply()
+    }
+
+    fun clearBootstrapSession() {
+        prefs.edit()
+            .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
             .apply()
     }
 
     fun markConnectionReady(ready: Boolean) {
-        prefs.edit().putBoolean("connection_ready", ready).apply()
+        if (ready) prefs.edit().putBoolean("connection_ready", true).apply()
+        else clearBootstrapSession()
     }
 
     fun clearToken() {
         prefs.edit()
             .remove("device_token")
             .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
             .putLong("cursor", 0L)
             .apply()
     }
