@@ -1109,6 +1109,9 @@
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
       var liveCurrentTurn = '';
+      var liveBootstrapTimer = null;
+      var retryMessageId = '';
+      var retryMessageText = '';
 
       function historyClock(raw) {
         if (typeof raw !== 'number' || !isFinite(raw)) return '';
@@ -1196,6 +1199,10 @@
         clearTimeout(livePollTimer);
         if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
       }
+      function scheduleLiveBootstrap(ms) {
+        clearTimeout(liveBootstrapTimer);
+        if (!liveStopped && live) liveBootstrapTimer = setTimeout(liveBootstrap, ms);
+      }
       async function livePoll() {
         if (!live || liveStopped) return;
         try {
@@ -1218,8 +1225,8 @@
         try {
           var boot = await T.bootstrap();
           if (!boot || !boot.bound) {
-            live = false;
-            append(sysMsg('设备已连接，但会话还在准备中。稍后可在这里重试，不会退出当前页面。', clockNow()));
+            append(sysMsg('设备已连接，但会话还在准备中。正在自动重试，不会退出当前页面。', clockNow()));
+            scheduleLiveBootstrap(1800);
             return;
           }
           hydrateHistory(boot.history || []);
@@ -1230,7 +1237,7 @@
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
-          else scheduleLivePoll(1200);
+          else scheduleLiveBootstrap(1200);
         }
       }
       async function liveCancel() {
@@ -1352,18 +1359,30 @@
         }
         var v = (input.value || '').trim();
         if (!v) return;
+        var messageId = (retryMessageText === v && retryMessageId) ? retryMessageId : '';
+        if (!messageId) {
+          var r = '';
+          try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
+          if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+          messageId = 'android-web-' + r;
+        }
         input.value = '';
         append(meMsg(esc(v), '', clockNow()));
         pushLog({ who: 'me', html: esc(v), time: clockNow() });
 
         if (live) {
           try {
-            var accepted = await T.sendText(v);
+            var accepted = await T.sendText(v, messageId);
+            retryMessageId = '';
+            retryMessageText = '';
             liveCurrentTurn = String((accepted && accepted.turn_id) || '');
             if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
             scheduleLivePoll(0);
           } catch (err) {
-            append(aiMsg(icon('alert', 15) + '<span>消息发送失败，请重试。</span>',
+            retryMessageId = messageId;
+            retryMessageText = v;
+            input.value = v;
+            append(aiMsg(icon('alert', 15) + '<span>消息发送失败，点击发送可安全重试。</span>',
               'is-failed', clockNow(), '没连上', 'sad'));
             if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
           }
