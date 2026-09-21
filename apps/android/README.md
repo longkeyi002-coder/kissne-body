@@ -20,7 +20,6 @@ cache. The WebView owns presentation and user interaction.
   server base URL, and cached session metadata.
 - `BridgeScheduling.kt` — bridge lane policy.
 - `UpdateManager.kt` — release update discovery/download/install handoff.
-- `TransportModels.kt` — typed transport models used by transport helpers.
 
 There is no second native chat UI. The current product UI is the packaged
 WebView UI only.
