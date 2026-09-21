@@ -101,6 +101,7 @@
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); }
+      revoke: function () { return nativeCall('revoke', {}); }
     };
     return;
   }
