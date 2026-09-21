@@ -60,6 +60,85 @@ class PrototypeBridge(
             .put("existing", false)
     }
 
+
+    @Synchronized
+    private fun refreshDeviceTokenAfterUnauthorized(failedToken: String?): JSONObject {
+        val current = store.deviceToken
+        if (!current.isNullOrBlank() && current != failedToken) {
+            return JSONObject()
+                .put("ok", true)
+                .put("installation_id", store.installationId())
+                .put("existing", true)
+        }
+        store.invalidateToken()
+        return ensureDeviceToken(force = true)
+    }
+
+    private fun shouldRecoverUnauthorized(action: String): Boolean =
+        action in setOf(
+            "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
+            "modelOptions", "setModel", "approval",
+            "adminStatus", "adminMerge", "adminRollback", "adminDeployLog",
+        )
+
+    private fun executeAction(action: String, body: JSONObject): JSONObject =
+        when (action) {
+            "pair", "ensureToken" -> {
+                body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
+                ensureDeviceToken(body.optBoolean("force", false))
+            }
+            "sessions" -> client().sessionsPayload()
+            "selectSession" -> {
+                val sessionKey = body.optString("session_key")
+                if (sessionKey.isBlank()) throw IllegalArgumentException("session_key_required")
+                val selected = client().pairPayload(store.installationId(), sessionKey)
+                val returnedToken = selected.optString("device_token")
+                if (returnedToken.isNotBlank() && returnedToken != store.deviceToken) {
+                    store.saveToken(returnedToken)
+                }
+                selected
+            }
+            "bootstrap" -> {
+                val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
+                store.markConnectionReady(true)
+                boot
+            }
+            "sendText" -> client().sendPayload(
+                messageId = body.optString("message_id"),
+                text = body.optString("text"),
+            )
+            "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
+            "ack" -> {
+                val cursor = body.optLong("cursor", store.cursor)
+                client().ack(cursor)
+                store.cursor = cursor
+                JSONObject().put("ok", true).put("cursor", cursor)
+            }
+            "cancel" -> client().cancelPayload(body.optString("turn_id"))
+            "modelOptions" -> client().modelOptionsPayload()
+            "setModel" -> client().setModelPayload(
+                model = body.optString("model").takeIf { it.isNotBlank() },
+                effort = body.optString("effort").takeIf { it.isNotBlank() },
+            )
+            "approval" -> client().approvalPayload(
+                approvalId = body.optString("approval_id"),
+                decision = body.optString("decision"),
+                scope = body.optString("scope", "once"),
+            )
+            "revoke" -> {
+                val result = client().revoke()
+                store.clearToken()
+                result
+            }
+            "adminStatus" -> client().adminStatusPayload()
+            "adminMerge" -> client().adminMergePayload()
+            "adminRollback" -> client().adminRollbackPayload()
+            "adminDeployLog" -> client().adminDeployLogPayload(
+                body.optInt("lines", 100),
+            )
+            else -> throw IllegalArgumentException("unknown_native_action")
+        }
+
     @JavascriptInterface
     fun checkForUpdates() {
         webView.post { checkUpdates() }
@@ -80,82 +159,49 @@ class PrototypeBridge(
             else -> transportExecutor
         }
         executor.execute {
-            try {
-                val body = if (payload.isBlank()) JSONObject() else JSONObject(payload)
-                val result = when (action) {
-                    "pair", "ensureToken" -> {
-                        body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
-                        ensureDeviceToken(body.optBoolean("force", false))
-                    }
-                    "sessions" -> client().sessionsPayload()
-                    "selectSession" -> {
-                        val sessionKey = body.optString("session_key")
-                        if (sessionKey.isBlank()) throw IllegalArgumentException("session_key_required")
-                        val selected = client().pairPayload(store.installationId(), sessionKey)
-                        val returnedToken = selected.optString("device_token")
-                        if (returnedToken.isNotBlank() && returnedToken != store.deviceToken) {
-                            store.saveToken(returnedToken)
-                        }
-                        selected
-                    }
-                    "bootstrap" -> {
-                        val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
-                        store.markConnectionReady(true)
-                        boot
-                    }
-                    "sendText" -> client().sendPayload(
-                        messageId = body.optString("message_id"),
-                        text = body.optString("text"),
-                    )
-                    "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
-                    "ack" -> {
-                        val cursor = body.optLong("cursor", store.cursor)
-                        client().ack(cursor)
-                        store.cursor = cursor
-                        JSONObject().put("ok", true).put("cursor", cursor)
-                    }
-                    "cancel" -> client().cancelPayload(body.optString("turn_id"))
-                    "modelOptions" -> client().modelOptionsPayload()
-                    "setModel" -> client().setModelPayload(
-                        model = body.optString("model").takeIf { it.isNotBlank() },
-                        effort = body.optString("effort").takeIf { it.isNotBlank() },
-                    )
-                    "approval" -> client().approvalPayload(
-                        approvalId = body.optString("approval_id"),
-                        decision = body.optString("decision"),
-                        scope = body.optString("scope", "once"),
-                    )
-                    "revoke" -> {
-                        val result = client().revoke()
-                        store.clearToken()
-                        result
-                    }
-                    "adminStatus" -> client().adminStatusPayload()
-                    "adminMerge" -> client().adminMergePayload()
-                    "adminRollback" -> client().adminRollbackPayload()
-                    "adminDeployLog" -> client().adminDeployLogPayload(
-                        body.optInt("lines", 100),
-                    )
-                    else -> throw IllegalArgumentException("unknown_native_action")
-                }
-                resolve(id, true, result)
+            val body = try {
+                if (payload.isBlank()) JSONObject() else JSONObject(payload)
             } catch (error: Throwable) {
-                val status = (error as? MobileTransportException)?.status ?: 0
-                /*
-                 * Optional control endpoints must never invalidate an otherwise
-                 * working chat session. A reverse-proxy/version mismatch on
-                 * model/admin routes can return 401 independently of the core
-                 * mobile transport. Core transport 401s still clear the token.
-                 */
-                val coreAuthAction = action in setOf(
-                    "sessions", "selectSession", "bootstrap", "sendText", "poll", "ack",
-                    "cancel", "approval", "revoke",
+                resolve(
+                    id,
+                    false,
+                    JSONObject().put("status", 0).put("error", error.message ?: "invalid_native_payload"),
                 )
-                if (status == 401 && coreAuthAction) store.invalidateToken()
-                val payloadJson = JSONObject()
-                    .put("status", status)
-                    .put("error", error.message ?: "native_transport_error")
-                resolve(id, false, payloadJson)
+                return@execute
+            }
+
+            val failedToken = store.deviceToken
+            try {
+                resolve(id, true, executeAction(action, body))
+            } catch (firstError: Throwable) {
+                val firstStatus = (firstError as? MobileTransportException)?.status ?: 0
+                var finalError = firstError
+
+                if (firstStatus == 401 && shouldRecoverUnauthorized(action)) {
+                    try {
+                        /*
+                         * auto_pair contract: POST /mobile/pair with installation_id only.
+                         * MobileTransportClient.pairPayload() is unauthenticated and
+                         * MobileSessionStore.saveToken() persists the replacement token
+                         * in EncryptedSharedPreferences without resetting the cursor.
+                         */
+                        refreshDeviceTokenAfterUnauthorized(failedToken)
+                        resolve(id, true, executeAction(action, body))
+                        return@execute
+                    } catch (retryError: Throwable) {
+                        finalError = retryError
+                    }
+                }
+
+                val finalStatus = (finalError as? MobileTransportException)?.status ?: firstStatus
+                if (finalStatus == 401) store.invalidateToken()
+                resolve(
+                    id,
+                    false,
+                    JSONObject()
+                        .put("status", finalStatus)
+                        .put("error", finalError.message ?: "native_transport_error"),
+                )
             }
         }
     }
