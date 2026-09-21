@@ -1011,7 +1011,15 @@
       }
 
       function refreshHermesModelControls(force) {
-        if (!live || !T || typeof T.modelOptions !== 'function') return;
+        if (!live || !T || typeof T.modelOptions !== 'function') {
+          MODELS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取模型' }];
+          EFFORTS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取思考强度' }];
+          MODEL_OPTIONS_ERROR = '尚未连接 Kissne';
+          MODEL_OPTIONS_LOADED_AT = Date.now();
+          updateHeaderControls();
+          if (openMenu) paintChatMenu(openMenu);
+          return;
+        }
         if (MODEL_OPTIONS_LOADING) return;
         if (!force && MODEL_OPTIONS_LOADED_AT && Date.now() - MODEL_OPTIONS_LOADED_AT < 30000) return;
         MODEL_OPTIONS_LOADING = true;
@@ -1019,9 +1027,15 @@
           applyHermesModelOptions(payload);
           updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
-        }).catch(function () {
-          MODEL_OPTIONS_ERROR = '无法读取 Hermes 模型列表';
+        }).catch(function (err) {
+          var status = Number(err && err.status) || 0;
+          MODEL_OPTIONS_ERROR = status === 401
+            ? '模型控制接口认证失败，聊天连接保持不变'
+            : '无法读取 Hermes 模型列表';
+          MODELS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
+          EFFORTS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
           MODEL_OPTIONS_LOADED_AT = Date.now();
+          updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
         }).finally(function () {
           MODEL_OPTIONS_LOADING = false;
