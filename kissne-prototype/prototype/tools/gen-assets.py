@@ -385,7 +385,7 @@ PH_MAP = {
 # 真图覆盖（可选）：_inbox/ 里放了成品图就自动接进来
 # --------------------------------------------------------------------------
 # 用法：按下面 REAL_NAMES 的文件名把成品图放进 assets/_inbox/，再运行本脚本。
-#       有真图的条目用真图，其余继续用占位盒；真图被复制到 assets/real/，
+#       有真图的条目用真图，其余继续用占位盒；真图会被压缩为 WebP 后写入 assets/real/，
 #       清单路径自动切换，页面代码一行都不用改。
 #       占位 SVG 一律保留不删 —— 把 _inbox/ 里的真图挪走再跑一次即可退回占位。
 INBOX = os.path.join(ROOT, "_inbox")
@@ -434,8 +434,10 @@ REAL_MAX_SIDE = {
 }
 DEFAULT_MAX_SIDE = 512
 
-# 不透明大图转 JPEG 的质量（透明底素材一律仍存 PNG）
-JPEG_QUALITY = 84
+# 运行时统一输出 WebP：透明角色/头像保留 alpha；整幅插画用较低一点质量。
+WEBP_ALPHA_QUALITY = 90
+WEBP_OPAQUE_QUALITY = 86
+WEBP_METHOD = 6
 
 # --------------------------------------------------------------------------
 # 星卡插画的"构图整理"：进卡之前先摆一次位
@@ -632,7 +634,7 @@ def _sticker(im):
 
 
 def build_stickers():
-    """扫 _inbox/stickers/*.png -> real/stickers/<key>.png，填充 STICKERS。"""
+    """扫 _inbox/stickers/* -> real/stickers/<key>.webp，填充 STICKERS。"""
     try:
         from PIL import Image
     except Exception:
@@ -647,12 +649,13 @@ def build_stickers():
             continue
         try:
             im = Image.open(os.path.join(STICKER_SRC_DIR, fn))
-            _sticker(im).save(os.path.join(STICKER_OUT_DIR, stem + ".png"),
-                              "PNG", optimize=True)
+            _sticker(im).save(os.path.join(STICKER_OUT_DIR, stem + ".webp"),
+                              "WEBP", quality=WEBP_ALPHA_QUALITY,
+                              method=WEBP_METHOD, exact=True)
         except Exception as e:
             print("    ! 表情包处理失败", fn, e)
             continue
-        STICKERS[stem] = "real/stickers/" + stem + ".png"
+        STICKERS[stem] = "real/stickers/" + stem + ".webp"
         print("  * 表情包", stem, "->", STICKERS[stem])
 
 
@@ -661,14 +664,14 @@ def _normalize(src, out_dir, base, max_side, code=None):
 
     分两种情况，判据是**素材本身带不带透明**：
 
-    A. 透明底素材（头像 / 角色）→ 存 PNG
+    A. 透明底素材（头像 / 角色）→ 存带 alpha 的 WebP
        - **防黑边**：这类图的透明区 RGB 常是纯黑 (0,0,0)，缩放时黑会混进轮廓
          边缘（小尺寸头像上就是一圈脏边）。做法是先让内容颜色向外"渗"一圈
          再缩放；alpha 全程不动，透明底依然是透明底。
        - **居中方形留白**：方形画布才好放进方形/圆形的位置，不会被拉变形。
 
-    B. 不透明整幅图（星卡插画这种自带背景的）→ 存 JPEG
-       - 没有透明通道，存 PNG 纯属浪费（200 万像素一张要 2MB，JPEG 只要百来 KB）。
+    B. 不透明整幅图（星卡插画这种自带背景的）→ 存 WebP
+       - 没有透明通道时直接用 WebP，避免把运行时资源重新膨胀成 PNG。
        - **不留方形白边**：整幅铺满才是它的用法，留白反而是多余的透明框。
 
     Pillow 不可用时返回 (False, '')，调用方原样复制。
@@ -733,15 +736,16 @@ def _normalize(src, out_dir, base, max_side, code=None):
         side = max(tw, th)                        # 正方形透明画布居中
         canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
         canvas.paste(im, ((side - tw) // 2, (side - th) // 2))
-        canvas.save(os.path.join(out_dir, base + ".png"), "PNG", optimize=True)
-        return (True, ".png")
+        canvas.save(os.path.join(out_dir, base + ".webp"), "WEBP",
+                    quality=WEBP_ALPHA_QUALITY, method=WEBP_METHOD, exact=True)
+        return (True, ".webp")
 
     rgb = im.convert("RGB")
     if resized:
         rgb = rgb.resize((tw, th), Image.LANCZOS)
-    rgb.save(os.path.join(out_dir, base + ".jpg"), "JPEG",
-             quality=JPEG_QUALITY, optimize=True, progressive=True)
-    return (True, ".jpg")
+    rgb.save(os.path.join(out_dir, base + ".webp"), "WEBP",
+             quality=WEBP_OPAQUE_QUALITY, method=WEBP_METHOD)
+    return (True, ".webp")
 
 
 def _copy_to_real(src, base, code=None):
@@ -758,7 +762,7 @@ def _copy_to_real(src, base, code=None):
 
 
 def _purge_other(out_dir, base, keep_ext):
-    """同一个 base 只留一个文件：输出格式变了（png<->jpg）时清掉上一次的残留。"""
+    """同一个 base 只留一个文件：统一转 WebP 后清掉旧 PNG/JPEG/WebP 残留。"""
     if not os.path.isdir(out_dir):
         return
     for fn in os.listdir(out_dir):
