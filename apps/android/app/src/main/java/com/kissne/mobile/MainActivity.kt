@@ -14,12 +14,14 @@ import androidx.webkit.WebViewAssetLoader
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var bridge: PrototypeBridge
+    private lateinit var updateManager: UpdateManager
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val store = MobileSessionStore(this)
+        updateManager = UpdateManager(this)
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
@@ -59,12 +61,18 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl("https://appassets.androidplatform.net/assets/index.html?native=1")
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::updateManager.isInitialized) updateManager.onResume()
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
+        if (::updateManager.isInitialized) updateManager.close()
         if (::bridge.isInitialized) bridge.close()
         if (::webView.isInitialized) {
             webView.removeJavascriptInterface("KissneNativeTransport")
