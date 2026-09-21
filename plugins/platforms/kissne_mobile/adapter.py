@@ -337,6 +337,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
         # is this platform's native client, so that is what handler factories receive.
         self._wire_plugin_handlers(app)
+        # Admin API routes (merge/rollback/status)
+        from .admin_api import _register_admin_routes, set_adapter_ref
+        set_adapter_ref(self)
+        _register_admin_routes(app)
 
         runner = web.AppRunner(app)
         await runner.setup()
