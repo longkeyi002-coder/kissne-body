@@ -97,7 +97,10 @@
             block: true, kind: 'primary', action: 'connect',
             disabled: connecting, icon: connecting ? 'sync' : undefined
           })
-          + (connecting ? '<div class="hintline">' + icon('sync', 14) + '<span>正在验证配对码并建立连接…</span></div>' : '');
+          + (connecting ? '<div class="hintline">' + icon('sync', 14) + '<span>正在验证配对码并建立连接…</span></div>' : '')
+          + (!connecting ? btn('稍后连接，先进入 Kissne', {
+              to: '#/home', block: true, kind: 'ghost'
+            }) : '');
 
       var advOpen = s === 'advanced';
 
