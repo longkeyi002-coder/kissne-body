@@ -97,6 +97,13 @@
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
+      modelOptions: function () { return nativeCall('modelOptions', {}); },
+      setModel: function (model, effort) {
+        return nativeCall('setModel', {
+          model: String(model || ''),
+          effort: String(effort || '')
+        });
+      },
       respondApproval: function (approvalId, decision, scope) {
         return nativeCall('approval', {
           approval_id: String(approvalId || ''),
@@ -225,6 +232,18 @@
   function cancel(turnId) {
     return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
+  function modelOptions() {
+    return request('/mobile/model-options', { method: 'GET' });
+  }
+  function setModel(model, effort) {
+    return request('/mobile/set-model', {
+      method: 'POST',
+      body: {
+        model: String(model || ''),
+        effort: String(effort || '')
+      }
+    });
+  }
   function respondApproval(approvalId, decision, scope) {
     return request('/mobile/approval', {
       method: 'POST',
@@ -252,6 +271,8 @@
     poll: poll,
     ack: ack,
     cancel: cancel,
+    modelOptions: modelOptions,
+    setModel: setModel,
     respondApproval: respondApproval
   };
 })();
