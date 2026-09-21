@@ -73,6 +73,10 @@
     }
   }
 
+  window.KissneRefreshSessions = function () {
+    return loadRemoteSessionsAtStartup(window.KissneTransport);
+  };
+
   function finishSplash() {
     if (!COLD) return;
     COLD = false;
