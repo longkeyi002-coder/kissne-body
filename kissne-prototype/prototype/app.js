@@ -20,28 +20,12 @@
      在应用内切回 #/welcome 不会重播。 */
   var COLD = true;
   var splashTimer = null;
-  var SPLASH_MS = 9000;          /* 动画 2.9s + 停留 0.7s */
-  var SPLASH_NEXT = '#/connect';  /* 无凭据 / bootstrap 失败时的落点 */
-  var splashTarget = null;
-  function resolveSplashTarget() {
-    if (splashTarget) return splashTarget;
+  var SPLASH_MS = 9000;          /* 动画播放完成后的兜底计时 */
+  function splashNext() {
     var T = window.KissneTransport;
-    if (!T || !T.hasToken()) {
-      splashTarget = Promise.resolve(SPLASH_NEXT);
-      return splashTarget;
-    }
-    if (typeof T.isConnected === 'function' && T.isConnected()) {
-      splashTarget = Promise.resolve('#/chat');
-      return splashTarget;
-    }
-    splashTarget = T.bootstrap().then(function (payload) {
-      return payload && payload.bound ? '#/chat' : SPLASH_NEXT;
-    }).catch(function (err) {
-      /* 只有凭据无效才要求重新配对；普通断网/服务器暂不可达不要把用户
-         反复踢回连接页，先进入离线首页，保留已有设备身份。 */
-      return err && err.status === 401 ? SPLASH_NEXT : '#/home?state=offline';
-    });
-    return splashTarget;
+    /* 首次使用、没有本地设备凭据：进入连接页。
+       已经配对过：直接进入入口页。启动阶段不 bootstrap、不自动跳聊天。 */
+    return T && typeof T.hasToken === 'function' && T.hasToken() ? '#/home' : '#/connect';
   }
 
   /* ---------------- 路由解析 ---------------- */
@@ -198,10 +182,9 @@
       /* 冷启动：开屏动画播完自动进下一页；此后不再重播 */
       clearTimeout(splashTimer);
       if (screen.id === 'welcome' && state === 'animate' && COLD) {
-        var target = resolveSplashTarget();
         splashTimer = setTimeout(function () {
           COLD = false;
-          target.then(function (to) { nav(to || SPLASH_NEXT); });
+          nav(splashNext());
         }, SPLASH_MS);
       }
     }
