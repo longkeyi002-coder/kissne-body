@@ -40,10 +40,20 @@
     function nativeCall(action, payload) {
       return new Promise(function (resolve, reject) {
         var id = 'n' + (++nativeSeq);
-        nativePending[id] = { resolve: resolve, reject: reject };
+        var timer = setTimeout(function () {
+          var waiter = nativePending[id];
+          if (!waiter) return;
+          delete nativePending[id];
+          reject(new NativeApiError(0, { error: 'native_timeout' }, 'native_timeout'));
+        }, 15000);
+        nativePending[id] = {
+          resolve: function (value) { clearTimeout(timer); resolve(value); },
+          reject: function (error) { clearTimeout(timer); reject(error); }
+        };
         try {
           Native.request(id, action, JSON.stringify(payload || {}));
         } catch (err) {
+          clearTimeout(timer);
           delete nativePending[id];
           reject(new NativeApiError(0, null, err && err.message ? err.message : 'native_bridge_error'));
         }
