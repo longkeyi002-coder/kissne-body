@@ -1242,26 +1242,19 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .empty404 b{font-size:15px;color:var(--ink)}
 
 /* =====================================================================
-   开屏页（全新连续动画舞台）
-   不再使用旧的快速闪烁 DOM / 雪碧图切换。
+   正式 Kissne 开屏页：使用用户提供的完整成品 splash 页面。
+   动画内容、时间轴和素材保持独立页面原样，不在外壳层重制。
    ===================================================================== */
-.screen--splash{background:#fff}
-.splash-redesign{
-  position:relative;flex:1;min-height:100%;
-  overflow:hidden;background:#fff;
-}
-.splash-redesign__canvas{
-  position:absolute;inset:0;width:100%;height:100%;
+.screen--splash{background:#FDFCF8;overflow:hidden}
+.splash-embed{
   display:block;
-}
-.splash-redesign__hint{
-  position:absolute;left:0;right:0;bottom:12%;
-  text-align:center;color:rgba(55,124,188,.22);
-  font-size:11px;letter-spacing:.22em;
-  pointer-events:none;
-}
-@media (prefers-reduced-motion:reduce){
-  .splash-redesign__hint{display:none}
+  width:100%;
+  height:100%;
+  flex:1;
+  min-width:0;
+  min-height:0;
+  border:0;
+  background:#FDFCF8;
 }
 
 /* =====================================================================

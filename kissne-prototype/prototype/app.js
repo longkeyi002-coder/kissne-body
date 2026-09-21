@@ -64,6 +64,15 @@
     location.hash = '#' + cur.path + '?' + p.toString();
   }
 
+  /* 成品开屏自然结束后立即进入正确落点；9s timeout 只作解码失败兜底。 */
+  document.addEventListener('kissne:splash-end', function () {
+    var cur = parseHash();
+    if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
+    COLD = false;
+    clearTimeout(splashTimer);
+    nav(splashNext());
+  });
+
   /* ---------------- 手机外壳 ---------------- */
   function statusbar() {
     return '<div class="statusbar"><span class="statusbar__time">9:41</span>'
