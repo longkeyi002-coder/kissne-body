@@ -29,6 +29,9 @@ class MainActivity : AppCompatActivity() {
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = false
+            settings.textZoom = 100
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.javaScriptCanOpenWindowsAutomatically = false
@@ -49,7 +52,7 @@ class MainActivity : AppCompatActivity() {
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            view.setPadding(0, bars.top, 0, bars.bottom)
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
         ViewCompat.requestApplyInsets(webView)
@@ -60,7 +63,9 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         setContentView(webView)
-        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html?native=1")
+        webView.loadUrl(
+            "https://appassets.androidplatform.net/assets/index.html?native=1#/welcome?state=animate"
+        )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
 
