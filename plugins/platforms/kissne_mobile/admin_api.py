@@ -295,7 +295,7 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
 
 # --- GET /admin/sessions ---
 async def _handle_admin_sessions(request: Any) -> Any:
-    """Return this installation's real Hermes conversations, newest first."""
+    """Return the dashboard-equivalent Hermes conversation list for this runtime/profile."""
     from aiohttp import web
 
     installation = await _authenticated_admin(request)
@@ -320,7 +320,7 @@ async def _handle_admin_sessions(request: Any) -> Any:
         active_id = str(getattr(active_entry, "session_id", "") or "")
         rows = await asyncio.to_thread(
             db.list_sessions_rich,
-            session_key=route_key,
+            source=None,
             include_archived=True,
             include_children=True,
             project_compression_tips=True,
@@ -336,7 +336,7 @@ async def _handle_admin_sessions(request: Any) -> Any:
             if not session_id or session_id in seen:
                 continue
             seen.add(session_id)
-            key = str(row.get("session_key") or route_key)
+            key = str(row.get("session_key") or "")
             preview = str(row.get("preview") or "").strip()
             title = str(row.get("title") or row.get("display_name") or "").strip()
             if not title:
