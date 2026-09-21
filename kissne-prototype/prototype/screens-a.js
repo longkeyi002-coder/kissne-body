@@ -253,7 +253,7 @@
           || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
         return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-          + (s.key ? '' : ' disabled')
+          + ((s.key || s.id) ? '' : ' disabled')
           + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
           + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
       }).join('');
@@ -875,7 +875,7 @@
             || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
           return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
             + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-            + (s.key ? '' : ' disabled')
+            + ((s.key || s.id) ? '' : ' disabled')
             + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
             + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
         }).join('');
@@ -1179,6 +1179,20 @@
         if (!event || typeof event !== 'object') return;
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
+        var presentation = String(event.presentation || '');
+        /* Operational/runtime output is activity chrome, never assistant prose.
+           Hidden/internal/reasoning presentation is not shown on Mobile at all. */
+        if (presentation === 'hidden' || presentation === 'internal_notification' || presentation === 'reasoning') {
+          return;
+        }
+        if (presentation === 'tool_progress') {
+          var progressEl = liveEnsure(turnId);
+          var progressBlock = ensureActivity(progressEl, 'tool', turnId);
+          activityState(progressBlock, event.text || 'Hermes 正在执行工具调用…', false);
+          liveAvatar(progressEl, 'work');
+          setSessionStatus('正在调用工具…');
+          return;
+        }
         if (type === 'notice') {
           append(sysMsg(esc(event.text || '系统通知'), clockNow()));
           return;
@@ -1189,14 +1203,6 @@
         }
         if (type === 'approval_resolved') {
           resolveApprovalCard(event.approval_id, String(event.decision || event.status || 'denied'));
-          return;
-        }
-        if (type === 'delta' && String(event.presentation || '') === 'tool_progress') {
-          var toolEl = liveEnsure(turnId);
-          var toolBlock = ensureActivity(toolEl, 'tool', turnId);
-          activityState(toolBlock, 'Hermes 正在执行工具调用…', false);
-          liveAvatar(toolEl, 'work');
-          setSessionStatus('正在调用工具…');
           return;
         }
         var el = liveEnsure(turnId);
@@ -1598,7 +1604,7 @@
         clearTimeout(livePollTimer);
         clearTimeout(liveBootstrapTimer);
         try {
-          await T.selectSession(key);
+          await T.selectSession(key, id);
           CURRENT_SESSION_ID = id;
           CURRENT_SESSION_KEY = key;
           CHAT_LOG.length = 0;
