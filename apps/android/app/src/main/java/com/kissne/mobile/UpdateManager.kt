@@ -49,6 +49,16 @@ class UpdateManager(private val activity: AppCompatActivity) {
     }
 
     fun checkForUpdates(force: Boolean = false) {
+        if (BuildConfig.DEBUG) {
+            if (force) {
+                Toast.makeText(
+                    activity,
+                    "当前是测试构建；固定签名正式版才参与应用内更新",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
         if (!force && checkedAutomatically) return
         if (!force) checkedAutomatically = true
         executor.execute {
