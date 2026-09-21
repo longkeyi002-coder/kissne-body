@@ -129,6 +129,54 @@ def test_auto_pair_accepts_installation_id_without_pairing_code(tmp_path):
     )
     assert payload.get("installation_id") == "android-auto-pair"
     assert str(payload.get("device_token") or "").startswith("kbm1_")
+    assert payload.get("conversation_bound") is True
+
+
+def test_fresh_auto_pair_bootstrap_and_first_message_share_one_conversation(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            adapter.set_session_store(store)
+            seen = []
+
+            async def capture(event):
+                seen.append(event)
+
+            adapter.set_message_handler(capture)
+            port = await start(adapter)
+            try:
+                pair_status, pair_payload, _ = await http(
+                    port, "POST", "/pair",
+                    body={"installation_id": "android-fresh-flow"},
+                )
+                token = str(pair_payload.get("device_token") or "")
+                bootstrap_status, bootstrap_payload, _ = await http(
+                    port, "POST", "/bootstrap", token=token,
+                )
+                message_status, message_payload, _ = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "fresh-1", "text": "hello fresh conversation"},
+                )
+                bound = adapter.bound_conversation("android-fresh-flow")
+                session_count = len(store.list_sessions())
+            finally:
+                await stop(adapter)
+        return pair_status, pair_payload, bootstrap_status, bootstrap_payload, message_status, message_payload, bound, session_count, seen
+
+    pair_status, pair_payload, bootstrap_status, bootstrap_payload, message_status, message_payload, bound, session_count, seen = run(scenario())
+    assert pair_status == 201, pair_payload
+    assert pair_payload.get("conversation_bound") is True, pair_payload
+    assert bootstrap_status == 200, bootstrap_payload
+    assert bootstrap_payload.get("bound") is True, bootstrap_payload
+    conversation = bootstrap_payload.get("conversation") or {}
+    assert bound is not None
+    assert conversation.get("session_id") == bound.session_id
+    assert session_count == 1, "fresh pairing must create exactly one Runtime Conversation"
+    assert message_status == 202, message_payload
+    assert message_payload.get("turn_id"), message_payload
+    assert len(seen) == 1
+    assert seen[0].text == "hello fresh conversation"
 
 
 def test_pairing_never_hands_out_anything_but_a_device_token(tmp_path):

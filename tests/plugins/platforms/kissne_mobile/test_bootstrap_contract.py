@@ -3,8 +3,9 @@
 Contract frozen here:
 
 * ``POST /bootstrap`` (device token) answers **which Conversation this installation is on**, plus a
-  **bounded** slice of its history. It never creates a Conversation: an installation that was paired
-  without joining one gets ``bound=false``, ``conversation=null`` and an empty history.
+  **bounded** slice of its history. It never creates a Conversation. Pairing establishes a fresh
+  installation's initial Conversation; a deliberately pre-authenticated but unbound registry entry
+  still gets ``bound=false``, ``conversation=null`` and an empty history.
 * Conversation identity is read from the Runtime session store on every call (the plugin keeps no
   installation→conversation mapping of its own — §0.3.14), and nothing credential-shaped is echoed.
 * History is the TAIL of the Conversation, capped, and flagged truncated when the cap bites.
@@ -103,7 +104,8 @@ def test_bootstrap_for_an_unbound_installation_creates_nothing(tmp_path):
             adapter.set_session_store(store)
             port = await start(adapter)
             try:
-                token = await pair(port, adapter)  # paired, but joined no Conversation
+                # Bypass /pair to isolate bootstrap's read-only behavior.
+                token = adapter.device_store().create_device_token(PAIRED_INSTALLATION)
                 before = len(store.list_sessions())
                 status, payload, _ = await http(port, "POST", "/bootstrap", token=token)
                 after = len(store.list_sessions())
@@ -120,6 +122,32 @@ def test_bootstrap_for_an_unbound_installation_creates_nothing(tmp_path):
     assert after == before, (
         "bootstrap created a Runtime Conversation; §0.3.14 forbids the adapter from opening one "
         f"({before} -> {after})")
+
+
+def test_bootstrap_omits_hidden_persisted_rows(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            store.append_to_transcript(existing.session_id, {"role": "user", "content": "visible user", "created_at": 1.0})
+            store.append_to_transcript(existing.session_id, {"role": "assistant", "content": "hidden handoff", "display_kind": "hidden", "created_at": 2.0})
+            store.append_to_transcript(existing.session_id, {"role": "assistant", "content": "visible assistant", "created_at": 3.0})
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                status, payload, _ = await http(port, "POST", "/bootstrap", token=token)
+            finally:
+                await stop(adapter)
+        return status, payload
+
+    status, payload = run(scenario())
+    assert status == 200, payload
+    texts = [item.get("text") for item in payload.get("history") or []]
+    assert "visible user" in texts
+    assert "visible assistant" in texts
+    assert "hidden handoff" not in texts
 
 
 def test_bootstrap_refuses_unknown_and_revoked_tokens(tmp_path):

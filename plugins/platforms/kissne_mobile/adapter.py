@@ -329,6 +329,38 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     _fingerprint(installation), target_key)
         return True
 
+    def ensure_initial_conversation(self, installation_id: str) -> bool:
+        """Create the first Runtime Conversation for a fresh installation when needed.
+
+        This is only the no-explicit-session first-use path. Existing bindings are preserved;
+        explicit joins still use bind_conversation() and can only target an existing Conversation.
+        """
+        store = getattr(self, "_session_store", None)
+        installation = str(installation_id or "").strip()
+        if store is None or not installation:
+            logger.warning("[kissne_mobile] cannot ensure initial conversation for installation %s",
+                           _fingerprint(installation))
+            return False
+        current = self.bound_conversation(installation)
+        if current is not None:
+            return True
+        try:
+            created = store.get_or_create_session(self.source_for_installation(installation))
+        except Exception:
+            logger.warning("[kissne_mobile] failed to create initial conversation for installation %s",
+                           _fingerprint(installation), exc_info=True)
+            return False
+        if created is None or not str(getattr(created, "session_id", "") or ""):
+            return False
+        resolved = self.bound_conversation(installation)
+        if resolved is None or getattr(resolved, "session_id", None) != getattr(created, "session_id", None):
+            logger.warning("[kissne_mobile] initial conversation did not resolve for installation %s",
+                           _fingerprint(installation))
+            return False
+        logger.info("[kissne_mobile] created initial conversation for installation %s",
+                    _fingerprint(installation))
+        return True
+
     # -- listener lifecycle ------------------------------------------------------------------------
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
@@ -757,8 +789,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 if conversation_key:
                     bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
                 else:
-                    own_key = self.mobile_session_key(installation)
-                    bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
+                    bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
                 return _json_response({
                     "ok": True,
                     "installation_id": installation,
@@ -772,8 +803,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if conversation_key:
                 bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
             else:
-                own_key = self.mobile_session_key(installation)
-                bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
+                bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
             return _json_response({
                 "ok": True,
                 "installation_id": installation,
@@ -802,10 +832,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if conversation_key:
             bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
         else:
-            # No explicit session_key: auto-bind to the installation's own mobile_session_key
-            # so a fresh mobile-native conversation is ready on first message.
-            own_key = self.mobile_session_key(installation)
-            bound = await asyncio.to_thread(self.bind_conversation, installation, own_key)
+            # Pairing is the lifecycle boundary that establishes the fresh installation's
+            # first Runtime Conversation; bootstrap itself remains read-only.
+            bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
         return _json_response({
             "ok": True,
             "installation_id": installation,
@@ -935,11 +964,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if not await asyncio.to_thread(self.bind_conversation, installation, conversation_key):
                 return _error_response("conversation_not_bound", 409)
         elif self.bound_conversation(installation) is None:
-            # Unbound installation without explicit session_key: auto-bind to its own
-            # mobile_session_key so the gateway creates a fresh, mobile-native conversation.
-            own_key = self.mobile_session_key(installation)
-            if not await asyncio.to_thread(self.bind_conversation, installation, own_key):
-                logger.warning("[kissne_mobile] auto-bind failed for unbound installation %s",
+            # Defensive recovery for a legacy/unbound authenticated installation. Fresh pairing
+            # normally establishes this Conversation before bootstrap or the first message.
+            if not await asyncio.to_thread(self.ensure_initial_conversation, installation):
+                logger.warning("[kissne_mobile] initial-conversation recovery failed for installation %s",
                                _fingerprint(installation))
                 return _error_response("auto_bind_failed", 500)
 
@@ -1153,7 +1181,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if role not in {"user", "assistant"}:
             return False
         display_kind = str(row.get("display_kind") or "").strip().lower()
-        if display_kind in {"internal_notification", "tool_progress", "reasoning"}:
+        if display_kind in {"hidden", "internal_notification", "tool_progress", "reasoning"}:
             return False
         if role == "assistant" and (
             row.get("tool_name")

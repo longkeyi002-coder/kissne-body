@@ -213,6 +213,7 @@ def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_pat
             def load_transcript(_session_id):
                 return [
                     {"role": "assistant", "content": "被引用的旧回复", "created_at": 1.0},
+                    {"role": "assistant", "content": "模型内部交接", "display_kind": "hidden", "created_at": 1.5},
                     {"role": "user", "content": "这个继续处理", "message_id": turn_id, "created_at": 2.0},
                     {"role": "assistant", "content": "继续处理完成", "created_at": 3.0},
                 ]
@@ -235,6 +236,7 @@ def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_pat
     assert rows[1]["reply_preview"] == {"role": "assistant", "text": "被引用的旧回复"}
     assert rows[1]["attachments"][0]["label"] == "notes.txt"
     assert rows[2]["message_ref"] == "turn:kbm_turn_quote:assistant"
+    assert all(row.get("text") != "模型内部交接" for row in rows)
 
 
 
@@ -265,4 +267,8 @@ def test_mobile_history_filters_internal_tool_and_reasoning_rows(tmp_path):
         assert adapter._mobile_visible_transcript_row({
             "role": "assistant", "content": "hidden reasoning text",
             "display_kind": "reasoning",
+        }) is False
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "model-facing handoff",
+            "display_kind": "hidden",
         }) is False
