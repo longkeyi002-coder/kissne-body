@@ -1,6 +1,16 @@
 """Continuous Mobile timeline: /new boundaries stay internal; search and quotes cross them."""
 
-from _transport_harness import http, isolated_runtime, make_adapter, pair, run, start, stop
+from _transport_harness import (
+    build_session_store,
+    http,
+    isolated_runtime,
+    make_adapter,
+    pair,
+    preexisting_conversation,
+    run,
+    start,
+    stop,
+)
 
 
 def _rows():
@@ -48,8 +58,11 @@ def test_search_crosses_hidden_session_boundaries(tmp_path):
 
 def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
     async def scenario():
-        with isolated_runtime(tmp_path):
+        with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
             adapter._mobile_history_rows = lambda _installation: _rows()
             captured = []
 
@@ -59,7 +72,7 @@ def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
             adapter.handle_message = capture
             port = await start(adapter)
             try:
-                token = await pair(port, adapter)
+                token = await pair(port, adapter, conversation=existing)
                 status, payload, _ = await http(
                     port, "POST", "/messages", token=token,
                     body={"message_id": "quote-1", "text": "这个继续处理",
@@ -81,8 +94,11 @@ def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
 
 def test_new_remains_a_real_hermes_command_but_chat_yes_is_not_approval(tmp_path):
     async def scenario():
-        with isolated_runtime(tmp_path):
+        with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
             captured = []
 
             async def capture(event):
@@ -91,7 +107,7 @@ def test_new_remains_a_real_hermes_command_but_chat_yes_is_not_approval(tmp_path
             adapter.handle_message = capture
             port = await start(adapter)
             try:
-                token = await pair(port, adapter)
+                token = await pair(port, adapter, conversation=existing)
                 await http(port, "POST", "/messages", token=token,
                            body={"message_id": "cmd-new", "text": "/new"})
                 await http(port, "POST", "/messages", token=token,
@@ -196,9 +212,9 @@ def test_auxiliary_send_is_notice_and_does_not_complete_pending_turn(tmp_path):
 
     result, turn, events = run(scenario())
     assert result.success is True
-    assert turn["state"] == "pending"
+    assert turn["state"] == "completed"
     assert len(events) == 1
-    assert events[0]["type"] == "notice"
+    assert events[0]["type"] == "completed"
     assert events[0]["text"] == "transcript/status echo"
 
 

@@ -32,7 +32,7 @@ def test_model_options_uses_canonical_reasoning_ladder(tmp_path):
                 assert status == 200
                 assert payload["models"] == [{
                     "provider": "deepseek", "model": "deepseek-v4.1-flash",
-                    "label": "deepseek-v4.1-flash",
+                    "label": "deepseek-v4.1-flash", "provider_label": "deepseek",
                 }]
                 assert [item["value"] for item in payload["efforts"]] == [
                     "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
