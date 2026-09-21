@@ -150,8 +150,7 @@
   }
   function apiBase() { return normalizeBase(''); }
   function adminBase() {
-    var base = normalizeBase('');
-    return /\/mobile$/i.test(base) ? base.replace(/\/mobile$/i, '') : base;
+    return normalizeBase('');
   }
   function setBase(value) { var v = normalizeBase(value); set(KEY.base, v); return v; }
   function installationId() {
