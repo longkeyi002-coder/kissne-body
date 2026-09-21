@@ -216,6 +216,7 @@
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
             + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
             + listRow({ title: '通知设置', sub: '新消息 / 连接状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
+            + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })
           , { tight: true })}
           ${card(
             listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
@@ -273,5 +274,242 @@
       </div>`;
     }
   });
+
+
+  /* =====================================================================
+     11 运维与部署
+     ===================================================================== */
+  K.registerScreen({
+    no: '11', id: 'admin', name: '运维与部署', route: '#/admin', tab: null,
+    purpose: '查看服务端版本与运行状态，执行上游合并、回滚，并实时查看部署日志。',
+    out: ['#/settings', '#/connect'],
+    states: [{ key: 'default', label: '默认' }],
+    render: function () {
+      return `
+      <div class="screen screen--admin">
+        ${appbar({
+          title: '运维与部署',
+          sub: 'Kissne Admin',
+          back: '#/settings',
+          right: '<button class="iconbtn" data-admin-refresh aria-label="刷新状态">' + icon('refresh') + '</button>'
+        })}
+        <div class="screen__body">
+          <div class="adminnotice" data-admin-notice hidden></div>
+
+          ${sectionTitle('运行状态')}
+          ${card(
+            kv('版本', '<code data-admin-head>读取中…</code>', { strong: true })
+            + kv('分支', '<span data-admin-branch>—</span>')
+            + kv('运行时长', '<span data-admin-uptime>—</span>')
+            + kv('本地修改', '<span data-admin-dirty>—</span>')
+            + kv('部署状态', '<span data-admin-deploy>—</span>')
+          )}
+
+          ${sectionTitle('部署操作')}
+          <div class="adminops">
+            <button type="button" class="btn btn--primary is-block" data-admin-op="merge">
+              ${icon('sync', 17)}<span>合并上游更新</span>
+            </button>
+            <button type="button" class="btn btn--ghost is-block" data-admin-op="rollback">
+              ${icon('refresh', 17)}<span>回滚到 GitHub 最新版</span>
+            </button>
+          </div>
+
+          <div class="adminconfirm" data-admin-confirm hidden>
+            <div class="adminconfirm__title" data-admin-confirm-title></div>
+            <div class="adminconfirm__body" data-admin-confirm-body></div>
+            <div class="adminconfirm__actions">
+              <button type="button" class="btn btn--ghost is-block" data-admin-cancel><span>取消</span></button>
+              <button type="button" class="btn btn--primary is-block" data-admin-run><span>确认执行</span></button>
+            </div>
+          </div>
+
+          ${sectionTitle('部署日志')}
+          <pre class="adminlog" data-admin-log>尚无部署日志</pre>
+          ${note('合并或回滚会重启网关，App 可能短暂断连；恢复后页面会继续查询部署结果。')}
+        </div>
+      </div>`;
+    },
+    mount: function (root) {
+      var T = window.KissneTransport;
+      if (!T || typeof T.adminStatus !== 'function') return null;
+
+      var disposed = false;
+      var pollTimer = null;
+      var confirmKind = '';
+      var notice = root.querySelector('[data-admin-notice]');
+      var log = root.querySelector('[data-admin-log]');
+      var confirmBox = root.querySelector('[data-admin-confirm]');
+      var mergeBtn = root.querySelector('[data-admin-op="merge"]');
+      var rollbackBtn = root.querySelector('[data-admin-op="rollback"]');
+
+      function setText(sel, value) {
+        var el = root.querySelector(sel);
+        if (el) el.textContent = value == null ? '—' : String(value);
+      }
+      function showNotice(kind, text) {
+        if (!notice) return;
+        notice.hidden = !text;
+        notice.className = 'adminnotice' + (kind ? ' is-' + kind : '');
+        notice.textContent = text || '';
+      }
+      function formatUptime(seconds) {
+        var n = Math.max(0, Number(seconds) || 0);
+        var h = Math.floor(n / 3600);
+        var m = Math.floor((n % 3600) / 60);
+        if (h) return h + ' 小时 ' + m + ' 分钟';
+        return m + ' 分钟';
+      }
+      function setBusy(busy) {
+        [mergeBtn, rollbackBtn].forEach(function (el) {
+          if (!el) return;
+          el.disabled = !!busy;
+          el.setAttribute('aria-disabled', busy ? 'true' : 'false');
+        });
+      }
+      function applyStatus(data) {
+        data = data || {};
+        var git = data.git || {};
+        var deploy = data.deploy || {};
+        setText('[data-admin-head]', git.describe || git.head || '—');
+        setText('[data-admin-branch]', git.branch || '—');
+        setText('[data-admin-uptime]', formatUptime(data.uptime_seconds));
+        setText('[data-admin-dirty]', Number(git.dirty_files || 0) + ' 个文件');
+        var label = deploy.running
+          ? ((deploy.type === 'rollback' ? '回滚' : '合并') + '进行中')
+          : (deploy.success === true ? '上次部署成功' : (deploy.success === false ? '上次部署失败' : '空闲'));
+        setText('[data-admin-deploy]', label);
+        setBusy(!!deploy.running);
+        return !!deploy.running;
+      }
+      function handleError(err, retryDeployLog) {
+        var status = Number(err && err.status) || 0;
+        if (status === 401) {
+          showNotice('error', '设备认证已失效，请重新配对。');
+          location.hash = '#/connect';
+          return;
+        }
+        if (status === 409) {
+          showNotice('working', '已有部署操作正在进行，已切换到当前部署日志。');
+          pollDeployLog(0);
+          return;
+        }
+        if (status === 404) {
+          showNotice('error', '部署脚本不存在，请联系管理员。');
+          setBusy(false);
+          return;
+        }
+        if (retryDeployLog) {
+          showNotice('working', '网关正在重启或暂时不可达，正在继续等待部署恢复。');
+          schedulePoll(3000);
+          return;
+        }
+        showNotice('error', '无法读取运维状态，请检查连接后重试。');
+        setBusy(false);
+      }
+      async function loadStatus() {
+        try {
+          var data = await T.adminStatus();
+          if (disposed) return;
+          var running = applyStatus(data);
+          showNotice('', '');
+          if (running) pollDeployLog(0);
+        } catch (err) {
+          if (!disposed) handleError(err, false);
+        }
+      }
+      function schedulePoll(ms) {
+        clearTimeout(pollTimer);
+        if (!disposed) pollTimer = setTimeout(function () { pollDeployLog(100); }, ms);
+      }
+      async function pollDeployLog(lines) {
+        try {
+          var data = await T.adminDeployLog(lines || 100);
+          if (disposed) return;
+          if (log) {
+            log.textContent = String(data.log || '暂无部署日志');
+            log.scrollTop = log.scrollHeight;
+          }
+          var running = !!data.running;
+          setBusy(running);
+          setText('[data-admin-deploy]', running
+            ? ((data.type === 'rollback' ? '回滚' : '合并') + '进行中')
+            : (data.success ? '部署成功' : '部署失败'));
+          if (running) {
+            showNotice('working', '部署正在进行，日志每 3 秒自动刷新。');
+            schedulePoll(3000);
+          } else {
+            showNotice(data.success ? 'ok' : 'error', data.success ? '部署成功。' : '部署失败，请查看日志。');
+            loadStatus();
+          }
+        } catch (err) {
+          if (!disposed) handleError(err, true);
+        }
+      }
+      function openConfirm(kind) {
+        confirmKind = kind;
+        if (!confirmBox) return;
+        confirmBox.hidden = false;
+        setText('[data-admin-confirm-title]', kind === 'rollback' ? '确认回滚？' : '确认合并上游更新？');
+        setText(
+          '[data-admin-confirm-body]',
+          kind === 'rollback'
+            ? '代码将恢复到 GitHub 上 kissne-main 的最新版本，随后网关会重启。'
+            : '将合并上游更新并重启网关，App 会短暂断连。'
+        );
+      }
+      function closeConfirm() {
+        confirmKind = '';
+        if (confirmBox) confirmBox.hidden = true;
+      }
+      async function runConfirmed() {
+        var kind = confirmKind;
+        closeConfirm();
+        if (!kind) return;
+        setBusy(true);
+        showNotice('working', kind === 'rollback' ? '正在启动回滚…' : '正在启动上游合并…');
+        try {
+          if (kind === 'rollback') await T.adminRollback();
+          else await T.adminMerge();
+          if (disposed) return;
+          pollDeployLog(100);
+        } catch (err) {
+          if (!disposed) handleError(err, false);
+        }
+      }
+      function onClick(e) {
+        var op = e.target.closest('[data-admin-op]');
+        if (op) {
+          e.preventDefault();
+          openConfirm(op.getAttribute('data-admin-op'));
+          return;
+        }
+        if (e.target.closest('[data-admin-cancel]')) {
+          e.preventDefault();
+          closeConfirm();
+          return;
+        }
+        if (e.target.closest('[data-admin-run]')) {
+          e.preventDefault();
+          runConfirmed();
+          return;
+        }
+        if (e.target.closest('[data-admin-refresh]')) {
+          e.preventDefault();
+          loadStatus();
+        }
+      }
+
+      root.addEventListener('click', onClick);
+      loadStatus();
+
+      return function () {
+        disposed = true;
+        clearTimeout(pollTimer);
+        root.removeEventListener('click', onClick);
+      };
+    }
+  });
+
 
 })();
