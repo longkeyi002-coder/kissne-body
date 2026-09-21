@@ -241,7 +241,7 @@
           ${card(
             kv('设备名称', '人人星')
             + kv('在线状态', chip('在线', 'ok'))
-            + kv('当前模型', 'MiMo v2.5')
+            + kv('当前模型', '跟随 Hermes')
             + kv('最近同步时间', '刚刚')
           )}
           ${note('配对成功后，设备信息由系统自动返回。')}
@@ -314,7 +314,7 @@
           <span class="devstrip__ic">${icon('server', 18)}</span>
           <span class="devstrip__main">
             <span class="devstrip__t">当前设备 ${chip(offline ? '离线' : '在线', offline ? 'warn' : 'solid')}</span>
-            <span class="devstrip__s">人人星 · MiMo v2.5</span>
+            <span class="devstrip__s">人人星 · 跟随 Hermes</span>
           </span>
           ${offline ? btn('重连', { small: true, kind: 'ghost', to: '#/connect?state=connecting' }) : ''}
         </div>`;
@@ -399,43 +399,75 @@
     { key: 'effort-menu',   label: '思考强度下拉展开' }
   ];
 
-  /* —— 模型 / 思考强度：可切换项 ——
-     真实列表由 Hermes 返回（自带模型供应商与思考强度档位），
-     本阶段按占位示例摆放：模型名用 Hermes 风格的示例名（非真实模型表），
-     真实列表由 Hermes 返回后整体替换。 */
+  /* —— 模型 / 思考强度：完全由 Hermes canonical mobile controls 提供 ——
+     App 不维护模型名或 reasoning ladder。/model-options 的数据源来自
+     Hermes provider catalog + agent.reasoning_effort.EFFORT_LADDER；
+     /set-model 委托给 Gateway 的 canonical /model / /reasoning handlers。 */
   var MODELS = [
-    { k: 'auto',  v: '自动',             d: '跟随当前可用模型' },
-    { k: 'mimo',  v: 'MiMo v2.5',       d: '轻快响应' },
-    { k: 'deep',  v: 'DeepSeek v4.1',    d: '深度推理' },
-    { k: 'flash', v: 'Flash',            d: '极速回复' }
+    { k: '', v: '读取中…', d: '正在从 Hermes 获取模型' }
   ];
   var EFFORTS = [
-    { k: 'auto', v: '自动', d: '按问题难度由 Hermes 决定' },
-    { k: 'off',  v: '关闭', d: '不输出思考过程' },
-    { k: 'low',  v: '低',   d: '更快、更省' },
-    { k: 'mid',  v: '中',   d: '默认档' },
-    { k: 'high', v: '高',   d: '更充分的思考' }
+    { k: '', v: '读取中…', d: '正在从 Hermes 获取思考强度' }
   ];
+  var MODEL_CURRENT = '';
+  var EFFORT_CURRENT = '';
+  var MODEL_OPTIONS_LOADING = false;
+  var MODEL_OPTIONS_LOADED_AT = 0;
+  var MODEL_OPTIONS_ERROR = '';
+
   function pick(list, key, fallback) {
     for (var i = 0; i < list.length; i++) { if (list[i].k === key) return list[i]; }
     for (var j = 0; j < list.length; j++) { if (list[j].k === fallback) return list[j]; }
-    return list[0];
+    return list[0] || { k: '', v: '—', d: '' };
   }
-  /* 下拉面板：标题 + 若干可选项 + 底部说明
-     origin = 从哪个状态点开的菜单，选中后回到那个状态，
-     否则选完模型会把正在看的对话丢掉、退回空态。
-     注意：面板里的值**全部是占位示例**，真实列表由 Hermes 返回，不要当成真实数据。 */
+
+  function applyHermesModelOptions(payload) {
+    payload = payload || {};
+    var nextModels = (payload.models || []).map(function (item) {
+      var provider = String(item.provider || '');
+      var model = String(item.model || '');
+      var key = provider ? provider + '/' + model : model;
+      return {
+        k: key,
+        v: String(item.label || model || key),
+        d: String(item.provider_label || provider || 'Hermes')
+      };
+    }).filter(function (item) { return !!item.k; });
+    var nextEfforts = (payload.efforts || []).map(function (item) {
+      return {
+        k: String(item.value || ''),
+        v: String(item.label || item.value || ''),
+        d: 'Hermes reasoning effort'
+      };
+    }).filter(function (item) { return !!item.k; });
+
+    MODELS = nextModels.length
+      ? nextModels
+      : [{ k: '', v: '暂无可用模型', d: '请检查 Hermes Provider 配置' }];
+    EFFORTS = nextEfforts.length
+      ? nextEfforts
+      : [{ k: '', v: '暂无可用档位', d: 'Hermes 未返回 reasoning ladder' }];
+    MODEL_CURRENT = String(payload.current_model || MODEL_CURRENT || '');
+    EFFORT_CURRENT = String(payload.current_effort || EFFORT_CURRENT || '');
+    MODEL_OPTIONS_ERROR = '';
+    MODEL_OPTIONS_LOADED_AT = Date.now();
+  }
+
   function dropdown(title, items, curKey, param, origin) {
     return '<div class="dd">'
-      + '<div class="dd__head"><span>' + esc(title) + '</span>'
-      + '</div>'
+      + '<div class="dd__head"><span>' + esc(title) + '</span></div>'
       + '<div class="dd__list">' + items.map(function (it) {
-          return '<a class="dd__item' + (it.k === curKey ? ' is-active' : '') + '"'
-            + ' data-nav="#/chat?state=' + origin + '&' + param + '=' + it.k + '">'
+          var disabled = !it.k;
+          return '<button type="button" class="dd__item' + (it.k === curKey ? ' is-active' : '') + '"'
+            + (disabled ? ' disabled' : '')
+            + ' data-hermes-control="' + esc(param) + '"'
+            + ' data-hermes-value="' + esc(it.k) + '"'
+            + ' data-hermes-origin="' + esc(origin) + '">'
             + '<span class="dd__main"><span class="dd__v">' + esc(it.v) + '</span>'
             + '<span class="dd__d">' + esc(it.d) + '</span></span>'
-            + (it.k === curKey ? icon('check', 16) : '') + '</a>';
+            + (it.k === curKey ? icon('check', 16) : '') + '</button>';
         }).join('') + '</div>'
+      + (MODEL_OPTIONS_ERROR ? '<div class="dd__foot">' + esc(MODEL_OPTIONS_ERROR) + '</div>' : '')
       + '</div>';
   }
 
@@ -689,8 +721,8 @@
 
       /* --- 当前选中的模型 / 思考强度（从查询参数读，选完能立刻反映到头部）--- */
       var q = ctx.params;
-      var curModel  = pick(MODELS,  q && q.get('model'),  'auto');
-      var curEffort = pick(EFFORTS, q && q.get('effort'), 'mid');
+      var curModel  = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
+      var curEffort = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
       /* 菜单是从哪个状态点开的：选中后回到那里（从侧栏直接切到菜单态时兜底到空态） */
       var origin = (q && q.get('from')) || '';
       if (!origin || origin === 'model-menu' || origin === 'effort-menu') {
@@ -989,6 +1021,56 @@
       var retryMessageId = '';
       var retryMessageText = '';
       var liveApprovals = Object.create(null);
+
+      function refreshHermesModelControls(force) {
+        if (!live || !T || typeof T.modelOptions !== 'function') return;
+        if (MODEL_OPTIONS_LOADING) return;
+        if (!force && MODEL_OPTIONS_LOADED_AT && Date.now() - MODEL_OPTIONS_LOADED_AT < 30000) return;
+        MODEL_OPTIONS_LOADING = true;
+        T.modelOptions().then(function (payload) {
+          applyHermesModelOptions(payload);
+          document.dispatchEvent(new CustomEvent('kissne:model-options-updated'));
+        }).catch(function () {
+          MODEL_OPTIONS_ERROR = '无法读取 Hermes 模型列表';
+          MODEL_OPTIONS_LOADED_AT = Date.now();
+          document.dispatchEvent(new CustomEvent('kissne:model-options-updated'));
+        }).finally(function () {
+          MODEL_OPTIONS_LOADING = false;
+        });
+      }
+
+      function onHermesControl(e) {
+        var el = e.target && e.target.closest ? e.target.closest('[data-hermes-control]') : null;
+        if (!el || !root.contains(el)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!live || !T || typeof T.setModel !== 'function') {
+          append(sysMsg('请先连接 Kissne，再切换模型或思考强度。', clockNow()));
+          return;
+        }
+        var kind = String(el.getAttribute('data-hermes-control') || '');
+        var value = String(el.getAttribute('data-hermes-value') || '');
+        var origin = String(el.getAttribute('data-hermes-origin') || 'empty');
+        if (!value) return;
+        el.disabled = true;
+        T.setModel(kind === 'model' ? value : '', kind === 'effort' ? value : '')
+          .then(function () {
+            if (kind === 'model') MODEL_CURRENT = value;
+            if (kind === 'effort') EFFORT_CURRENT = value;
+            MODEL_OPTIONS_LOADED_AT = 0;
+            location.hash = '#/chat?state=' + encodeURIComponent(origin);
+          })
+          .catch(function (err) {
+            el.disabled = false;
+            var msg = err && err.payload && err.payload.error
+              ? String(err.payload.error)
+              : 'Hermes 切换失败';
+            append(sysMsg(esc(msg), clockNow()));
+          });
+      }
+
+      root.addEventListener('click', onHermesControl);
+      refreshHermesModelControls(false);
 
       function historyClock(raw) {
         if (typeof raw !== 'number' || !isFinite(raw)) return '';
@@ -1471,6 +1553,7 @@
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
       return function () {
+        root.removeEventListener('click', onHermesControl);
         input.removeEventListener('keydown', onKey);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
