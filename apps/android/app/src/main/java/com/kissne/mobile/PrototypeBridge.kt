@@ -85,6 +85,11 @@ class PrototypeBridge(
                         JSONObject().put("ok", true).put("cursor", cursor)
                     }
                     "cancel" -> client().cancelPayload(body.optString("turn_id"))
+                    "revoke" -> {
+                        val result = client().revoke()
+                        store.clearToken()
+                        result
+                    }
                     else -> throw IllegalArgumentException("unknown_native_action")
                 }
                 resolve(id, true, result)
