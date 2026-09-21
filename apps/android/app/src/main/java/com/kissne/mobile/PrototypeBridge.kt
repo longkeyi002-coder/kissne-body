@@ -41,6 +41,25 @@ class PrototypeBridge(
     @JavascriptInterface fun clearToken() = store.clearToken()
     @JavascriptInterface fun getCursor(): Long = store.cursor
 
+    @Synchronized
+    private fun ensureDeviceToken(force: Boolean = false): JSONObject {
+        val existing = store.deviceToken
+        if (!force && !existing.isNullOrBlank()) {
+            return JSONObject()
+                .put("ok", true)
+                .put("installation_id", store.installationId())
+                .put("existing", true)
+        }
+        val paired = client().pairPayload(store.installationId())
+        val token = paired.optString("device_token")
+        if (token.isBlank()) throw IllegalStateException("device_token_missing")
+        store.saveToken(token)
+        return JSONObject()
+            .put("ok", paired.optBoolean("ok", true))
+            .put("installation_id", paired.optString("installation_id", store.installationId()))
+            .put("existing", false)
+    }
+
     @JavascriptInterface
     fun checkForUpdates() {
         webView.post { checkUpdates() }
@@ -64,21 +83,13 @@ class PrototypeBridge(
             try {
                 val body = if (payload.isBlank()) JSONObject() else JSONObject(payload)
                 val result = when (action) {
-                    "pair" -> {
+                    "pair", "ensureToken" -> {
                         body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
-                        val paired = client().pairPayload(
-                            pairingCode = body.optString("pairing_code"),
-                            installationId = store.installationId(),
-                        )
-                        paired.optString("device_token").takeIf { it.isNotBlank() }?.let(store::saveToken)
-                        JSONObject()
-                            .put("ok", paired.optBoolean("ok", true))
-                            .put("installation_id", paired.optString("installation_id"))
-                            .put("conversation_bound", paired.optBoolean("conversation_bound", false))
+                        ensureDeviceToken(body.optBoolean("force", false))
                     }
                     "bootstrap" -> {
                         val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
-                        store.markConnectionReady(boot.optBoolean("bound", false))
+                        store.markConnectionReady(true)
                         boot
                     }
                     "sendText" -> client().sendPayload(
