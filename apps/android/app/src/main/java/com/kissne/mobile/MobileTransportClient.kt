@@ -61,6 +61,12 @@ class MobileTransportClient(
     fun sessionsPayload(): JSONObject =
         request("GET", "/admin/sessions")
 
+    fun memoriesPayload(): JSONObject =
+        request("GET", "/admin/memory")
+
+    fun deleteMemoryPayload(memoryId: String): JSONObject =
+        request("DELETE", "/admin/memory/$memoryId")
+
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
 
@@ -95,9 +101,14 @@ class MobileTransportClient(
         )
     }
 
-    fun pairPayload(installationId: String, sessionKey: String? = null): JSONObject {
+    fun pairPayload(
+        installationId: String,
+        sessionKey: String? = null,
+        sessionId: String? = null,
+    ): JSONObject {
         val body = JSONObject().put("installation_id", installationId)
         sessionKey?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
+        sessionId?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_id", it) }
         return request("POST", "/pair", body, auth = false)
     }
 
