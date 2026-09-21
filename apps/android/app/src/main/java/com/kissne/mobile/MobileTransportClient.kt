@@ -18,8 +18,20 @@ class MobileTransportClient(
     private fun nullableString(json: JSONObject, key: String): String? =
         if (json.isNull(key)) null else json.optString(key).ifBlank { null }
 
-    private fun request(method: String, path: String, body: JSONObject? = null, auth: Boolean = true): JSONObject {
-        val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
+    private fun adminBaseUrl(): String {
+        val base = baseUrl.trimEnd('/')
+        return if (base.endsWith("/mobile")) base.removeSuffix("/mobile") else base
+    }
+
+    private fun request(
+        method: String,
+        path: String,
+        body: JSONObject? = null,
+        auth: Boolean = true,
+        adminRoot: Boolean = false,
+    ): JSONObject {
+        val requestBase = if (adminRoot) adminBaseUrl() else baseUrl.trimEnd('/')
+        val connection = (URL(requestBase + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
@@ -162,6 +174,20 @@ class MobileTransportClient(
 
     fun revoke(): JSONObject =
         request("POST", "/revoke")
+
+    fun adminStatusPayload(): JSONObject =
+        request("GET", "/admin/status", adminRoot = true)
+
+    fun adminMergePayload(): JSONObject =
+        request("POST", "/admin/merge", adminRoot = true)
+
+    fun adminRollbackPayload(): JSONObject =
+        request("POST", "/admin/rollback", adminRoot = true)
+
+    fun adminDeployLogPayload(lines: Int = 100): JSONObject {
+        val safeLines = lines.coerceIn(1, 500)
+        return request("GET", "/admin/deploy-log?lines=$safeLines", adminRoot = true)
+    }
 
     fun cancel(turnId: String): String = cancelPayload(turnId).optString("state", "cancelled")
 }
