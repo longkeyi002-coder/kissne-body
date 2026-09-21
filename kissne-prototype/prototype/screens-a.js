@@ -40,13 +40,13 @@
       var started = performance.now();
       var v = '20260920f';
       var manifest = {
-        logo: ['logo/frame-0.png','logo/frame-1.png','logo/frame-2.png','logo/frame-3.png'],
+        logo: ['logo/frame-0.webp','logo/frame-1.webp','logo/frame-2.webp','logo/frame-3.webp'],
         fox: [], sheep: [], duo: [],
-        pills: ['orbs/blue-pill.png','orbs/green-pill.png'],
-        orbs: ['orbs/orb-pair.png','orbs/orb-pair-stands.png'],
-        foxOrb: ['characters/fox-with-orb.png'],
-        sheepOrb: ['characters/sheep-with-orb.png'],
-        duoFinal: ['characters/duo-final.png']
+        pills: ['orbs/blue-pill.webp','orbs/green-pill.webp'],
+        orbs: ['orbs/orb-pair.webp','orbs/orb-pair-stands.webp'],
+        foxOrb: ['characters/fox-with-orb.webp'],
+        sheepOrb: ['characters/sheep-with-orb.webp'],
+        duoFinal: ['characters/duo-final.webp']
       };
       for (var n = 0; n < 8; n++) {
         manifest.fox.push('frames/fox/frame-' + n + '.png');
