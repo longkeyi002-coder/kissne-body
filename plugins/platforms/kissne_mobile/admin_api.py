@@ -321,7 +321,7 @@ async def _handle_admin_sessions(request: Any) -> Any:
         conn = _sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=3)
         try:
             rows = conn.execute(
-                "SELECT id, source, user_id, message_count, started_at, model "
+                "SELECT id, source, user_id, title, message_count, started_at, model "
                 "FROM sessions ORDER BY started_at DESC LIMIT 500"
             ).fetchall()
             for row in rows:
@@ -333,12 +333,12 @@ async def _handle_admin_sessions(request: Any) -> Any:
                 sessions.append({
                     "session_id": session_id,
                     "session_key": "",
-                    "title": f"{source or '?'}: {user_id or 'local'}",
-                    "created_at": row[4],
-                    "last_active": row[4],
-                    "message_count": row[3] or 0,
+                    "title": row[3] or f"{source or '?'}: {user_id or 'local'}",
+                    "created_at": row[5],
+                    "last_active": row[5],
+                    "message_count": row[4] or 0,
                     "source": source,
-                    "model": row[5] or "",
+                    "model": row[6] or "",
                     "active": session_id == active_id,
                 })
         finally:
