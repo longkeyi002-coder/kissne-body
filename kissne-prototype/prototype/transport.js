@@ -81,10 +81,10 @@
         opts = opts || {};
         var base = nativeBase(opts.apiBase || '');
         if (base) Native.setBase(base);
-        return nativeCall('pair', {
-          pairing_code: String(opts.pairingCode || '').trim(),
-          api_base: base
-        });
+        return nativeCall('pair', { api_base: base });
+      },
+      ensureToken: function (force) {
+        return nativeCall('ensureToken', { force: !!force });
       },
       bootstrap: function () { return nativeCall('bootstrap', { cursor: Number(Native.getCursor()) || 0 }); },
       sendText: function (text, messageId) {
@@ -211,13 +211,15 @@
 
   async function pair(opts) {
     opts = opts || {};
-    var code = String(opts.pairingCode || '').trim();
     var base = setBase(opts.apiBase || '');
-    if (!code) throw new ApiError(400, { error: 'pairing_code_required' }, 'pairing_code_required');
-    var body = { pairing_code: code, installation_id: installationId() };
+    var body = { installation_id: installationId() };
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) { set(KEY.token, out.device_token); set(KEY.cursor, '0'); }
     return out;
+  }
+  async function ensureToken(force) {
+    if (!force && deviceToken()) return { ok: true, existing: true, installation_id: installationId() };
+    return pair({});
   }
   function bootstrap() { return request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
   function makeMessageId() {
@@ -293,6 +295,7 @@
     clearToken: clearToken,
     cursor: cursor,
     pair: pair,
+    ensureToken: ensureToken,
     bootstrap: bootstrap,
     sendText: sendText,
     poll: poll,
