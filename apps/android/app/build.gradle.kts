@@ -38,11 +38,17 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "0.2.1"
+        manifestPlaceholders["appLabel"] = "Kissne"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MOBILE_BASE_URL", "\"${mobileBaseUrl.get()}\"")
     }
 
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Kissne Dev"
+        }
         getByName("release") {
             isMinifyEnabled = false
             if (hasReleaseSigning) {
