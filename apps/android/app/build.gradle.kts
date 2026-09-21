@@ -6,21 +6,51 @@ plugins {
 val mobileBaseUrl = providers.gradleProperty("KISSNE_MOBILE_BASE_URL")
     .orElse("https://yeqingxu.cyou/mobile/")
 
+val releaseStorePath = providers.environmentVariable("KISSNE_ANDROID_KEYSTORE_PATH").orNull
+val releaseStorePassword = providers.environmentVariable("KISSNE_ANDROID_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("KISSNE_ANDROID_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("KISSNE_ANDROID_KEY_PASSWORD").orNull
+val hasReleaseSigning = listOf(
+    releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.kissne.mobile"
     compileSdk = 35
     buildFeatures {
         buildConfig = true
     }
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("kissneRelease") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.kissne.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MOBILE_BASE_URL", "\"${mobileBaseUrl.get()}\"")
     }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("kissneRelease")
+            }
+        }
+    }
+
     sourceSets["main"].assets.srcDir(file("../../../kissne-prototype/prototype"))
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
