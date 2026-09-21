@@ -38,7 +38,7 @@
       var state = ctx.state || 'final';
       var disposed = false, raf = 0, dpr = 1;
       var started = performance.now();
-      var v = '20260920f';
+      var v = '20260921a';
       var manifest = {
         logo: ['logo/frame-0.webp','logo/frame-1.webp','logo/frame-2.webp','logo/frame-3.webp'],
         fox: [], sheep: [], duo: [],
@@ -49,9 +49,9 @@
         duoFinal: ['characters/duo-final.webp']
       };
       for (var n = 0; n < 8; n++) {
-        manifest.fox.push('frames/fox/frame-' + n + '.png');
-        manifest.sheep.push('frames/sheep/frame-' + n + '.png');
-        manifest.duo.push('frames/duo/frame-' + n + '.png');
+        manifest.fox.push('frames/fox/frame-' + n + '.webp');
+        manifest.sheep.push('frames/sheep/frame-' + n + '.webp');
+        manifest.duo.push('frames/duo/frame-' + n + '.webp');
       }
       var images = {};
       var loadCount = 0, total = 0;
