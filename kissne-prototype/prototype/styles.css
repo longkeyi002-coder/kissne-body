@@ -1493,6 +1493,41 @@ html.is-native-shell .memdetail__body{line-height:1.55}
 html.is-native-shell .scn__bubble{padding:9px 11px}
 html.is-native-shell .pop__item{padding:8px 10px}
 
+
+/* Native interaction polish：只影响 Android 壳。 */
+html.is-native-shell [data-nav],
+html.is-native-shell [data-action],
+html.is-native-shell button{
+  -webkit-tap-highlight-color:transparent;
+  touch-action:manipulation;
+}
+html.is-native-shell [data-nav]:active,
+html.is-native-shell [data-action]:active,
+html.is-native-shell button:active{opacity:.68}
+html.is-native-shell .stage__inner{animation:native-page-in .16s ease-out both}
+@keyframes native-page-in{
+  from{opacity:.72;transform:translateY(3px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.connectlive{
+  display:block;padding:8px 10px;border-radius:10px;
+  font-size:11px;line-height:1.4;border:1px solid var(--line);
+  background:var(--g1);color:var(--ink-2)
+}
+.connectlive[hidden]{display:none}
+.connectlive.is-working{border-color:var(--blue-line);background:var(--blue-wash);color:var(--blue-deep)}
+.connectlive.is-error{border-style:dashed;border-color:var(--g6);background:#fff;color:var(--ink)}
+.is-connecting .screen__foot [data-action="connect"]::before{
+  content:'';width:12px;height:12px;flex:none;border-radius:50%;
+  border:1.5px solid currentColor;border-right-color:transparent;
+  animation:native-spin .7s linear infinite
+}
+@keyframes native-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  html.is-native-shell .stage__inner{animation:none}
+  .is-connecting .screen__foot [data-action="connect"]::before{animation:none}
+}
+
 /* 截图模式要保留假状态栏（真机断点会把它隐藏掉） */
 body.is-shot .statusbar{display:flex}
 
