@@ -1307,7 +1307,7 @@
         try {
           var boot = await T.bootstrap();
           if (!boot || !boot.bound) {
-            setSessionStatus('正在连接当前 Hermes 会话…');
+            setSessionStatus('会话准备中…');
             scheduleLiveBootstrap(1800);
             return;
           }
@@ -1322,7 +1322,7 @@
         } catch (err) {
           if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
           else {
-            setSessionStatus('正在重新连接 Hermes…');
+            setSessionStatus('正在重新连接…');
             scheduleLiveBootstrap(1200);
           }
         }
