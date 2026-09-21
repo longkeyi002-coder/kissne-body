@@ -750,7 +750,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("device_store_unavailable", 503)
 
         # --- auto_pair mode: skip pairing code validation ---
-        auto_pair = self._config.get("auto_pair", False)
+        auto_pair = self.config.extra.get("auto_pair", False)
         if auto_pair and not code:
             # Check if this installation already has a token — return it directly
             existing = store.lookup_installation(installation)
