@@ -96,18 +96,16 @@ class MobileTransportClient(
         )
     }
 
-    fun pairPayload(pairingCode: String, installationId: String): JSONObject =
+    fun pairPayload(installationId: String): JSONObject =
         request(
             "POST",
             "/pair",
-            JSONObject()
-                .put("pairing_code", pairingCode)
-                .put("installation_id", installationId),
+            JSONObject().put("installation_id", installationId),
             auth = false,
         )
 
-    fun pair(pairingCode: String, installationId: String): String =
-        pairPayload(pairingCode, installationId).getString("device_token")
+    fun pair(installationId: String): String =
+        pairPayload(installationId).getString("device_token")
 
     fun sendPayload(messageId: String, text: String): JSONObject =
         request(
