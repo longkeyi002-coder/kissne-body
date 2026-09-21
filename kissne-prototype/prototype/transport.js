@@ -225,7 +225,12 @@
     if (!force && deviceToken()) return { ok: true, existing: true, installation_id: installationId() };
     return pair({});
   }
-  function sessions() { return request('/mobile/sessions', { method: 'GET' }); }
+  function sessions() {
+    return request('/admin/sessions', {
+      method: 'GET',
+      base: adminBase()
+    });
+  }
   async function selectSession(sessionKey) {
     var key = String(sessionKey || '').trim();
     if (!key) throw new ApiError(400, { error: 'session_key_required' }, 'session_key_required');
