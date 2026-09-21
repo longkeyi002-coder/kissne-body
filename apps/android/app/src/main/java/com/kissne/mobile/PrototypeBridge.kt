@@ -81,6 +81,11 @@ class PrototypeBridge(
                         JSONObject().put("ok", true).put("cursor", cursor)
                     }
                     "cancel" -> client().cancelPayload(body.optString("turn_id"))
+                    "modelOptions" -> client().modelOptionsPayload()
+                    "setModel" -> client().setModelPayload(
+                        model = body.optString("model").takeIf { it.isNotBlank() },
+                        effort = body.optString("effort").takeIf { it.isNotBlank() },
+                    )
                     "approval" -> client().approvalPayload(
                         approvalId = body.optString("approval_id"),
                         decision = body.optString("decision"),
