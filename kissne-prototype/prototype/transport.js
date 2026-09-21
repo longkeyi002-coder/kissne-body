@@ -86,6 +86,7 @@
       ensureToken: function (force) {
         return nativeCall('ensureToken', { force: !!force });
       },
+      sessions: function () { return nativeCall('sessions', {}); },
       bootstrap: function () { return nativeCall('bootstrap', { cursor: Number(Native.getCursor()) || 0 }); },
       sendText: function (text, messageId) {
         return nativeCall('sendText', {
@@ -221,6 +222,7 @@
     if (!force && deviceToken()) return { ok: true, existing: true, installation_id: installationId() };
     return pair({});
   }
+  function sessions() { return request('/mobile/sessions', { method: 'GET' }); }
   function bootstrap() { return request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
   function makeMessageId() {
     var r = '';
@@ -296,6 +298,7 @@
     cursor: cursor,
     pair: pair,
     ensureToken: ensureToken,
+    sessions: sessions,
     bootstrap: bootstrap,
     sendText: sendText,
     poll: poll,
