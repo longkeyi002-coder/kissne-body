@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=overlays-content">
 <title>Kissne 手机端低保真原型 V0.1</title>
+<script>
+try {
+  if (new URLSearchParams(location.search).get('native') === '1') {
+    document.documentElement.classList.add('is-native-shell');
+  }
+} catch (e) {}
+</script>
 <!-- 资源带版本号：静态托管/CDN 会缓存裸路径，不发版号会拿到旧文件造成新旧混装。
      每次改动后把 v= 的值换一个即可。 -->
 <link rel="stylesheet" href="styles.css?v=20260921a">
