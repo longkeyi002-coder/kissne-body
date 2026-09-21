@@ -72,11 +72,15 @@
 
   K.registerScreen({
     no: '04', id: 'home', name: '首页 / 控制台', route: '#/home', tab: 'entry',
-    purpose: 'Kissne 入口页。设备在线状态来自真实 Mobile bootstrap 探测，不再使用演示状态。',
+    purpose: 'Kissne 入口页。优先读取客户端 bootstrap 缓存；仅冷启动、手动刷新或认证失效时重新探测。',
     out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/notifications'],
     states: HOME_STATES,
     render: function (ctx) {
       var part = dayPart(ctx);
+      var homeTransport = window.KissneTransport;
+      var cachedOnline = !!(homeTransport
+        && typeof homeTransport.hasBootstrapCache === 'function'
+        && homeTransport.hasBootstrapCache());
       var head = `
         <header class="appbar appbar--brand">
           <div class="appbar__l"><span class="brand">Kissne</span></div>
@@ -101,8 +105,8 @@
         <div class="devstrip" data-home-device>
           <span class="devstrip__ic">${icon('server', 18)}</span>
           <span class="devstrip__main">
-            <span class="devstrip__t">当前设备 <span class="chip chip--warn" data-home-status><i class="dot"></i><span data-home-status-text>检测中</span></span></span>
-            <span class="devstrip__s" data-home-status-detail>正在验证服务器与 device token…</span>
+            <span class="devstrip__t">当前设备 <span class="chip${cachedOnline ? ' chip--solid' : ' chip--warn'}" data-home-status><i class="dot"></i><span data-home-status-text>${cachedOnline ? '在线' : '检测中'}</span></span></span>
+            <span class="devstrip__s" data-home-status-detail>${cachedOnline ? '已连接 · 使用本地会话缓存' : '正在验证服务器与 device token…'}</span>
           </span>
           <button type="button" class="btn btn--ghost is-small" data-home-refresh><span>刷新</span></button>
         </div>`;
@@ -159,15 +163,19 @@
         if (label) label.textContent = text;
         if (detail) detail.textContent = sub;
       }
-      async function probe() {
+      async function probe(force) {
         if (!T || typeof T.bootstrap !== 'function') {
           paint('offline', '离线', 'Mobile Transport 不可用');
+          return;
+        }
+        if (!force && typeof T.hasBootstrapCache === 'function' && T.hasBootstrapCache()) {
+          paint('online', '在线', '已连接 · 使用本地会话缓存');
           return;
         }
         paint('checking', '检测中', '正在验证服务器与 device token…');
         try {
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          var boot = await T.bootstrap();
+          var boot = await T.bootstrap(!!force);
           if (!boot || !boot.bound) {
             if (!stopped) paint('checking', '准备中', '服务器可达 · 会话尚未绑定');
             return;
@@ -177,7 +185,7 @@
           if (err && err.status === 401 && typeof T.ensureToken === 'function') {
             try {
               await T.ensureToken(true);
-              var retryBoot = await T.bootstrap();
+              var retryBoot = await T.bootstrap(true);
               if (!retryBoot || !retryBoot.bound) {
                 if (!stopped) paint('checking', '准备中', '认证已恢复 · 会话尚未绑定');
                 return;
@@ -192,11 +200,11 @@
       function onRefresh(e) {
         e.preventDefault();
         e.stopPropagation();
-        probe();
+        probe(true);
       }
       if (refresh) refresh.addEventListener('click', onRefresh);
-      probe();
-      timer = setInterval(probe, 15000);
+      probe(false);
+      timer = setInterval(function () { probe(false); }, 15000);
       return function () {
         stopped = true;
         clearInterval(timer);
