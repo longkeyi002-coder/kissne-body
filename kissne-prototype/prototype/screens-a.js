@@ -880,6 +880,13 @@
       }
 
       var menuHost = root.querySelector('[data-chat-menu-host]');
+      /* render() and mount() have separate scopes. Derive the menu state again here;
+         using render()'s local `menu` caused a ReferenceError that aborted chat
+         initialization before model loading, bootstrap, and send click binding. */
+      var mountState = (ctx && ctx.state) || 'empty';
+      var menu = mountState === 'model-menu' ? 'model'
+        : (mountState === 'effort-menu' ? 'effort'
+          : (mountState === 'plus-menu' ? 'plus' : null));
       var openMenu = menu === 'model' || menu === 'effort' ? menu : null;
 
       function updateHeaderControls() {
