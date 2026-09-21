@@ -382,30 +382,16 @@
      05 聊天页
      ===================================================================== */
   var CHAT_STATES = [
-    /* **第一个 = 默认状态**：必须是"有对话"的那个。
-       之前第一项是"空聊天"，于是 `#/chat`（不带 state）永远显示"还没有消息"，
-       从通话页挂断回来就以为"记录全没了"。空态现在只能从侧栏手动切。 */
-    { key: 'normal',        label: '默认对话' },
-    { key: 'empty',         label: '空聊天' },
-    { key: 'keyboard',      label: '键盘弹出（打字中）' },
-    { key: 'unread',        label: '有未读消息' },
-    { key: 'search',        label: '历史搜索' },
-    { key: 'sending',       label: '消息发送中' },
-    { key: 'typing',        label: '正在输入' },
-    { key: 'thinking',      label: '正在思考' },
-    { key: 'replying',      label: '正在回复' },
-    { key: 'failed',        label: '回复失败' },
-    { key: 'device-offline',label: '设备离线' },
-    { key: 'network-lost',  label: '网络断开' },
-    { key: 'cot',           label: '思考过程' },
-    { key: 'tool',          label: '工具调用 · 记忆检索' },
-    { key: 'tool-web',      label: '工具调用 · 联网搜索' },
-    { key: 'tool-cal',      label: '工具调用 · 看日程' },
-    { key: 'tool-write',    label: '工具调用 · 写备忘录' },
-    { key: 'request-enter', label: '小机星进入请示' },
-    { key: 'plus-menu',     label: '「+」菜单展开' },
-    { key: 'model-menu',    label: '模型下拉展开' },
-    { key: 'effort-menu',   label: '思考强度下拉展开' }
+    { key: 'normal',         label: '对话' },
+    { key: 'empty',          label: '空聊天' },
+    { key: 'search',         label: '历史搜索' },
+    { key: 'failed',         label: '发送失败' },
+    { key: 'device-offline', label: '设备离线' },
+    { key: 'network-lost',   label: '网络断开' },
+    { key: 'request-enter',  label: '小机星进入请示' },
+    { key: 'plus-menu',      label: '更多操作' },
+    { key: 'model-menu',     label: '模型选择' },
+    { key: 'effort-menu',    label: '思考强度' }
   ];
 
   /* —— 模型 / 思考强度：完全由 Hermes canonical mobile controls 提供 ——
@@ -625,14 +611,7 @@
   var LAST_SENT_HASH = '';
   /* 历史搜索：像微信的搜索记录那样**按时间线排列**（今天 / 昨天 / 更早）。
      模块级，删除与清空都是真的生效（只在本会话内）。 */
-  var SEARCH_LOG = [
-    { k: '周末计划',   t: '14:20', g: '今天' },
-    { k: '美术馆',     t: '11:05', g: '今天' },
-    { k: '叶青栩 心情', t: '21:40', g: '昨天' },
-    { k: '记忆库',     t: '18:12', g: '昨天' },
-    { k: '小机星',     t: '20:05', g: '更早 · 09-16' },
-    { k: '语音通话',   t: '09:31', g: '更早 · 09-15' }
-  ];
+  var SEARCH_LOG = [];
   function logRender() {
     return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
@@ -658,9 +637,6 @@
 
       /* 「我」这一侧的小羊头像换表情：离线/断网=睡着，上一条没发出去=委屈 */
       MY_AVA = (offline || netlost) ? 'sleep' : (bs === 'failed' ? 'sad' : 'idle');
-
-      /* 演示态：塞两条"你没看见的"AI 消息，让未读胶囊有东西可跳（只塞一次） */
-      if (s === 'unread' && !UNREAD_SEEDED) { UNREAD_SEEDED = true; seedUnread(); }
 
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
@@ -702,7 +678,7 @@
             <div class="srch__head"><span>历史搜索</span>
               <button class="srch__clear" type="button" data-clearsrch>${icon('trash', 12)}清空</button></div>
             <div class="srch__list" data-srchlist>${rows}</div>
-            ${note('按时间线排列（今天 / 昨天 / 更早）。点一条会回到人人星并定位到那条消息；这里只做界面，不产生真实搜索。')}
+            ${note('搜索只针对当前已加载的真实聊天记录。')}
           </div>
         </div>`;
       }
@@ -722,87 +698,6 @@
       /* --- 消息列表：来自模块级聊天记录（切页不丢）--- */
       var base = '';
       if (bs !== 'empty' && CHAT_LOG.length) base = logRender();
-      if (bs !== 'empty') {
-        /* 头像上的 state = 叶青栩此刻的表情（换图），tag 只是占位盒上的小字 */
-        if (bs === 'sending')  base += meMsg('今天天气不错', '<span class="msg__meta-in">发送中…</span>', '09:42');
-        if (bs === 'typing')   base += aiMsg('正在输入' + dots(), 'is-pending', '09:42', '打字', 'think');
-        if (bs === 'thinking') base += aiMsg('正在思考' + dots(), 'is-pending', '09:42', '思考', 'think');
-        if (bs === 'replying') base += aiMsg('嗯，我在听——<span class="caret"></span>', '', '09:42', '说话', 'talk');
-        if (bs === 'failed') {
-          base += aiMsg(icon('alert', 15) + '<span>回复失败，设备未响应。</span>'
-            + btn('重新发送', { small: true, kind: 'ghost', action: 'resend' }), 'is-failed', '09:42', '没连上', 'sad');
-        }
-        /* 思考过程：AI 那**一条**消息里，回复文字上方挂一块思考过程。
-           内容与用时都是占位，真实思考由 Hermes 输出。 */
-        if (bs === 'cot') {
-          base += aiMsg(cotBlock({
-              cost: '3.2s',
-              lines: [
-                '用户在问我有没有在',
-                '先简短回应，再主动问一句',
-                '语气保持轻松，不啰嗦'
-              ]
-            }) + '<div>嗯，我在听。今天想做点什么？</div>', '', '09:42', '深思', 'think');
-        }
-        /* —— 工具调用（示例）四个例子 ——
-           **一个回合 = 一条消息**：思考链 + 工具卡片 + 回复都在同一条里，
-           所以头像只有一个，文字会随动作变（记忆 / 联网 / 日程 / 便签）。
-           参数与返回值都是占位，真实调用由 Hermes 工具链完成。 */
-        if (bs === 'tool') {
-          base += aiMsg(cotBlock({ cost: '0.9s', lines: [
-                '用户在问周末计划',
-                '记忆库里应该有 —— 先检索一遍',
-                '取回最近那条「周末计划」'
-              ] })
-            + toolCard('记忆检索', [
-                ['参数', '关键词 = 「周末计划」'],
-                ['返回', '由 Hermes 返回']
-              ], '0.8s')
-            + '<div>找到了，你之前提过周末想整理房间——这就要开始吗？</div>', '', '09:42', '记忆', 'work');
-        }
-        if (bs === 'tool-web') {
-          base += aiMsg(cotBlock({ cost: '1.6s', lines: [
-                '用户问周末适不适合出门',
-                '这得看天气 —— 我不能凭印象猜',
-                '先联网查一下这两天的天气'
-              ] })
-            + toolCard('联网搜索', [
-                ['参数', '关键词 = 「周末 天气」'],
-                ['返回', '由 Hermes 返回']
-              ], '1.2s')
-            + '<div>我查了：周六晴、周日下午有雨——「看展」放周六更合适。</div>', '', '09:43', '联网', 'work');
-        }
-        if (bs === 'tool-cal') {
-          base += aiMsg(cotBlock({ cost: '1.1s', lines: [
-                '用户想约这周末',
-                '得先知道他哪段是空的',
-                '看一下周六、周日的日程'
-              ] })
-            + toolCard('查看日程', [
-                ['参数', '范围 = 本周六 ～ 周日'],
-                ['返回', '由 Hermes 返回']
-              ], '0.4s')
-            + '<div>你周六上午空着。要我先把「美术馆」占上吗？</div>', '', '09:43', '日程', 'work');
-        }
-        if (bs === 'tool-write') {
-          base += aiMsg(cotBlock({ cost: '1.0s', lines: [
-                '用户要记一件事',
-                '写成备忘比留在聊天里靠谱',
-                '写完让他确认一下'
-              ] })
-            + toolCard('写备忘录', [
-                ['内容', '「周六去看展」'],
-                ['结果', '需你确认']
-              ], '0.6s')
-            + '<div>写好了，放在备忘录第一条。要改随时说。</div>', '', '09:43', '便签', 'work');
-        }
-        /* 小机星进入请示：人类不能自己闯进小机星，得先在人人星跟叶青栩打招呼。
-           批准后才会出现绿色小人 + 方向键（见 06 小机星页的 state=enter）。 */
-        if (bs === 'request-enter') {
-          base += aiMsg('你想来小机星看看？可以，我开门给你。', '', '09:42', '开门', 'happy');
-        }
-      }
-
       var emptyBlock = bs === 'empty'
         ? '<div class="chatempty">'
           + ph('FOX_STATE_EMOTION', { size: 132 })
@@ -914,9 +809,8 @@
       </div>`;
     },
 
-    /* 输入框是**真能打字的**：回车或点发送 → 追加一条带头像 + 时间戳的用户气泡（同时写进 CHAT_LOG，
-       换页/去通话页回来都还在），随后回一条占位 AI 消息（原型不发起真实请求）。
-       从表情包页选了一张也会在这里落成一条消息。 */
+    /* 输入框发送真实 Mobile Transport 消息；本地只即时显示用户自己的气泡，
+       AI 正文必须来自 Hermes 的真实 completed 事件。 */
     mount: function (root, ctx) {
       /* —— 历史搜索页：输入即筛选 · 单条删除 · 一键清空 —— */
       var sIn = root.querySelector('input.srchbox__in');
@@ -2387,29 +2281,10 @@
       /* 计时器走字（tabular-nums，宽度不变、不会抖） */
       var tEl = root.querySelector('[data-calltime]');
       var tickT = setInterval(function () { if (tEl) tEl.textContent = callClock(); }, 1000);
-      /* 说话 → 文字：逐句写进人人星的聊天记录（这一页不显示） */
-      var lines = [
-        { who: 'ai', html: '喂？能听到吗？' },
-        { who: 'me', html: '能，我在。' },
-        { who: 'ai', html: '好，那我先说今天的事。' },
-        { who: 'me', html: '嗯，你说。' },
-        { who: 'ai', html: '你昨天说的那个展，周六开始。' },
-        { who: 'me', html: '那就周六去。' }
-      ];
-      /* 同一次会话只记一条记录行（切静音/扬声器会重渲染，用时间戳防重复） */
-      var now = Date.now();
-      if (!CALL_LOGGED_AT || now - CALL_LOGGED_AT > 60000) {
-        CALL_LOGGED_AT = now;
-        pushLog({ who: 'sys', html: '📞 ' + callLabel() + ' · 00:32', time: clockNow() });
-      }
-      var i = 0;
-      var t = setInterval(function () {
-        if (i >= lines.length) { clearInterval(t); return; }
-        var L = lines[i++];
-        pushLog({ who: L.who, html: L.html, time: clockNow() });
-      }, 2600);
+      /* 真机不生成任何演示通话转写；真实语音接入后只写真实转写。 */
+      var t = null;
       return function () {
-        clearInterval(t);
+        if (t) clearInterval(t);
         clearInterval(tickT);
         if (hg) hg.removeEventListener('click', onHang);
       };
