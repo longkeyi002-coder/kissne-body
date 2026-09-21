@@ -16,7 +16,7 @@
   K.registerScreen({
     no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
     purpose: '正式开屏动画：Kiss + ne 融合成蓝绿球，分裂并化成叶青栩与小羊，最终双人贴贴定格。',
-    out: ['#/connect'],
+    out: ['#/home'],
     states: [
       { key: 'final', label: '定格 · 双人贴贴' },
       { key: 'animate', label: '播放完整开屏动画' },
@@ -500,7 +500,7 @@
   K.registerScreen({
     no: '05', id: 'chat', name: '人人星', route: '#/chat', tab: 'chat',
     purpose: '核心页面：顶端横排「模型下拉 · 叶青栩 · 思考强度下拉」，两项都可点开下拉切换；下方为消息列表与一条长圆弧输入框。',
-    out: ['#/home', '#/connect', '#/device'],
+    out: ['#/home', '#/device'],
     states: CHAT_STATES,
     render: function (ctx) {
       var s = ctx.state || 'empty';
@@ -588,8 +588,8 @@
       if (offline) {
         topBanner = '<div class="chatbanner">'
           + ph('OFFLINE_ILLUSTRATION', { size: 78 })
-          + '<div class="chatbanner__main"><b>设备已离线</b><span>无法发送消息，请重新连接设备。</span></div>'
-          + btn('重新连接', { small: true, kind: 'ghost', to: '#/connect?state=connecting' })
+          + '<div class="chatbanner__main"><b>设备已离线</b><span>正在等待自动恢复连接。</span></div>'
+          + btn('立即重试', { small: true, kind: 'ghost', action: 'resend' })
           + '</div>';
       } else if (netlost) {
         topBanner = banner({ kind: 'warn', icon: 'wifioff', title: '网络已断开',
@@ -1119,6 +1119,20 @@
         clearTimeout(liveBootstrapTimer);
         if (!liveStopped && live) liveBootstrapTimer = setTimeout(liveBootstrap, ms);
       }
+      async function recoverLiveAuth() {
+        if (!T || typeof T.ensureToken !== 'function') return false;
+        try {
+          setSessionStatus('正在恢复认证…');
+          await T.ensureToken(true);
+          live = true;
+          refreshHermesModelControls(true);
+          return true;
+        } catch (e) {
+          live = false;
+          setSessionStatus('暂时无法连接 Kissne');
+          return false;
+        }
+      }
       async function livePoll() {
         if (!live || liveStopped) return;
         try {
@@ -1132,7 +1146,10 @@
           if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
           scheduleLivePoll(payload && payload.has_more ? 30 : 850);
         } catch (err) {
-          if (err && err.status === 401) { live = false; location.hash = '#/connect'; return; }
+          if (err && err.status === 401) {
+            live = false;
+            if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
+          }
           scheduleLivePoll(1800);
         }
       }
@@ -1154,11 +1171,12 @@
           else liveSetCancel(false);
           scheduleLivePoll(0);
         } catch (err) {
-          if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
-          else {
-            setSessionStatus('正在重新连接…');
-            scheduleLiveBootstrap(1200);
+          if (err && err.status === 401) {
+            live = false;
+            if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
+          setSessionStatus('正在重新连接…');
+          scheduleLiveBootstrap(1200);
         }
       }
       async function liveCancel() {
@@ -1211,7 +1229,12 @@
             input.value = v;
             append(aiMsg(icon('alert', 15) + '<span>消息发送失败，点击发送可安全重试。</span>',
               'is-failed', clockNow(), '没连上', 'sad'));
-            if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
+            if (err && err.status === 401) {
+              live = false;
+              if (await recoverLiveAuth()) {
+                setSessionStatus('认证已恢复，请再次点击发送。');
+              }
+            }
           }
           return;
         }
@@ -1402,7 +1425,23 @@
         }
       }
 
-      if (live) liveBootstrap();
+      async function startLiveTransport() {
+        if (!T) {
+          live = false;
+          setSessionStatus('Mobile Transport 不可用');
+          return;
+        }
+        try {
+          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          live = true;
+          refreshHermesModelControls(true);
+          liveBootstrap();
+        } catch (err) {
+          live = false;
+          setSessionStatus('暂时无法连接 Kissne');
+        }
+      }
+      startLiveTransport();
 
       function onKey(e) { if (e.key === 'Enter') push(); }
       input.addEventListener('keydown', onKey);
