@@ -24,7 +24,10 @@
   var COLD = true;
   var splashTimer = null;
   var SPLASH_MS = 12000;         /* 正式开屏约 7.4s；12s 仅作为素材解码失败时的兜底 */
-  var SPLASH_NEXT = '#/home';     /* 开屏结束后固定进入入口页 */
+  function splashNext() {
+    var T = window.KissneTransport;
+    return T && typeof T.hasToken === 'function' && T.hasToken() ? '#/home' : '#/connect';
+  }
 
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {
@@ -68,7 +71,7 @@
     if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
     COLD = false;
     clearTimeout(splashTimer);
-    nav(SPLASH_NEXT);
+    nav(splashNext());
   });
 
   /* ---------------- 手机外壳 ---------------- */
@@ -198,7 +201,7 @@
       if (screen.id === 'welcome' && state === 'animate' && COLD) {
         splashTimer = setTimeout(function () {
           COLD = false;
-          nav(SPLASH_NEXT);
+          nav(splashNext());
         }, SPLASH_MS);
       }
     }
