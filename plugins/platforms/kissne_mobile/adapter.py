@@ -536,7 +536,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
         in-place.  Since the Android client re-fetches by cursor, a new delta with the same
         ``draft_id`` replaces the previous text in the client's view.
         """
-        extra: Dict[str, Any] = {"draft_id": 0, "edited_message_id": message_id}
+        # Gateway progress edits are operational/tool status, not assistant answer text.
+        # Preserve them in the typed event stream for observability, but mark their presentation
+        # so Mobile never renders terminal commands, tool internals, or hidden reasoning as chat.
+        extra: Dict[str, Any] = {
+            "draft_id": 0,
+            "edited_message_id": message_id,
+            "presentation": "tool_progress",
+        }
         new_id = await self._queue_event(chat_id, EVENT_DELTA, content=content, extra=extra)
         if new_id is None:
             return SendResult(success=False, error="missing target installation")
