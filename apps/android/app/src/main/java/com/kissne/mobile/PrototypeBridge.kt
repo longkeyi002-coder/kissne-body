@@ -21,6 +21,9 @@ class PrototypeBridge(
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
     private val controlExecutor = Executors.newFixedThreadPool(2)
 
+    @Volatile private var bootstrapCacheJson: String? = null
+    @Volatile private var bootstrapCacheToken: String? = null
+
     private fun baseUrl(): String = store.apiBase.ifBlank { BuildConfig.MOBILE_BASE_URL }.trimEnd('/')
 
     private fun client(): MobileTransportClient = MobileTransportClient(
@@ -37,10 +40,50 @@ class PrototypeBridge(
 
     @JavascriptInterface fun installationId(): String = store.installationId()
     @JavascriptInterface fun hasToken(): Boolean = !store.deviceToken.isNullOrBlank()
-    @JavascriptInterface fun isConnected(): Boolean =
-        !store.deviceToken.isNullOrBlank() && store.connectionReady
-    @JavascriptInterface fun clearToken() = store.clearToken()
+    @JavascriptInterface fun hasBootstrapCache(): Boolean =
+        cachedBootstrapPayload() != null
+
+    @JavascriptInterface fun isConnected(): Boolean = hasBootstrapCache()
+
+    @JavascriptInterface fun clearToken() {
+        invalidateBootstrapCache()
+        store.clearToken()
+    }
     @JavascriptInterface fun getCursor(): Long = store.cursor
+
+    private fun cachedBootstrapPayload(): JSONObject? {
+        val token = store.deviceToken?.takeIf { it.isNotBlank() } ?: return null
+        if (bootstrapCacheToken != token) return null
+        val raw = bootstrapCacheJson ?: return null
+        return try {
+            JSONObject(raw).put("cached", true)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    @Synchronized
+    private fun invalidateBootstrapCache(clearPersistedMetadata: Boolean = true) {
+        bootstrapCacheJson = null
+        bootstrapCacheToken = null
+        if (clearPersistedMetadata) store.clearBootstrapSession()
+    }
+
+    @Synchronized
+    private fun rememberBootstrap(payload: JSONObject): JSONObject {
+        val bound = payload.optBoolean("bound", false)
+        if (!bound) {
+            invalidateBootstrapCache()
+            return payload
+        }
+        val conversation = payload.optJSONObject("conversation") ?: JSONObject()
+        val sessionId = conversation.optString("session_id").takeIf { it.isNotBlank() }
+        val sessionKey = conversation.optString("session_key").takeIf { it.isNotBlank() }
+        bootstrapCacheJson = payload.toString()
+        bootstrapCacheToken = store.deviceToken
+        store.saveBootstrapSession(sessionId, sessionKey)
+        return payload
+    }
 
     @Synchronized
     private fun ensureDeviceToken(force: Boolean = false): JSONObject {
@@ -73,6 +116,7 @@ class PrototypeBridge(
                 .put("installation_id", store.installationId())
                 .put("existing", true)
         }
+        invalidateBootstrapCache()
         store.invalidateToken()
         return ensureDeviceToken(force = true)
     }
@@ -110,14 +154,19 @@ class PrototypeBridge(
                 )
                 val returnedToken = selected.optString("device_token")
                 if (returnedToken.isNotBlank() && returnedToken != store.deviceToken) {
+                    invalidateBootstrapCache()
                     store.saveToken(returnedToken)
+                } else {
+                    invalidateBootstrapCache()
                 }
                 selected
             }
             "bootstrap" -> {
-                val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
-                store.markConnectionReady(true)
-                boot
+                val force = body.optBoolean("force", false)
+                if (!force) {
+                    cachedBootstrapPayload()?.let { return it }
+                }
+                rememberBootstrap(client().bootstrapPayload(body.optLong("cursor", store.cursor)))
             }
             "sendText" -> client().sendPayload(
                 messageId = body.optString("message_id"),
@@ -143,6 +192,7 @@ class PrototypeBridge(
             )
             "revoke" -> {
                 val result = client().revoke()
+                invalidateBootstrapCache()
                 store.clearToken()
                 result
             }
@@ -195,6 +245,7 @@ class PrototypeBridge(
 
                 if (firstStatus == 401 && shouldRecoverUnauthorized(action)) {
                     try {
+                        invalidateBootstrapCache()
                         /*
                          * auto_pair contract: POST /mobile/pair with installation_id only.
                          * No pairing_code or extra rotation field is sent.
@@ -203,6 +254,12 @@ class PrototypeBridge(
                          * in EncryptedSharedPreferences without resetting the cursor.
                          */
                         refreshDeviceTokenAfterUnauthorized(failedToken)
+                        if (action != "bootstrap") {
+                            executeAction(
+                                "bootstrap",
+                                JSONObject().put("cursor", store.cursor).put("force", true),
+                            )
+                        }
                         resolve(id, true, executeAction(action, body))
                         return@execute
                     } catch (retryError: Throwable) {
