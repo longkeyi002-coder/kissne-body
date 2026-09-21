@@ -23,7 +23,7 @@
      在应用内切回 #/welcome 不会重播。 */
   var COLD = true;
   var splashTimer = null;
-  var SPLASH_MS = 9000;          /* 动画 2.9s + 停留 0.7s */
+  var SPLASH_MS = 12000;         /* 正式开屏约 7.4s；12s 仅作为素材解码失败时的兜底 */
   var SPLASH_NEXT = '#/connect';  /* 无凭据 / bootstrap 失败时的落点 */
   var splashTarget = null;
   function resolveSplashTarget() {
@@ -75,6 +75,15 @@
     location.hash = '#' + cur.path + '?' + p.toString();
   }
 
+  /* 正式开屏页自然播放结束后立即跳转；保留 SPLASH_MS 仅作兜底。 */
+  document.addEventListener('kissne:splash-end', function () {
+    var cur = parseHash();
+    if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
+    COLD = false;
+    clearTimeout(splashTimer);
+    resolveSplashTarget().then(function (to) { nav(to || SPLASH_NEXT); });
+  });
+
   /* ---------------- 手机外壳 ---------------- */
   function statusbar() {
     return '<div class="statusbar"><span class="statusbar__time">9:41</span>'
@@ -95,7 +104,7 @@
        和底栏一样挂在**外壳层**，所以切任何页面都在。由页面层提供内容（K.activityPill）。 */
     var pill = (interactive !== false && K.activityPill) ? K.activityPill() : '';
     return '<div class="phone' + (interactive === false ? ' is-static' : '') + '">'
-      + statusbar()
+      + (screen.id === 'welcome' ? '' : statusbar())
       + pill
       + '<div class="phone__screen">' + screen.render(ctx) + '</div>'
       + (showTab ? K.tabbar(screen.tab) : '')

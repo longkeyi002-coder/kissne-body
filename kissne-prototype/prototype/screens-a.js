@@ -15,151 +15,34 @@
      ===================================================================== */
   K.registerScreen({
     no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
-    purpose: '按真实素材对象编排的连续开屏：Logo、胶囊、球、带球角色、动作帧、双人贴贴。',
+    purpose: '正式开屏动画：Kiss + ne 融合成蓝绿球，分裂并化成叶青栩与小羊，最终双人贴贴定格。',
     out: ['#/connect'],
     states: [
-      { key: 'final',   label: '定格 · 双人贴贴' },
+      { key: 'final', label: '定格 · 双人贴贴' },
       { key: 'animate', label: '播放完整开屏动画' },
-      { key: 'intro',   label: '定格 · 只有 Logo' }
+      { key: 'intro', label: '定格 · 开场 Logo' }
     ],
-    render: function () {
-      return `
-      <div class="screen screen--splash">
-        <div class="splash-redesign" data-splash-redesign>
-          <canvas class="splash-redesign__canvas" aria-label="Kissne 开屏动画"></canvas>
-        </div>
-      </div>`;
+    render: function (ctx) {
+      var state = (ctx && ctx.state) || 'final';
+      return '<div class="screen screen--splash">'
+        + '<iframe class="splash-embed" data-splash-embed src="splash/index.html?mode='
+        + encodeURIComponent(state) + '&v=20260921b" title="Kissne 开屏动画" aria-label="Kissne 开屏动画"></iframe>'
+        + '</div>';
     },
     mount: function (root, ctx) {
-      var stage = root.querySelector('[data-splash-redesign]');
-      var canvas = stage && stage.querySelector('canvas');
-      if (!stage || !canvas) return null;
-      var g = canvas.getContext('2d');
-      var state = ctx.state || 'final';
-      var disposed = false, raf = 0, dpr = 1;
-      var started = performance.now();
-      var v = '20260921a';
-      var manifest = {
-        logo: ['logo/frame-0.webp','logo/frame-1.webp','logo/frame-2.webp','logo/frame-3.webp'],
-        fox: [], sheep: [], duo: [],
-        pills: ['orbs/blue-pill.webp','orbs/green-pill.webp'],
-        orbs: ['orbs/orb-pair.webp','orbs/orb-pair-stands.webp'],
-        foxOrb: ['characters/fox-with-orb.webp'],
-        sheepOrb: ['characters/sheep-with-orb.webp'],
-        duoFinal: ['characters/duo-final.webp']
-      };
-      for (var n = 0; n < 8; n++) {
-        manifest.fox.push('frames/fox/frame-' + n + '.webp');
-        manifest.sheep.push('frames/sheep/frame-' + n + '.webp');
-        manifest.duo.push('frames/duo/frame-' + n + '.webp');
-      }
-      var images = {};
-      var loadCount = 0, total = 0;
-      function resize() {
-        var r = stage.getBoundingClientRect();
-        dpr = Math.min(window.devicePixelRatio || 1, 2);
-        canvas.width = Math.max(1, Math.round(r.width * dpr));
-        canvas.height = Math.max(1, Math.round(r.height * dpr));
-        canvas.style.width = r.width + 'px';
-        canvas.style.height = r.height + 'px';
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      }
-      function loadAll() {
-        Object.keys(manifest).forEach(function (group) {
-          images[group] = [];
-          manifest[group].forEach(function (path, i) {
-            total++;
-            var img = new Image();
-            img.onload = function () { loadCount++; };
-            img.src = 'assets/real/splash-generated/' + path + '?v=' + v;
-            images[group][i] = img;
-          });
-        });
-      }
-      function img(group, i) {
-        var list = images[group] || [];
-        return list[Math.max(0, Math.min(list.length - 1, i))];
-      }
-      function ease(t) {
-        return t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-      }
-      function fit(source, x, y, w, h, alpha) {
-        if (!source || !source.naturalWidth) return;
-        var s = Math.min(w / source.naturalWidth, h / source.naturalHeight);
-        var dw = source.naturalWidth * s, dh = source.naturalHeight * s;
-        g.globalAlpha = alpha == null ? 1 : alpha;
-        g.drawImage(source, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-        g.globalAlpha = 1;
-      }
-      function cross(p) {
-        return Math.max(0, Math.min(1, p < .5 ? p * 2 : (1 - p) * 2));
-      }
-      function drawLogo(t, w, h) {
-        var p = Math.min(1, t / 2200);
-        var i = Math.min(3, Math.floor(p * 4));
-        fit(img('logo', i), w * .12, h * .28, w * .76, h * .22, 1);
-      }
-      function drawPills(t, w, h) {
-        var p = Math.max(0, Math.min(1, (t - 1900) / 1100));
-        var q = ease(p);
-        var size = Math.min(120, w * .28);
-        fit(img('pills', 0), w * .16 - (1 - q) * 55, h * .43, size, size * .48, p);
-        fit(img('pills', 1), w * .56 + (1 - q) * 55, h * .43, size, size * .48, p);
-      }
-      function drawOrbs(t, w, h) {
-        var p = Math.max(0, Math.min(1, (t - 2800) / 1300));
-        var q = ease(p);
-        fit(img('orbs', p < .58 ? 0 : 1), w * .16, h * .40 - q * 5, w * .68, h * .25, p);
-      }
-      function drawOrbCharacters(t, w, h) {
-        var p = Math.max(0, Math.min(1, (t - 3900) / 1500));
-        var q = ease(p);
-        var size = Math.min(165, w * .43);
-        fit(img('foxOrb', 0), -size * .62 + q * (w * .18), h * .48, size, size * .62, p);
-        fit(img('sheepOrb', 0), w - size * .38 - q * (w * .18), h * .48, size, size * .62, p);
-      }
-      function drawActors(t, w, h) {
-        var p = Math.max(0, Math.min(1, (t - 5000) / 1900));
-        var q = ease(p);
-        var i = Math.min(7, Math.floor(p * 8));
-        var size = Math.min(155, w * .39);
-        fit(img('fox', i), -size * .65 + q * (w * .43), h * .42, size, size, 1);
-        fit(img('sheep', i), w - size * .35 - q * (w * .43), h * .42, size, size, 1);
-      }
-      function drawDuo(t, w, h) {
-        var p = Math.max(0, Math.min(1, (t - 6800) / 1900));
-        var i = Math.min(7, Math.floor(p * 8));
-        fit(img('duo', i), w * .08, h * .43, w * .84, h * .30, Math.min(1, p * 4));
-      }
-      function draw(now) {
-        if (disposed) return;
-        var r = stage.getBoundingClientRect(), w = r.width, h = r.height;
-        if (!canvas.width || canvas.width !== Math.round(w * dpr)) resize();
-        g.clearRect(0, 0, w, h);
-        g.fillStyle = '#fff';
-        g.fillRect(0, 0, w, h);
-        var t = now - started;
-        if (state === 'intro') drawLogo(800, w, h);
-        else if (state === 'final') fit(img('duoFinal', 0), w * .08, h * .42, w * .84, h * .32, 1);
-        else {
-          drawLogo(t, w, h);
-          drawPills(t, w, h);
-          drawOrbs(t, w, h);
-          drawOrbCharacters(t, w, h);
-          drawActors(t, w, h);
-          drawDuo(t, w, h);
-        }
-        raf = requestAnimationFrame(draw);
-      }
-      resize();
-      loadAll();
-      window.addEventListener('resize', resize);
-      raf = requestAnimationFrame(draw);
-      return function () {
-        disposed = true;
-        cancelAnimationFrame(raf);
-        window.removeEventListener('resize', resize);
-      };
+      var frame = root.querySelector('[data-splash-embed]');
+      if (!frame || !ctx || ctx.state !== 'animate') return null;
+      var disposed = false, ended = false;
+      var poll = setInterval(function () {
+        if (disposed || ended) return;
+        try {
+          if (frame.contentWindow && frame.contentWindow.__finished === true) {
+            ended = true;
+            document.dispatchEvent(new CustomEvent('kissne:splash-end'));
+          }
+        } catch (e) {}
+      }, 80);
+      return function () { disposed = true; clearInterval(poll); };
     }
   });
 
