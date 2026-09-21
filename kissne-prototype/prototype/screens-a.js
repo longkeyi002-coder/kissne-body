@@ -34,16 +34,24 @@
       var frame = root.querySelector('[data-splash-embed]');
       if (!frame || !ctx || ctx.state !== 'animate') return null;
       var disposed = false, ended = false;
+      frame.style.pointerEvents = 'none';
+      function finishNow() {
+        if (disposed || ended) return;
+        ended = true;
+        document.dispatchEvent(new CustomEvent('kissne:splash-end'));
+      }
+      root.addEventListener('click', finishNow);
       var poll = setInterval(function () {
         if (disposed || ended) return;
         try {
-          if (frame.contentWindow && frame.contentWindow.__finished === true) {
-            ended = true;
-            document.dispatchEvent(new CustomEvent('kissne:splash-end'));
-          }
+          if (frame.contentWindow && frame.contentWindow.__finished === true) finishNow();
         } catch (e) {}
       }, 80);
-      return function () { disposed = true; clearInterval(poll); };
+      return function () {
+        disposed = true;
+        clearInterval(poll);
+        root.removeEventListener('click', finishNow);
+      };
     }
   });
 
