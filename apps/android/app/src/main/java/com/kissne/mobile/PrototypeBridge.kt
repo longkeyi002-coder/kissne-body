@@ -75,7 +75,7 @@ class PrototypeBridge(
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         val executor = when (action) {
-            "modelOptions", "setModel",
+            "modelOptions", "setModel", "selectSession",
             "adminStatus", "adminMerge", "adminRollback", "adminDeployLog" -> controlExecutor
             else -> transportExecutor
         }
@@ -88,6 +88,16 @@ class PrototypeBridge(
                         ensureDeviceToken(body.optBoolean("force", false))
                     }
                     "sessions" -> client().sessionsPayload()
+                    "selectSession" -> {
+                        val sessionKey = body.optString("session_key")
+                        if (sessionKey.isBlank()) throw IllegalArgumentException("session_key_required")
+                        val selected = client().pairPayload(store.installationId(), sessionKey)
+                        val returnedToken = selected.optString("device_token")
+                        if (returnedToken.isNotBlank() && returnedToken != store.deviceToken) {
+                            store.saveToken(returnedToken)
+                        }
+                        selected
+                    }
                     "bootstrap" -> {
                         val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
                         store.markConnectionReady(true)
@@ -138,7 +148,7 @@ class PrototypeBridge(
                  * mobile transport. Core transport 401s still clear the token.
                  */
                 val coreAuthAction = action in setOf(
-                    "sessions", "bootstrap", "sendText", "poll", "ack",
+                    "sessions", "selectSession", "bootstrap", "sendText", "poll", "ack",
                     "cancel", "approval", "revoke",
                 )
                 if (status == 401 && coreAuthAction) store.clearToken()
