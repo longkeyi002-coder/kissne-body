@@ -33,7 +33,11 @@ class MainActivity : AppCompatActivity() {
             isAppearanceLightNavigationBars = true
         }
 
-        val store = MobileSessionStore(this)
+        val store = MobileSessionStore(this).apply {
+            // Connection settings were removed. Do not keep a stale server URL
+            // from older builds in EncryptedSharedPreferences.
+            apiBase = BuildConfig.MOBILE_BASE_URL
+        }
         updateManager = UpdateManager(this)
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
