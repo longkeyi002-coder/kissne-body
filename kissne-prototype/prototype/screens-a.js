@@ -652,7 +652,7 @@
     }).join('')
       + '<div class="tlog__kv"><span>状态</span><b data-tool-status>'
       + (status || ('已完成 · ' + (cost || '0.8s'))) + '</b></div>';
-    return tlogBlock('tool', '调用工具 · ' + name', kv, open);
+    return tlogBlock('tool', '调用工具 · ' + name, kv, open);
   }
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
