@@ -87,6 +87,9 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
+      selectSession: function (sessionKey) {
+        return nativeCall('selectSession', { session_key: String(sessionKey || '') });
+      },
       bootstrap: function () { return nativeCall('bootstrap', { cursor: Number(Native.getCursor()) || 0 }); },
       sendText: function (text, messageId) {
         return nativeCall('sendText', {
@@ -223,6 +226,20 @@
     return pair({});
   }
   function sessions() { return request('/mobile/sessions', { method: 'GET' }); }
+  async function selectSession(sessionKey) {
+    var key = String(sessionKey || '').trim();
+    if (!key) throw new ApiError(400, { error: 'session_key_required' }, 'session_key_required');
+    var oldToken = deviceToken();
+    var out = await request('/mobile/pair', {
+      method: 'POST',
+      body: { installation_id: installationId(), session_key: key },
+      auth: false
+    });
+    if (out.device_token && out.device_token !== oldToken) {
+      set(KEY.token, out.device_token);
+    }
+    return out;
+  }
   function bootstrap() { return request('/mobile/bootstrap', { method: 'POST', body: { cursor: cursor() } }); }
   function makeMessageId() {
     var r = '';
@@ -299,6 +316,7 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
     poll: poll,
