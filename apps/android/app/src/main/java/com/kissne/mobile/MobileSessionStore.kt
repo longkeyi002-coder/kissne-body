@@ -19,9 +19,6 @@ class MobileSessionStore(context: Context) {
     val deviceToken: String?
         get() = prefs.getString("device_token", null)
 
-    val connectionReady: Boolean
-        get() = prefs.getBoolean("connection_ready", false)
-
     val cachedSessionId: String?
         get() = prefs.getString("bootstrap_session_id", null)
 
@@ -83,11 +80,6 @@ class MobileSessionStore(context: Context) {
             .remove("bootstrap_session_id")
             .remove("bootstrap_session_key")
             .apply()
-    }
-
-    fun markConnectionReady(ready: Boolean) {
-        if (ready) prefs.edit().putBoolean("connection_ready", true).apply()
-        else clearBootstrapSession()
     }
 
     fun clearToken() {
