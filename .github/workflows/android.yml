@@ -65,8 +65,13 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)
           test -n "$APKSIGNER"
-          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          printf '%s\n' "$CERTS"
+          ACTUAL=$(printf '%s\n' "$CERTS" \
+            | grep -i 'certificate SHA-256 digest' \
+            | head -1 \
+            | sed 's/.*: //' \
+            | tr -d ':' \
             | tr '[:lower:]' '[:upper:]')
           EXPECTED="4A25EFA335E2A006D200C42421DA2A33287C422D79671C82EEE2992AAAD2CF63"
           test "$ACTUAL" = "$EXPECTED" || {
