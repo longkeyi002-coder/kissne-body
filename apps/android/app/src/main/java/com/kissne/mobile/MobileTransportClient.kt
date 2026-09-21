@@ -63,7 +63,7 @@ class MobileTransportClient(
     }
 
     fun sessionsPayload(): JSONObject =
-        request("GET", "/sessions")
+        request("GET", "/admin/sessions", adminRoot = true)
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
