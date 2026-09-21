@@ -81,6 +81,38 @@ def test_queued_replies_are_typed_events_with_turn_correlation(tmp_path):
         f"event sequence numbers must be strictly increasing: {seqs}")
 
 
+def test_send_without_reply_anchor_does_not_close_ambiguous_pending_turn(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                first = await _open_turn(port, token, text="first", message_id="m-turn-1")
+                second = await _open_turn(port, token, text="second", message_id="m-turn-2")
+                await adapter.send(INSTALLATION, "unanchored status")
+                payload = await _drain(port, token, 0)
+                first_row = store.turn(first["turn_id"])
+                second_row = store.turn(second["turn_id"])
+            finally:
+                await stop(adapter)
+        return first, second, payload, first_row, second_row
+
+    first, second, payload, first_row, second_row = run(scenario())
+    notices = [event for event in payload.get("events") or []
+               if event.get("text") == "unanchored status"]
+    assert len(notices) == 1 and notices[0].get("type") == "notice", (
+        f"ambiguous unanchored send must stay a notice: {payload.get('events')}")
+    assert notices[0].get("turn_id") is None, (
+        f"ambiguous notice must not claim either pending turn: {notices[0]}")
+    assert first_row.get("state") == "pending" and second_row.get("state") == "pending", (
+        "an unanchored send with multiple pending turns must not complete either turn: "
+        f"{first_row}, {second_row}")
+
+
 def test_incremental_deltas_are_distinguishable_from_the_final_reply(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
