@@ -331,6 +331,43 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     _fingerprint(installation), target_key)
         return True
 
+    def bind_conversation_id(self, installation_id: str, session_id: str) -> bool:
+        """Resume one historical Mobile-owned Hermes conversation by its stable session id."""
+        store = getattr(self, "_session_store", None)
+        installation = str(installation_id or "").strip()
+        target_id = str(session_id or "").strip()
+        if store is None or not installation or not target_id:
+            return False
+
+        try:
+            owned = {
+                str(row.get("id") or row.get("session_id") or "").strip()
+                for row in self._mobile_history_sessions(installation)
+                if not bool(row.get("archived"))
+            }
+        except Exception:
+            logger.warning("[kissne_mobile] failed to enumerate conversations for %s",
+                           _fingerprint(installation), exc_info=True)
+            return False
+        if target_id not in owned:
+            logger.warning("[kissne_mobile] refusing foreign/archived session id %s for installation %s",
+                           _fingerprint(target_id), _fingerprint(installation))
+            return False
+
+        route_key = self.mobile_session_key(installation)
+        current = store.peek_session_id(route_key)
+        if current == target_id:
+            return True
+        if current is None and not self.ensure_initial_conversation(installation):
+            return False
+        try:
+            entry = store.switch_session(route_key, target_id)
+        except Exception:
+            logger.warning("[kissne_mobile] failed to resume session id %s for installation %s",
+                           _fingerprint(target_id), _fingerprint(installation), exc_info=True)
+            return False
+        return bool(entry is not None and entry.session_id == target_id)
+
     def ensure_initial_conversation(self, installation_id: str) -> bool:
         """Create the first Runtime Conversation for a fresh installation when needed.
 
@@ -891,8 +928,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # so rotate the credential atomically from the client's point of view.
             existing = store.lookup_installation(installation)
             if existing is not None:
+                conversation_id = str(body.get("session_id") or "").strip()
                 conversation_key = str(body.get("session_key") or "").strip()
-                if conversation_key:
+                if conversation_id:
+                    bound = await asyncio.to_thread(self.bind_conversation_id, installation, conversation_id)
+                elif conversation_key:
                     bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
                 else:
                     bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
@@ -907,8 +947,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 })
             # New installation — create token directly without pairing code
             token = await asyncio.to_thread(store.create_device_token, installation)
+            conversation_id = str(body.get("session_id") or "").strip()
             conversation_key = str(body.get("session_key") or "").strip()
-            if conversation_key:
+            if conversation_id:
+                bound = await asyncio.to_thread(self.bind_conversation_id, installation, conversation_id)
+            elif conversation_key:
                 bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
             else:
                 bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
@@ -938,8 +981,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except ValueError as exc:
             return _error_response(f"bad_request: {exc}", 400)
 
+        conversation_id = str(body.get("session_id") or "").strip()
         conversation_key = str(body.get("session_key") or "").strip()
-        if conversation_key:
+        if conversation_id:
+            bound = await asyncio.to_thread(self.bind_conversation_id, installation, conversation_id)
+        elif conversation_key:
             bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
         else:
             # Pairing is the lifecycle boundary that establishes the fresh installation's
