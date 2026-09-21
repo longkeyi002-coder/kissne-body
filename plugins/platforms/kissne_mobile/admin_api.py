@@ -295,65 +295,56 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
 
 # --- GET /admin/sessions ---
 async def _handle_admin_sessions(request: Any) -> Any:
-    """Return the dashboard-equivalent Hermes conversation list for this runtime/profile."""
+    """Return all Hermes conversations from the same state.db used by the dashboard."""
     from aiohttp import web
+    import sqlite3 as _sqlite3
 
     installation = await _authenticated_admin(request)
     if not installation:
         return web.json_response({"error": "unauthorized"}, status=401)
 
     adapter = _adapter_ref
-    if adapter is None:
-        return web.json_response({"error": "adapter not ready"}, status=503)
+    active_id = ""
+    if adapter is not None:
+        session_store = getattr(adapter, "_session_store", None)
+        if session_store is not None:
+            try:
+                route_key = adapter.mobile_session_key(installation)
+                active_entry = session_store.lookup_by_session_key(route_key)
+                active_id = str(getattr(active_entry, "session_id", "") or "")
+            except Exception:
+                logger.debug("[kissne_mobile] could not resolve active mobile session", exc_info=True)
 
-    session_store = getattr(adapter, "_session_store", None)
-    if session_store is None:
-        return web.json_response({"error": "session store not available"}, status=503)
-
+    sessions = []
+    state_db_path = str(Path.home() / ".hermes" / "state.db")
     try:
-        route_key = adapter.mobile_session_key(installation)
-        db = session_store._db_for_key(route_key)
-        if db is None or not hasattr(db, "list_sessions_rich"):
-            return web.json_response({"ok": True, "installation_id": installation, "sessions": []})
-
-        active_entry = session_store.lookup_by_session_key(route_key)
-        active_id = str(getattr(active_entry, "session_id", "") or "")
-        rows = await asyncio.to_thread(
-            db.list_sessions_rich,
-            source=None,
-            include_archived=True,
-            include_children=True,
-            project_compression_tips=True,
-            order_by_last_active=True,
-            limit=500,
-            offset=0,
-            compact_rows=True,
-        )
-        sessions = []
-        seen = set()
-        for row in rows:
-            session_id = str(row.get("id") or row.get("session_id") or "").strip()
-            if not session_id or session_id in seen:
-                continue
-            seen.add(session_id)
-            key = str(row.get("session_key") or "")
-            preview = str(row.get("preview") or "").strip()
-            title = str(row.get("title") or row.get("display_name") or "").strip()
-            if not title:
-                title = preview[:42] + ("…" if len(preview) > 42 else "")
-            sessions.append({
-                "session_id": session_id,
-                "session_key": key,
-                "title": title or "未命名会话",
-                "created_at": row.get("started_at") or row.get("created_at"),
-                "last_active": row.get("last_active") or row.get("updated_at"),
-                "message_count": row.get("message_count", 0),
-                "source": row.get("source", ""),
-                "active": session_id == active_id,
-                "archived": bool(row.get("archived")),
-            })
+        conn = _sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=3)
+        try:
+            rows = conn.execute(
+                "SELECT id, source, user_id, message_count, started_at, model "
+                "FROM sessions ORDER BY started_at DESC LIMIT 500"
+            ).fetchall()
+            for row in rows:
+                session_id = str(row[0] or "")
+                if not session_id:
+                    continue
+                source = str(row[1] or "")
+                user_id = str(row[2] or "")
+                sessions.append({
+                    "session_id": session_id,
+                    "session_key": "",
+                    "title": f"{source or '?'}: {user_id or 'local'}",
+                    "created_at": row[4],
+                    "last_active": row[4],
+                    "message_count": row[3] or 0,
+                    "source": source,
+                    "model": row[5] or "",
+                    "active": session_id == active_id,
+                })
+        finally:
+            conn.close()
     except Exception as exc:
-        logger.warning("[kissne_mobile] failed to list sessions: %s", exc, exc_info=True)
+        logger.warning("[kissne_mobile] sessions query failed: %s", exc, exc_info=True)
         return web.json_response({"error": "sessions_unavailable"}, status=503)
 
     return web.json_response({
