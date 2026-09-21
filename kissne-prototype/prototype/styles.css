@@ -1122,6 +1122,19 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 /* 真机键盘交给 visual viewport / 浏览器调整可视区域；
    输入区留在正常 flex 文档流中，不再计算或缓存键盘高度。 */
 .screen--chat.is-typing .composerwrap{transform:none}
+.chatstatus{
+  flex:none;
+  align-self:center;
+  margin:4px 14px 0;
+  padding:4px 9px;
+  border-radius:999px;
+  background:rgba(20,20,25,.05);
+  color:var(--ink-3);
+  font-size:9.5px;
+  line-height:1.35;
+  text-align:center;
+}
+.chatstatus[hidden]{display:none!important}
 
 /* 聊天页内嵌的表情面板：**只占两排、横向可滚**，不遮住整页消息 */
 .stkpanel{
