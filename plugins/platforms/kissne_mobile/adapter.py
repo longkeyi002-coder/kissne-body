@@ -565,29 +565,38 @@ class KissneMobileAdapter(BasePlatformAdapter):
             yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     async def _handle_model_options(self, request: web.Request) -> web.Response:
-        """GET /model-options — available models, efforts, current values."""
+        """GET /model-options — all models (same source as dashboard /api/model/options)."""
         identity = await self._authenticated_installation(request)
         if not identity:
             return _json_response({"error": "unauthorized"}, 401)
 
         cfg = self._read_hermes_config()
 
-        # --- models from providers ---
+        # Try hermes_cli inventory (dashboard's data source) for full model list
         models: list[str] = []
-        providers = cfg.get("providers", {})
-        for pname, pdef in providers.items():
-            if isinstance(pdef, dict):
-                for m in pdef.get("models", []):
-                    if m not in models:
-                        models.append(m)
+        current_model = cfg.get("model", {}).get("default", "")
+        try:
+            from hermes_cli.inventory import build_model_options_payload, load_picker_context
+            payload = await asyncio.to_thread(
+                build_model_options_payload, load_picker_context()
+            )
+            for provider in payload.get("providers", []):
+                if provider.get("is_current"):
+                    current_model = provider.get("current_model", current_model)
+                for m in provider.get("models", []):
+                    mid = m.get("id", "") if isinstance(m, dict) else str(m)
+                    if mid and mid not in models:
+                        models.append(mid)
+        except Exception as exc:
+            logger.warning("[kissne_mobile] model-options: hermes_cli fallback (%s)", exc)
+            for pname, pdef in cfg.get("providers", {}).items():
+                if isinstance(pdef, dict):
+                    for m in pdef.get("models", []):
+                        if m not in models:
+                            models.append(m)
+            if current_model and current_model not in models:
+                models.insert(0, current_model)
 
-        # also include the default model
-        default_model = cfg.get("model", {}).get("default", "")
-        if default_model and default_model not in models:
-            models.append(default_model)
-
-        # --- efforts ---
-        efforts = ["minimal", "low", "medium", "high"]
         current_effort = (
             cfg.get("agent", {}).get("reasoning_effort")
             or cfg.get("model", {}).get("reasoning_effort")
@@ -597,8 +606,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return _json_response({
             "ok": True,
             "models": models,
-            "efforts": efforts,
-            "current_model": default_model,
+            "efforts": ["minimal", "low", "medium", "high"],
+            "current_model": current_model,
             "current_effort": current_effort,
         })
 

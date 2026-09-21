@@ -259,33 +259,30 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
 
 # --- GET /admin/sessions ---
 async def _handle_admin_sessions(request: Any) -> Any:
-    """Return all sessions bound to this installation (the APP's conversation list)."""
+    """Return ALL sessions (dashboard-equivalent conversation list)."""
     from aiohttp import web
 
     installation = await _authenticated_admin(request)
     if not installation:
         return web.json_response({"error": "unauthorized"}, status=401)
 
-    adapter = _adapter_ref
-    if adapter is None:
-        return web.json_response({"error": "adapter not ready"}, status=503)
-
-    session_store = getattr(adapter, "_session_store", None)
-    if session_store is None:
-        return web.json_response({"error": "session store not available"}, status=503)
-
-    # Look up all sessions that belong to this installation
     sessions = []
+
+    # Strategy 1: gateway's session DB via runner (most reliable)
     try:
-        # Use the session store's list method, filter by installation_id in session_key
-        store = session_store._store if hasattr(session_store, '_store') else session_store
-        if hasattr(store, 'list_sessions_rich'):
-            all_sessions = store.list_sessions_rich(limit=200, compact_rows=True)
-            for s in all_sessions:
-                key = s.get("session_key", "")
-                if installation in key:
+        adapter = _adapter_ref
+        runner = getattr(adapter, "_runner", None) if adapter else None
+        session_db = getattr(runner, "_session_db", None) if runner else None
+        if session_db is not None:
+            raw_db = getattr(session_db, "_db", session_db)
+            if hasattr(raw_db, "list_sessions_rich"):
+                all_sessions = raw_db.list_sessions_rich(
+                    source=None, limit=200, order_by_last_active=True, compact_rows=True
+                )
+                for s in all_sessions:
                     sessions.append({
-                        "session_key": key,
+                        "session_id": s.get("session_id", ""),
+                        "session_key": s.get("session_key", ""),
                         "title": s.get("title", s.get("display_name", "")),
                         "created_at": s.get("created_at"),
                         "last_active": s.get("last_active"),
@@ -293,7 +290,29 @@ async def _handle_admin_sessions(request: Any) -> Any:
                         "source": s.get("source", ""),
                     })
     except Exception as exc:
-        logger.warning("[kissne_mobile] failed to list sessions: %s", exc, exc_info=True)
+        logger.warning("[kissne_mobile] sessions via runner failed: %s", exc, exc_info=True)
+
+    # Strategy 2: fallback to session store
+    if not sessions:
+        try:
+            adapter = _adapter_ref
+            session_store = getattr(adapter, "_session_store", None) if adapter else None
+            if session_store is not None:
+                store = getattr(session_store, "_store", session_store)
+                if hasattr(store, "list_sessions_rich"):
+                    all_sessions = store.list_sessions_rich(limit=200, compact_rows=True)
+                    for s in all_sessions:
+                        sessions.append({
+                            "session_id": s.get("session_id", ""),
+                            "session_key": s.get("session_key", ""),
+                            "title": s.get("title", s.get("display_name", "")),
+                            "created_at": s.get("created_at"),
+                            "last_active": s.get("last_active"),
+                            "message_count": s.get("message_count", 0),
+                            "source": s.get("source", ""),
+                        })
+        except Exception as exc:
+            logger.warning("[kissne_mobile] sessions via store failed: %s", exc, exc_info=True)
 
     return web.json_response({
         "ok": True,
