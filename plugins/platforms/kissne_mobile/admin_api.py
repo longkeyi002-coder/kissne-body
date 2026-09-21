@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ ADMIN_PATH_MERGE = "/admin/merge"
 ADMIN_PATH_ROLLBACK = "/admin/rollback"
 ADMIN_PATH_DEPLOY_LOG = "/admin/deploy-log"
 ADMIN_PATH_SESSIONS = "/admin/sessions"
+ADMIN_PATH_MEMORY = "/admin/memory"
 ADMIN_PATH_CONFIG = "/admin/config"
 
 INSTALL = Path("/home/admin/.hermes/hermes-agent")
@@ -111,6 +113,8 @@ def _register_admin_routes(app: Any) -> None:
     app.router.add_post(ADMIN_PATH_ROLLBACK, _handle_admin_rollback)
     app.router.add_get(ADMIN_PATH_DEPLOY_LOG, _handle_admin_deploy_log)
     app.router.add_get(ADMIN_PATH_SESSIONS, _handle_admin_sessions)
+    app.router.add_get(ADMIN_PATH_MEMORY, _handle_admin_memory)
+    app.router.add_delete(ADMIN_PATH_MEMORY + "/{memory_id}", _handle_admin_memory_delete)
     app.router.add_get(ADMIN_PATH_CONFIG, _handle_admin_config)
     app.router.add_post(ADMIN_PATH_CONFIG, _handle_admin_config_update)
 
@@ -291,7 +295,7 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
 
 # --- GET /admin/sessions ---
 async def _handle_admin_sessions(request: Any) -> Any:
-    """Return all sessions bound to this installation (the APP's conversation list)."""
+    """Return this installation's real Hermes conversations, newest first."""
     from aiohttp import web
 
     installation = await _authenticated_admin(request)
@@ -306,32 +310,134 @@ async def _handle_admin_sessions(request: Any) -> Any:
     if session_store is None:
         return web.json_response({"error": "session store not available"}, status=503)
 
-    # Look up all sessions that belong to this installation
-    sessions = []
     try:
-        # Use the session store's list method, filter by installation_id in session_key
-        store = session_store._store if hasattr(session_store, '_store') else session_store
-        if hasattr(store, 'list_sessions_rich'):
-            all_sessions = store.list_sessions_rich(limit=200, compact_rows=True)
-            for s in all_sessions:
-                key = s.get("session_key", "")
-                if installation in key:
-                    sessions.append({
-                        "session_key": key,
-                        "title": s.get("title", s.get("display_name", "")),
-                        "created_at": s.get("created_at"),
-                        "last_active": s.get("last_active"),
-                        "message_count": s.get("message_count", 0),
-                        "source": s.get("source", ""),
-                    })
+        route_key = adapter.mobile_session_key(installation)
+        db = session_store._db_for_key(route_key)
+        if db is None or not hasattr(db, "list_sessions_rich"):
+            return web.json_response({"ok": True, "installation_id": installation, "sessions": []})
+
+        active_entry = session_store.lookup_by_session_key(route_key)
+        active_id = str(getattr(active_entry, "session_id", "") or "")
+        rows = await asyncio.to_thread(
+            db.list_sessions_rich,
+            session_key=route_key,
+            include_archived=True,
+            include_children=True,
+            project_compression_tips=True,
+            order_by_last_active=True,
+            limit=500,
+            offset=0,
+            compact_rows=True,
+        )
+        sessions = []
+        seen = set()
+        for row in rows:
+            session_id = str(row.get("id") or row.get("session_id") or "").strip()
+            if not session_id or session_id in seen:
+                continue
+            seen.add(session_id)
+            key = str(row.get("session_key") or route_key)
+            preview = str(row.get("preview") or "").strip()
+            title = str(row.get("title") or row.get("display_name") or "").strip()
+            if not title:
+                title = preview[:42] + ("…" if len(preview) > 42 else "")
+            sessions.append({
+                "session_id": session_id,
+                "session_key": key,
+                "title": title or "未命名会话",
+                "created_at": row.get("started_at") or row.get("created_at"),
+                "last_active": row.get("last_active") or row.get("updated_at"),
+                "message_count": row.get("message_count", 0),
+                "source": row.get("source", ""),
+                "active": session_id == active_id,
+                "archived": bool(row.get("archived")),
+            })
     except Exception as exc:
         logger.warning("[kissne_mobile] failed to list sessions: %s", exc, exc_info=True)
+        return web.json_response({"error": "sessions_unavailable"}, status=503)
 
     return web.json_response({
         "ok": True,
         "installation_id": installation,
         "sessions": sessions,
     })
+
+
+def _memory_id(target: str, text: str) -> str:
+    return hashlib.sha256((target + "\0" + text).encode("utf-8")).hexdigest()[:24]
+
+
+def _builtin_memory_snapshot() -> list[dict[str, Any]]:
+    from tools.memory_tool import load_on_disk_store
+
+    store = load_on_disk_store()
+    items: list[dict[str, Any]] = []
+    for target, source in (("memory", "MEMORY.md"), ("user", "USER.md")):
+        if not store.target_enabled(target):
+            continue
+        for text in list(store._entries_for(target)):
+            value = str(text or "").strip()
+            if not value:
+                continue
+            items.append({
+                "id": _memory_id(target, value),
+                "target": target,
+                "source": source,
+                "text": value,
+                "deletable": True,
+            })
+    return items
+
+
+# --- GET/DELETE /admin/memory ---
+async def _handle_admin_memory(request: Any) -> Any:
+    """Expose only real built-in Hermes curated memories; never demo rows."""
+    from aiohttp import web
+
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        items = await asyncio.to_thread(_builtin_memory_snapshot)
+        return web.json_response({"ok": True, "items": items, "count": len(items)})
+    except Exception as exc:
+        logger.warning("[kissne_mobile] failed to read memory: %s", exc, exc_info=True)
+        return web.json_response({"error": "memory_unavailable"}, status=503)
+
+
+async def _handle_admin_memory_delete(request: Any) -> Any:
+    """Delete one exact built-in memory selected by its stable content id."""
+    from aiohttp import web
+    from tools.memory_tool import load_on_disk_store
+
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    memory_id = str(request.match_info.get("memory_id") or "").strip()
+    if not memory_id:
+        return web.json_response({"error": "memory_id_required"}, status=400)
+
+    try:
+        items = await asyncio.to_thread(_builtin_memory_snapshot)
+        item = next((entry for entry in items if entry["id"] == memory_id), None)
+        if item is None:
+            return web.json_response({"error": "memory_not_found"}, status=404)
+
+        def _delete() -> dict:
+            store = load_on_disk_store()
+            return store.remove(item["target"], item["text"])
+
+        result = await asyncio.to_thread(_delete)
+        if not bool(result.get("success")):
+            return web.json_response(
+                {"error": "memory_delete_failed", "detail": result.get("error", "")},
+                status=409,
+            )
+        return web.json_response({"ok": True, "deleted_id": memory_id})
+    except Exception as exc:
+        logger.warning("[kissne_mobile] failed to delete memory: %s", exc, exc_info=True)
+        return web.json_response({"error": "memory_delete_failed"}, status=500)
 
 
 async def _run_deploy(deploy_type: str, cmd: list[str], log_path: Path) -> None:
