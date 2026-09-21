@@ -296,6 +296,10 @@
   });
 
   window.addEventListener('hashchange', render);
+  document.addEventListener('kissne:model-options-updated', function () {
+    var cur = parseHash();
+    if (cur.path === '/chat') render();
+  });
 
   /* ---------------- 启动 ---------------- */
   /* ?shot=1 进入截图模式：手机框固定在视口左上角，便于按 390×844 裁切 */
