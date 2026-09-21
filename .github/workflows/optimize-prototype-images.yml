@@ -4,29 +4,21 @@ on:
   push:
     branches:
       - feat/kissne-prototype-20260919
-    paths:
-      - ".github/workflows/optimize-prototype-images.yml"
-      - "kissne-prototype/prototype/tools/optimize-images.py"
-      - "kissne-prototype/prototype/assets/real/**"
 
 permissions:
   contents: write
 
-concurrency:
-  group: prototype-image-optimizer
-  cancel-in-progress: true
-
 jobs:
   optimize:
-    if: ${{ !contains(github.event.head_commit.message, 'chore(prototype): optimize image assets') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          ref: feat/kissne-prototype-20260919
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
