@@ -105,6 +105,32 @@ def test_health_is_liveness_only(tmp_path):
         f"/health must stay a liveness probe and not describe a Conversation: {leaked_identity}")
 
 
+def test_auto_pair_accepts_installation_id_without_pairing_code(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter.set_session_store(build_session_store(home))
+            port = await start(adapter)
+            try:
+                status, payload, _ = await http(
+                    port,
+                    "POST",
+                    "/pair",
+                    body={"installation_id": "android-auto-pair"},
+                )
+            finally:
+                await stop(adapter)
+        return status, payload
+
+    status, payload = run(scenario())
+    assert status == 201, (
+        "default mobile pairing must accept installation_id without pairing_code; "
+        f"got {status}: {payload}"
+    )
+    assert payload.get("installation_id") == "android-auto-pair"
+    assert str(payload.get("device_token") or "").startswith("kbm1_")
+
+
 def test_pairing_never_hands_out_anything_but_a_device_token(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
