@@ -18,7 +18,9 @@
   /* ---------------- 冷启动开屏 ----------------
      冷启动（= 本次页面加载）才播放开屏动画，播完自动进下一页。
      在应用内切回 #/welcome 不会重播。 */
+  var SPLASH_SESSION_KEY = 'kissne.splash.consumed';
   var COLD = true;
+  try { COLD = sessionStorage.getItem(SPLASH_SESSION_KEY) !== '1'; } catch (e) {}
   var splashTimer = null;
   var SPLASH_MS = 9000;          /* 动画播放完成后的兜底计时 */
   function splashNext() {
@@ -30,6 +32,7 @@
   function finishSplash() {
     if (!COLD) return;
     COLD = false;
+    try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
     clearTimeout(splashTimer);
     /* 开屏是启动过渡，不属于 App 导航历史。
        replace 掉 welcome，后续连接页/首页返回时绝不会翻回开屏。 */
@@ -177,6 +180,7 @@
     }
     if (COLD && current.path !== '/welcome') {
       COLD = false;
+      try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
       clearTimeout(splashTimer);
     }
     var isOverview = current.path === '/overview';
@@ -313,11 +317,6 @@
   });
 
   window.addEventListener('hashchange', render);
-  document.addEventListener('kissne:model-options-updated', function () {
-    var cur = parseHash();
-    if (cur.path === '/chat') render();
-  });
-
   /* ---------------- 启动 ---------------- */
   /* ?shot=1 进入截图模式：手机框固定在视口左上角，便于按 390×844 裁切 */
   if (new URLSearchParams(location.search).get('shot')) {
