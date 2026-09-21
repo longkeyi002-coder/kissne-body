@@ -61,10 +61,12 @@
     if (!COLD && String(to).indexOf('#/welcome') === 0) {
       to = '#/home';
     }
-    /* 只有当目标**和当前完整 hash 完全一样**时才原地重渲染；
-       否则一律改 hash。
-       之前只比对路径（'#' + path），于是从 `#/chat?state=search` 点返回 `#/chat`
-       会被判定为"同一页"→ 只重渲染、state 参数没被清掉 → **回不去人人星**。 */
+    /* Once anything leaves the splash, cancel every pending splash timer/event
+       before changing hash. Connection/home/chat can never be pulled back. */
+    if (COLD && String(to).indexOf('#/welcome') !== 0) {
+      COLD = false;
+      clearTimeout(splashTimer);
+    }
     if (location.hash === to) { render(); return; }
     location.hash = to;
   }
