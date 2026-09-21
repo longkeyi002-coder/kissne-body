@@ -27,6 +27,7 @@
       return '<div class="screen screen--splash">'
         + '<iframe class="splash-embed" data-splash-embed src="splash/index.html?mode='
         + encodeURIComponent(state) + '&v=20260921f" title="Kissne 开屏动画" aria-label="Kissne 开屏动画"></iframe>'
+        + '<button type="button" class="splash-skip" data-action="splash-skip" aria-label="跳过开屏动画"></button>'
         + '</div>';
     },
     mount: function (root, ctx) {
@@ -106,7 +107,7 @@
 
       return `
       <div class="screen">
-        ${appbar({ title: '设备连接', sub: '连接 Kissne', back: '#/welcome' })}
+        ${appbar({ title: '设备连接', sub: '连接 Kissne', back: '#/home' })}
         <div class="screen__body">
           ${topBanner}
           <div class="connectlive" data-connect-live hidden></div>
