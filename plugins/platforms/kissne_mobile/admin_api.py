@@ -295,9 +295,9 @@ async def _handle_admin_deploy_log(request: Any) -> Any:
 
 # --- GET /admin/sessions ---
 async def _handle_admin_sessions(request: Any) -> Any:
-    """Return all Hermes conversations from the same state.db used by the dashboard."""
+    """Return the dashboard-style Hermes conversation list through the state API."""
     from aiohttp import web
-    import sqlite3 as _sqlite3
+    from hermes_state import SessionDB
 
     installation = await _authenticated_admin(request)
     if not installation:
@@ -315,34 +315,51 @@ async def _handle_admin_sessions(request: Any) -> Any:
             except Exception:
                 logger.debug("[kissne_mobile] could not resolve active mobile session", exc_info=True)
 
-    sessions = []
-    state_db_path = str(Path.home() / ".hermes" / "state.db")
-    try:
-        conn = _sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=3)
+    def _read_sessions() -> list[dict[str, Any]]:
+        db = SessionDB(read_only=True)
         try:
-            rows = conn.execute(
-                "SELECT id, source, user_id, title, message_count, started_at, model "
-                "FROM sessions ORDER BY started_at DESC LIMIT 500"
-            ).fetchall()
-            for row in rows:
-                session_id = str(row[0] or "")
-                if not session_id:
-                    continue
-                source = str(row[1] or "")
-                user_id = str(row[2] or "")
-                sessions.append({
-                    "session_id": session_id,
-                    "session_key": "",
-                    "title": row[3] or f"{source or '?'}: {user_id or 'local'}",
-                    "created_at": row[5],
-                    "last_active": row[5],
-                    "message_count": row[4] or 0,
-                    "source": source,
-                    "model": row[6] or "",
-                    "active": session_id == active_id,
-                })
+            rows = db.list_sessions_rich(
+                source=None,
+                limit=500,
+                offset=0,
+                include_children=True,
+                project_compression_tips=True,
+                order_by_last_active=True,
+                include_archived=True,
+                compact_rows=True,
+            )
         finally:
-            conn.close()
+            db.close()
+
+        sessions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            session_id = str(row.get("id") or row.get("session_id") or "").strip()
+            if not session_id or session_id in seen:
+                continue
+            seen.add(session_id)
+            source = str(row.get("source") or "")
+            user_id = str(row.get("user_id") or "")
+            title = str(row.get("title") or row.get("display_name") or "").strip()
+            if not title:
+                preview = str(row.get("preview") or "").strip()
+                title = preview[:42] + ("…" if len(preview) > 42 else "")
+            sessions.append({
+                "session_id": session_id,
+                "session_key": str(row.get("session_key") or ""),
+                "title": title or f"{source or '?'}: {user_id or 'local'}",
+                "created_at": row.get("started_at") or row.get("created_at"),
+                "last_active": row.get("last_active") or row.get("updated_at"),
+                "message_count": row.get("message_count", 0),
+                "source": source,
+                "model": row.get("model") or "",
+                "active": session_id == active_id,
+                "archived": bool(row.get("archived")),
+            })
+        return sessions
+
+    try:
+        sessions = await asyncio.to_thread(_read_sessions)
     except Exception as exc:
         logger.warning("[kissne_mobile] sessions query failed: %s", exc, exc_info=True)
         return web.json_response({"error": "sessions_unavailable"}, status=503)
@@ -352,7 +369,6 @@ async def _handle_admin_sessions(request: Any) -> Any:
         "installation_id": installation,
         "sessions": sessions,
     })
-
 
 def _memory_id(target: str, text: str) -> str:
     return hashlib.sha256((target + "\0" + text).encode("utf-8")).hexdigest()[:24]
