@@ -14,7 +14,7 @@ on:
       - ".github/workflows/android.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -37,6 +37,8 @@ jobs:
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/kissne-main'
     needs: test
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       SIGNING_KEYSTORE_B64: ${{ secrets.KISSNE_ANDROID_KEYSTORE_B64 }}
