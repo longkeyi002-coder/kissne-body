@@ -21,8 +21,16 @@ android {
         buildConfig = true
     }
 
-    if (hasReleaseSigning) {
-        signingConfigs {
+    signingConfigs {
+        create("kissneDebugStable") {
+            // Intentionally checked in for the .debug application only.
+            // This is not the production/release signing identity.
+            storeFile = file("signing/kissne-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        if (hasReleaseSigning) {
             create("kissneRelease") {
                 storeFile = file(releaseStorePath!!)
                 storePassword = releaseStorePassword
@@ -48,6 +56,7 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"
             manifestPlaceholders["appLabel"] = "Kissne Dev"
+            signingConfig = signingConfigs.getByName("kissneDebugStable")
         }
         getByName("release") {
             isMinifyEnabled = false

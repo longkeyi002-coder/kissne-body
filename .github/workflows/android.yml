@@ -32,25 +32,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
         with: { gradle-version: "8.10" }
 
-      - name: Restore stable dev signing key
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.android/debug.keystore
-          key: kissne-android-debug-keystore-v1
-
-      - name: Ensure stable dev signing key
+      - name: Verify fixed debug signing identity
         shell: bash
         run: |
-          mkdir -p "$HOME/.android"
-          if [[ ! -f "$HOME/.android/debug.keystore" ]]; then
-            keytool -genkeypair -v \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=Kissne Dev,OU=Development,O=Kissne,L=Local,S=Local,C=JP" \
-              -keyalg RSA -keysize 2048 -validity 10000
-          fi
+          KEYSTORE="app/signing/kissne-debug.keystore"
+          test -f "$KEYSTORE"
+          ACTUAL=$(keytool -list -v \
+            -keystore "$KEYSTORE" \
+            -storepass android \
+            -alias androiddebugkey \
+            | sed -n 's/^[[:space:]]*SHA256: //p' \
+            | tr -d ':' \
+            | tr '[:lower:]' '[:upper:]')
+          EXPECTED="4A25EFA335E2A006D200C42421DA2A33287C422D79671C82EEE2992AAAD2CF63"
+          test "$ACTUAL" = "$EXPECTED" || {
+            echo "::error::Unexpected Kissne debug signing certificate: $ACTUAL"
+            exit 1
+          }
 
       - name: Check packaged WebView JavaScript
         run: |
@@ -61,6 +59,20 @@ jobs:
           node --check ../../kissne-prototype/prototype/app.js
       - run: gradle test
       - run: gradle assembleDebug
+      - name: Verify built APK uses fixed debug signer
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)
+          test -n "$APKSIGNER"
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | tr '[:lower:]' '[:upper:]')
+          EXPECTED="4A25EFA335E2A006D200C42421DA2A33287C422D79671C82EEE2992AAAD2CF63"
+          test "$ACTUAL" = "$EXPECTED" || {
+            echo "::error::APK signed by unexpected certificate: $ACTUAL"
+            exit 1
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kissne-android-debug
