@@ -1414,6 +1414,85 @@ html.is-native-shell .drawer-scrim{display:none!important}
 html.is-native-shell .stage{width:100%;height:100%}
 html.is-native-shell .stage__body{padding:0;height:100%}
 
+/* Native compact density — 只压缩状态栏下方的 App 内容，不改系统状态栏。 */
+html.is-native-shell .workbench,
+html.is-native-shell .stage,
+html.is-native-shell .stage__body,
+html.is-native-shell .phone{height:100%;min-height:0}
+html.is-native-shell .phone{width:100%;border:0;border-radius:0;box-shadow:none}
+
+html.is-native-shell .appbar{height:46px;padding:0 9px}
+html.is-native-shell .appbar--brand{height:48px}
+html.is-native-shell .brand{font-size:18px;padding-left:6px}
+html.is-native-shell .iconbtn{width:30px;height:30px}
+
+html.is-native-shell .screen__body{padding:12px 14px;gap:9px}
+html.is-native-shell .screen__foot{padding:9px 14px 11px;gap:6px}
+html.is-native-shell .card{padding:11px 12px;gap:8px}
+html.is-native-shell .card.is-tight{padding:3px}
+html.is-native-shell .row{gap:9px;padding:9px 10px}
+html.is-native-shell .row__icon{width:28px;height:28px}
+html.is-native-shell .sect{padding:3px 2px 0}
+html.is-native-shell .field{gap:4px}
+html.is-native-shell .field__box{height:40px;padding:0 10px}
+html.is-native-shell .btn{height:40px;padding:0 14px}
+html.is-native-shell .btn.is-small{height:28px}
+html.is-native-shell .chip{height:21px;padding:0 8px}
+html.is-native-shell .note{padding:7px 9px;line-height:1.4}
+html.is-native-shell .banner{padding:9px 10px}
+html.is-native-shell .tile{padding:10px}
+html.is-native-shell .prow{padding:9px 10px;gap:3px}
+html.is-native-shell .adv__body{padding:0 11px 10px;gap:8px}
+html.is-native-shell .offline{padding:12px;gap:6px}
+html.is-native-shell .modal{padding:14px}
+html.is-native-shell .modal__body{line-height:1.5}
+
+html.is-native-shell .tabbar{height:40px;padding-bottom:0}
+html.is-native-shell .tabbar__item{gap:1px}
+html.is-native-shell .screen--home .screen__body{padding:10px 14px 9px;gap:8px}
+html.is-native-shell .screen--home .starcard__art .ph{height:132px}
+html.is-native-shell .screen--home .devstrip{padding:8px 11px}
+html.is-native-shell .screen--home .appgrid{padding:8px 5px}
+html.is-native-shell .screen--home .appgrid__item{padding:6px 2px;gap:4px}
+html.is-native-shell .screen--home .appgrid__ic{width:40px;height:40px}
+html.is-native-shell .screen--home .motifrow{display:none}
+
+html.is-native-shell .screen--chat{--composer-h:62px;--kbd-lift:150px}
+html.is-native-shell .chathead,
+html.is-native-shell .chathead--ghost{height:48px}
+html.is-native-shell .chatbody{gap:10px;padding:11px 14px}
+html.is-native-shell .msg{gap:7px}
+html.is-native-shell .bubble{padding:7px 10px}
+html.is-native-shell .msg__meta{margin-top:2px}
+html.is-native-shell .msg__time{margin-top:2px}
+html.is-native-shell .tlog__sep{margin:3px 0 5px}
+html.is-native-shell .chatbanner{gap:8px;padding:8px 12px}
+html.is-native-shell .screen--chat > .banner{margin:7px 10px 0}
+html.is-native-shell .composer{height:44px;margin:7px 12px 9px}
+html.is-native-shell .composer__btn,
+html.is-native-shell .sendbtn{width:32px;height:32px}
+html.is-native-shell .srchpanel{padding:0 12px 8px}
+html.is-native-shell .srch__head{padding:8px 2px 4px}
+html.is-native-shell .srch__g{padding:6px 2px 4px}
+html.is-native-shell .srch__row{padding:7px 2px}
+html.is-native-shell .dd{top:52px;left:10px;right:10px}
+html.is-native-shell .dd__head{padding:7px 11px}
+html.is-native-shell .dd__item{padding:8px 11px}
+html.is-native-shell .dd__foot{padding:6px 11px}
+
+html.is-native-shell .stkpanel{margin:6px 12px 0;padding:6px 6px 4px}
+html.is-native-shell .stkpanel__i{padding:4px}
+html.is-native-shell .stkpanel__i .stkimg{max-height:46px}
+
+html.is-native-shell .call{gap:8px;padding:14px 20px 12px}
+html.is-native-shell .call__btn{width:48px;height:48px}
+html.is-native-shell .call__hang{margin-top:20px;width:56px;height:56px;min-height:56px}
+
+html.is-native-shell .mempty{padding:26px 0}
+html.is-native-shell .memdetail__body{line-height:1.55}
+html.is-native-shell .scn__bubble{padding:9px 11px}
+html.is-native-shell .pop__item{padding:8px 10px}
+
 /* 截图模式要保留假状态栏（真机断点会把它隐藏掉） */
 body.is-shot .statusbar{display:flex}
 
