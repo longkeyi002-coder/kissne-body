@@ -87,6 +87,7 @@ class PrototypeBridge(
                         body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
                         ensureDeviceToken(body.optBoolean("force", false))
                     }
+                    "sessions" -> client().sessionsPayload()
                     "bootstrap" -> {
                         val boot = client().bootstrapPayload(body.optLong("cursor", store.cursor))
                         store.markConnectionReady(true)
@@ -137,7 +138,7 @@ class PrototypeBridge(
                  * mobile transport. Core transport 401s still clear the token.
                  */
                 val coreAuthAction = action in setOf(
-                    "bootstrap", "sendText", "poll", "ack",
+                    "sessions", "bootstrap", "sendText", "poll", "ack",
                     "cancel", "approval", "revoke",
                 )
                 if (status == 401 && coreAuthAction) store.clearToken()
