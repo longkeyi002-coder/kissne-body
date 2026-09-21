@@ -43,6 +43,9 @@ __all__ = [
     "INBOUND_NEW",
     "INBOUND_DUPLICATE",
     "INBOUND_CONFLICT",
+    "EVENT_NOTICE",
+    "EVENT_APPROVAL_REQUIRED",
+    "EVENT_APPROVAL_RESOLVED",
 ]
 
 #: Turn states published to a device. A turn is opened by an accepted inbound message and closed by the
@@ -57,6 +60,9 @@ EVENT_PENDING = TURN_PENDING
 EVENT_DELTA = "delta"
 EVENT_COMPLETED = TURN_COMPLETED
 EVENT_CANCELLED = TURN_CANCELLED
+EVENT_NOTICE = "notice"
+EVENT_APPROVAL_REQUIRED = "approval_required"
+EVENT_APPROVAL_RESOLVED = "approval_resolved"
 
 #: Outcomes of recording a client ``message_id``: a fresh message, a retry of the same one, or a retry
 #: that tries to rewrite an already accepted payload (which must fail closed).
@@ -164,6 +170,37 @@ class DeviceStore:
             CREATE INDEX IF NOT EXISTS idx_turns_installation ON turns (installation_id, state);
             -- Sequence numbers must never be reused: acked events are DELETED, so deriving the next
             -- sequence from MAX(seq) would restart at 1 and hand a device a cursor it has already passed.
+            CREATE TABLE IF NOT EXISTS attachment_messages (
+                installation_id TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                text            TEXT NOT NULL DEFAULT '',
+                attachments     TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                PRIMARY KEY (installation_id, turn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachment_messages_installation
+                ON attachment_messages (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS timeline_notices (
+                installation_id TEXT NOT NULL,
+                notice_id       TEXT NOT NULL,
+                presentation    TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                PRIMARY KEY (installation_id, notice_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_timeline_notices_installation
+                ON timeline_notices (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS reply_links (
+                installation_id TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                reply_to        TEXT NOT NULL,
+                quoted_role     TEXT NOT NULL,
+                quoted_text     TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                PRIMARY KEY (installation_id, turn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reply_links_installation
+                ON reply_links (installation_id, created_at);
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
@@ -218,17 +255,22 @@ class DeviceStore:
         logger.info("[kissne_mobile] issued pairing code %s (ttl=%.1fs)", _fingerprint(digest), ttl)
         return code
 
-    def redeem_pairing_code(self, code: str, installation_id: str) -> str:
-        """Consume ``code`` once and return the PLAINTEXT device token for ``installation_id``.
+    def redeem_pairing_code(
+        self, code: str, installation_id: str, *, scope: str = "device"
+    ) -> str:
+        """Consume ``code`` once and return a scoped plaintext token for ``installation_id``.
 
-        Raises :class:`PairingCodeInvalid` / :class:`PairingCodeExpired` / :class:`PairingCodeReplayed`
-        — a code is accepted exactly once, and only inside its validity window.
+        ``scope="admin"`` is reserved for an operator-issued pairing code. Auto-pair never
+        creates that scope, so a normal mobile device credential cannot authorize deployment.
         """
         if not isinstance(code, str) or not code.strip():
             raise PairingCodeInvalid("empty pairing code")
         installation = str(installation_id or "").strip()
         if not installation:
             raise ValueError("installation_id is required to redeem a pairing code")
+        token_scope = str(scope or "").strip().lower()
+        if token_scope not in {"device", "admin"}:
+            raise ValueError("token scope must be 'device' or 'admin'")
         digest = _digest(code.strip())
         now = time.time()
         with self._lock:
@@ -263,8 +305,8 @@ class DeviceStore:
                     raise PairingCodeReplayed("pairing code was already redeemed")
                 conn.execute(
                     "INSERT INTO devices (token_hash, installation_id, scope, created_at) "
-                    "VALUES (?, ?, 'device', ?)",
-                    (token_hash, installation, now),
+                    "VALUES (?, ?, ?, ?)",
+                    (token_hash, installation, token_scope, now),
                 )
                 conn.commit()
             except PairingError:
@@ -278,21 +320,28 @@ class DeviceStore:
 
     # -- device tokens -----------------------------------------------------------------------------
 
-    def authenticate(self, token: str) -> Optional[str]:
-        """Installation id for a live token, or ``None`` when it is unknown or revoked."""
+    def authenticate(self, token: str, *, required_scope: Optional[str] = None) -> Optional[str]:
+        """Installation id for a live token, optionally requiring an exact credential scope."""
         if not isinstance(token, str) or not token.strip():
             return None
         digest = _digest(token.strip())
         with self._lock:
             conn = self._db()
             row = conn.execute(
-                "SELECT installation_id, revoked_at FROM devices WHERE token_hash = ?", (digest,)
+                "SELECT installation_id, scope, revoked_at FROM devices WHERE token_hash = ?", (digest,)
             ).fetchone()
             if row is None:
                 logger.warning("[kissne_mobile] device token %s refused: unknown", _fingerprint(digest))
                 return None
             if row["revoked_at"] is not None:
                 logger.warning("[kissne_mobile] device token %s refused: revoked", _fingerprint(digest))
+                return None
+            token_scope = str(row["scope"] or "device")
+            if required_scope is not None and token_scope != str(required_scope):
+                logger.warning(
+                    "[kissne_mobile] device token %s refused: scope %s does not satisfy %s",
+                    _fingerprint(digest), token_scope, required_scope,
+                )
                 return None
             installation = str(row["installation_id"])
             try:
@@ -370,7 +419,7 @@ class DeviceStore:
     def create_device_token(self, installation_id: str) -> str:
         """Create a device token directly (no pairing code needed). Used in auto_pair mode."""
         installation = self._installation(installation_id)
-        token = secrets.token_urlsafe(32)
+        token = f"{TOKEN_PREFIX}{_DEVICE_MARK}_{secrets.token_urlsafe(32)}"
         token_hash = _digest(token)
         now = time.time()
         with self._lock:
@@ -582,6 +631,134 @@ class DeviceStore:
             ).fetchone()
         return str(row["turn_id"]) if row is not None else None
 
+
+    def record_attachment_message(self, installation_id: str, turn_id: str, text: str,
+                                  attachments: List[Dict[str, Any]]) -> None:
+        """Persist presentation metadata only; never duplicate attachment binary bytes."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            raise ValueError("turn_id is required")
+        safe = [{"type": str(x.get("type") or ""), "mime_type": str(x.get("mime_type") or ""),
+                 "label": str(x.get("label") or "")}
+                for x in (attachments or []) if isinstance(x, dict)]
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO attachment_messages "
+                "(installation_id, turn_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)",
+                (installation, handle, str(text or ""), json.dumps(safe, ensure_ascii=False), time.time()))
+            conn.commit()
+
+    def delete_attachment_message(self, installation_id: str, turn_id: str) -> None:
+        """Remove presentation metadata for a turn that will never be part of history."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "DELETE FROM attachment_messages WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            )
+            conn.commit()
+
+    def attachment_messages(self, installation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT turn_id, text, attachments, created_at FROM attachment_messages "
+                "WHERE installation_id = ? ORDER BY created_at DESC LIMIT ?",
+                (installation, max(1, int(limit)))).fetchall()
+        out = []
+        for row in reversed(rows):
+            try:
+                attachments = json.loads(row["attachments"])
+            except (TypeError, ValueError):
+                attachments = []
+            out.append({"turn_id": str(row["turn_id"]), "text": str(row["text"] or ""),
+                        "attachments": attachments if isinstance(attachments, list) else [],
+                        "created_at": float(row["created_at"])})
+        return out
+
+    def record_timeline_notice(self, installation_id: str, notice_id: str,
+                               presentation: str, text: str) -> None:
+        """Persist backend-authored timeline notices verbatim for later cross-session history."""
+        installation = self._installation(installation_id)
+        handle = str(notice_id or "").strip()
+        if not handle:
+            raise ValueError("notice_id is required")
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO timeline_notices "
+                "(installation_id, notice_id, presentation, text, created_at) VALUES (?, ?, ?, ?, ?)",
+                (installation, handle, str(presentation or ""), str(text or ""), time.time()),
+            )
+            conn.commit()
+
+    def timeline_notices(self, installation_id: str) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT notice_id, presentation, text, created_at FROM timeline_notices "
+                "WHERE installation_id = ? ORDER BY created_at ASC",
+                (installation,),
+            ).fetchall()
+        return [
+            {"notice_id": str(row["notice_id"]), "presentation": str(row["presentation"] or ""),
+             "text": str(row["text"] or ""), "created_at": float(row["created_at"])}
+            for row in rows
+        ]
+
+    def record_reply_link(self, installation_id: str, turn_id: str, reply_to: str,
+                          quoted_role: str, quoted_text: str) -> None:
+        """Persist one Mobile reply relation without copying Runtime conversation ownership."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        target = str(reply_to or "").strip()
+        if not handle or not target:
+            raise ValueError("turn_id and reply_to are required")
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "INSERT OR REPLACE INTO reply_links "
+                "(installation_id, turn_id, reply_to, quoted_role, quoted_text, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (installation, handle, target, str(quoted_role or ""),
+                 str(quoted_text or ""), time.time()),
+            )
+            conn.commit()
+
+    def delete_reply_link(self, installation_id: str, turn_id: str) -> None:
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return
+        with self._lock:
+            conn = self._db()
+            conn.execute(
+                "DELETE FROM reply_links WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            )
+            conn.commit()
+
+    def reply_links(self, installation_id: str) -> List[Dict[str, Any]]:
+        installation = self._installation(installation_id)
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT turn_id, reply_to, quoted_role, quoted_text, created_at FROM reply_links "
+                "WHERE installation_id = ? ORDER BY created_at ASC",
+                (installation,),
+            ).fetchall()
+        return [
+            {"turn_id": str(row["turn_id"]), "reply_to": str(row["reply_to"]),
+             "quoted_role": str(row["quoted_role"] or ""), "quoted_text": str(row["quoted_text"] or ""),
+             "created_at": float(row["created_at"])}
+            for row in rows
+        ]
+
     def inbound_record(self, installation_id: str, client_message_id: str) -> Optional[Dict[str, Any]]:
         """The stored record of a client ``message_id``, or ``None`` when it is new."""
         installation = self._installation(installation_id)
@@ -635,3 +812,4 @@ class DeviceStore:
         logger.warning("[kissne_mobile] inbound %s for installation %s reused with a different payload",
                        _fingerprint(handle), _fingerprint(installation))
         return INBOUND_CONFLICT
+
