@@ -567,7 +567,8 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
    收起时：只留下上面那条装饰入口；点它可再次展开。
    注意这里只承载 Mobile 明确允许展示的状态 / 摘要，不把 terminal 命令、
    tool internals 或 provider hidden reasoning 直接泄露到聊天正文。 */
-.tlog{display:block;width:100%;max-width:100%;margin:2px 0 7px}
+.activity-history{width:100%;max-width:100%;min-width:0}
+.tlog{display:block;width:100%;max-width:100%;min-width:0;margin:2px 0 7px}
 .tlog__row{
   display:flex;flex-direction:column;align-items:stretch;gap:2px;width:100%;
   border:0;border-radius:0;background:transparent;padding:2px 0;margin:0;cursor:pointer;
@@ -609,6 +610,7 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 /* 必须让 body 撑满剩余宽度：否则它是 shrink-to-fit，
    和气泡自己的 max-width:80% 互相打架，气泡会被挤成一条竖条 */
 .msg__body{flex:1;display:flex;flex-direction:column;min-width:0}
+.msg--ai .msg__body{flex:0 1 78%;max-width:78%}
 .msg--me .msg__body{align-items:flex-end}
 .msg__text{font-size:13px;color:var(--ink);line-height:1.6}
 .msg--ai .msg__text{color:var(--ink)}
@@ -1559,6 +1561,12 @@ html.is-native-shell .chathead,
 html.is-native-shell .chathead--ghost{height:48px}
 html.is-native-shell .chatbody{gap:10px;padding:11px 14px}
 html.is-native-shell .msg{gap:7px}
+html.is-native-shell .msg--ai .msg__body{flex-basis:76%;max-width:76%}
+html.is-native-shell .msg--ai .msg__text,
+html.is-native-shell .msg--ai .liveanswer,
+html.is-native-shell .msg--ai .activity-history,
+html.is-native-shell .msg--ai .tlog{width:100%;max-width:100%;min-width:0}
+html.is-native-shell .tlog__body{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 html.is-native-shell .bubble{padding:7px 10px}
 html.is-native-shell .msg__meta{margin-top:2px}
 html.is-native-shell .msg__time{margin-top:2px}
