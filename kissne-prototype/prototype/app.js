@@ -35,7 +35,11 @@
     }
     splashTarget = T.bootstrap().then(function (payload) {
       return payload && payload.bound ? '#/chat' : SPLASH_NEXT;
-    }).catch(function () { return SPLASH_NEXT; });
+    }).catch(function (err) {
+      /* 只有凭据无效才要求重新配对；普通断网/服务器暂不可达不要把用户
+         反复踢回连接页，先进入离线首页，保留已有设备身份。 */
+      return err && err.status === 401 ? SPLASH_NEXT : '#/home?state=offline';
+    });
     return splashTarget;
   }
 
@@ -90,7 +94,7 @@
     var ctx = { state: state, nav: nav, params: params || null };
     /* 全局底栏：每个页面都显示，所以在外壳里统一挂载。
        只有开屏页（启动画面）不挂 —— 全屏品牌动画上压一条导航条会把它弄脏。 */
-    var showTab = screen.id !== 'welcome';
+    var showTab = ['welcome', 'connect', 'connect-success'].indexOf(screen.id) < 0;
     /* 流体云（活动胶囊）：通话 / 屏幕共享在后台继续时，顶部留一条可点回来的提示。
        和底栏一样挂在**外壳层**，所以切任何页面都在。由页面层提供内容（K.activityPill）。 */
     var pill = (interactive !== false && K.activityPill) ? K.activityPill() : '';
@@ -211,22 +215,35 @@
   }
 
   /* ---------------- 交互 ---------------- */
+  function nativeTap() {
+    try {
+      if (window.KissneNativeTransport && typeof window.KissneNativeTransport.haptic === 'function') {
+        window.KissneNativeTransport.haptic();
+      }
+    } catch (e) {}
+  }
+
   document.addEventListener('click', function (e) {
     var navEl = e.target.closest('[data-nav]');
     if (navEl) {
       e.preventDefault();
+      nativeTap();
       nav(navEl.getAttribute('data-nav'));
       openDrawer(false);
       return;
     }
     var stEl = e.target.closest('[data-state]');
-    if (stEl) { setState(stEl.getAttribute('data-state')); openDrawer(false); return; }
+    if (stEl) { nativeTap(); setState(stEl.getAttribute('data-state')); openDrawer(false); return; }
 
     var actEl = e.target.closest('[data-action]');
     if (actEl) {
+      nativeTap();
       var a = actEl.getAttribute('data-action');
       var cur = parseHash();
-      if (a === 'connect')   nav('#/connect?state=success');
+      if (a === 'connect') {
+        /* 真 Transport 的 connect 由连接页 mount 处理；这里只保留纯静态总览的兜底。 */
+        if (!window.KissneTransport) nav('#/connect/success');
+      }
       else if (a === 'sync') nav('#/memory?state=syncing');
       else if (a === 'resend') nav('#/chat?state=replying');
       return;
