@@ -26,6 +26,53 @@
   function splashNext() {
     return '#/home';
   }
+  window.KissneSessionIndex = window.KissneSessionIndex || {
+    sessions: [], raw: null, loaded: false, fetchedAt: 0, error: ''
+  };
+
+  function normalizeRemoteSessions(payload) {
+    var raw = payload || {};
+    var list = Array.isArray(raw) ? raw : (Array.isArray(raw.sessions) ? raw.sessions : []);
+    return list.map(function (item, index) {
+      item = item || {};
+      return {
+        id: String(item.session_id || item.id || item.sessionId || ''),
+        key: String(item.session_key || item.key || item.sessionKey || ''),
+        title: String(item.title || item.name || item.label || item.session_key || item.session_id || ('会话 ' + (index + 1))),
+        updatedAt: item.updated_at || item.last_active || item.updatedAt || null,
+        active: item.active === true || item.current === true || item.is_current === true
+      };
+    }).filter(function (item) { return !!(item.id || item.key); });
+  }
+
+  async function loadRemoteSessionsAtStartup(T) {
+    if (!T || typeof T.sessions !== 'function') return;
+    var index = window.KissneSessionIndex;
+    try {
+      /* Update-safe path: first use the token already stored by Android
+         EncryptedSharedPreferences. Only a real 401 is allowed to rotate it. */
+      if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+      var payload;
+      try {
+        payload = await T.sessions();
+      } catch (err) {
+        if (!err || Number(err.status) !== 401 || typeof T.ensureToken !== 'function') throw err;
+        await T.ensureToken(true);
+        payload = await T.sessions();
+      }
+      index.raw = payload || {};
+      index.sessions = normalizeRemoteSessions(payload);
+      index.loaded = true;
+      index.fetchedAt = Date.now();
+      index.error = '';
+      document.dispatchEvent(new CustomEvent('kissne:sessions-loaded', { detail: index }));
+    } catch (err) {
+      index.loaded = false;
+      index.error = String((err && err.message) || 'sessions_unavailable');
+      document.dispatchEvent(new CustomEvent('kissne:sessions-error', { detail: index }));
+    }
+  }
+
   function finishSplash() {
     if (!COLD) return;
     COLD = false;
@@ -33,10 +80,19 @@
     clearTimeout(splashTimer);
     var T = window.KissneTransport;
     var enterHome = function () { location.replace(splashNext()); };
-    /* 新协议无需配对码：冷启动直接用 installation_id 领取/刷新 device token。
-       无论网络此刻是否可达都进入首页，首页会显示真实连接状态并自动重试。 */
-    if (T && typeof T.ensureToken === 'function') {
-      T.ensureToken(true).then(enterHome).catch(enterHome);
+    if (T && typeof T.sessions === 'function') {
+      var settled = false;
+      var finish = function () {
+        if (settled) return;
+        settled = true;
+        enterHome();
+      };
+      /* Session list is server-owned. Wait briefly for it before showing Home,
+         but never trap app startup indefinitely during an outage. */
+      loadRemoteSessionsAtStartup(T).then(finish).catch(finish);
+      setTimeout(finish, 8000);
+    } else if (T && typeof T.ensureToken === 'function') {
+      T.ensureToken(false).then(enterHome).catch(enterHome);
     } else {
       enterHome();
     }
