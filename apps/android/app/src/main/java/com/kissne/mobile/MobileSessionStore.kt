@@ -19,6 +19,9 @@ class MobileSessionStore(context: Context) {
     val deviceToken: String?
         get() = prefs.getString("device_token", null)
 
+    val connectionReady: Boolean
+        get() = prefs.getBoolean("connection_ready", false)
+
     var cursor: Long
         get() = prefs.getLong("cursor", 0L)
         set(value) {
@@ -50,13 +53,19 @@ class MobileSessionStore(context: Context) {
     fun saveToken(token: String) {
         prefs.edit()
             .putString("device_token", token)
+            .putBoolean("connection_ready", false)
             .putLong("cursor", 0L)
             .apply()
+    }
+
+    fun markConnectionReady(ready: Boolean) {
+        prefs.edit().putBoolean("connection_ready", ready).apply()
     }
 
     fun clearToken() {
         prefs.edit()
             .remove("device_token")
+            .putBoolean("connection_ready", false)
             .putLong("cursor", 0L)
             .apply()
     }
