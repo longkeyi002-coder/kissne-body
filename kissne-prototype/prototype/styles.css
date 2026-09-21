@@ -1257,6 +1257,20 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   border:0;
   background:#FDFCF8;
 }
+.screen--splash{position:relative}
+.splash-skip{
+  position:absolute;
+  inset:0;
+  z-index:5;
+  width:100%;
+  height:100%;
+  margin:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
 
 /* =====================================================================
    首页 / 控制台 — 白蓝主题（仅此页）
