@@ -119,7 +119,17 @@ class PrototypeBridge(
                 resolve(id, true, result)
             } catch (error: Throwable) {
                 val status = (error as? MobileTransportException)?.status ?: 0
-                if (status == 401) store.clearToken()
+                /*
+                 * Optional control endpoints must never invalidate an otherwise
+                 * working chat session. A reverse-proxy/version mismatch on
+                 * model/admin routes can return 401 independently of the core
+                 * mobile transport. Core transport 401s still clear the token.
+                 */
+                val coreAuthAction = action in setOf(
+                    "bootstrap", "sendText", "poll", "ack",
+                    "cancel", "approval", "revoke",
+                )
+                if (status == 401 && coreAuthAction) store.clearToken()
                 val payloadJson = JSONObject()
                     .put("status", status)
                     .put("error", error.message ?: "native_transport_error")
