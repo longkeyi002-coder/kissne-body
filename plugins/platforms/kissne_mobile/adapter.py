@@ -735,7 +735,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Read ~/.hermes/config.yaml (non-mutating)."""
         import yaml
         cfg_path = _Path.home() / ".hermes" / "config.yaml"
-        with open(cfg_path) as f:
+        with open(cfg_path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
     @staticmethod
@@ -743,7 +743,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Write ~/.hermes/config.yaml."""
         import yaml
         cfg_path = _Path.home() / ".hermes" / "config.yaml"
-        with open(cfg_path, "w") as f:
+        with open(cfg_path, "w", encoding="utf-8") as f:
             yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     async def _handle_model_options(self, request: web.Request) -> web.Response:
