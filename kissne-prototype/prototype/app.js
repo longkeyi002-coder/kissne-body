@@ -255,6 +255,21 @@
           }
         } catch (e) {}
       }
+      else if (a === 'disconnect') {
+        var T = window.KissneTransport;
+        if (!T || typeof T.revoke !== 'function') {
+          if (T && typeof T.clearToken === 'function') T.clearToken();
+          nav('#/home?state=offline');
+        } else {
+          T.revoke().then(function () {
+            nav('#/home?state=offline');
+          }).catch(function () {
+            /* Do not pretend the server revoked the token. Keep the device
+               page open so the user can retry instead of creating split state. */
+            nav('#/device?state=disconnect-confirm');
+          });
+        }
+      }
       else if (a === 'sync') nav('#/memory?state=syncing');
       else if (a === 'resend') nav('#/chat?state=replying');
       return;
