@@ -248,6 +248,13 @@
         /* 真 Transport 的 connect 由连接页 mount 处理；这里只保留纯静态总览的兜底。 */
         if (!window.KissneTransport) nav('#/connect/success');
       }
+      else if (a === 'check-update') {
+        try {
+          if (window.KissneNativeTransport && typeof window.KissneNativeTransport.checkForUpdates === 'function') {
+            window.KissneNativeTransport.checkForUpdates();
+          }
+        } catch (e) {}
+      }
       else if (a === 'sync') nav('#/memory?state=syncing');
       else if (a === 'resend') nav('#/chat?state=replying');
       return;
