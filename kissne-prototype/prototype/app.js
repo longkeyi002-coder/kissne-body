@@ -31,7 +31,9 @@
     if (!COLD) return;
     COLD = false;
     clearTimeout(splashTimer);
-    nav(splashNext());
+    /* 开屏是启动过渡，不属于 App 导航历史。
+       replace 掉 welcome，后续连接页/首页返回时绝不会翻回开屏。 */
+    location.replace(splashNext());
   }
 
   /* ---------------- 路由解析 ---------------- */
@@ -53,6 +55,9 @@
 
   function nav(to) {
     if (!to) return;
+    if (!COLD && String(to).indexOf('#/welcome') === 0) {
+      to = '#/home';
+    }
     /* 只有当目标**和当前完整 hash 完全一样**时才原地重渲染；
        否则一律改 hash。
        之前只比对路径（'#' + path），于是从 `#/chat?state=search` 点返回 `#/chat`
@@ -166,6 +171,10 @@
   /* ---------------- 主渲染 ---------------- */
   function render() {
     var current = parseHash();
+    if (!COLD && current.path === '/welcome') {
+      location.replace('#/home');
+      return;
+    }
     if (COLD && current.path !== '/welcome') {
       COLD = false;
       clearTimeout(splashTimer);
