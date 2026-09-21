@@ -306,3 +306,53 @@ def test_deployment_routes_require_operator_scoped_token(tmp_path, monkeypatch):
     assert rollback_device[0] == 403 and rollback_device[1].get("error") == "admin_scope_required", rollback_device
     assert admin_status == 201, admin_pair
     assert merge_admin[0] == 404 and merge_admin[1].get("error") == "deploy script not found", merge_admin
+
+
+def test_auto_pair_refreshes_expired_device_token_with_installation_id_only(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter.set_session_store(build_session_store(home))
+            port = await start(adapter)
+            try:
+                first_status, first_payload, _ = await http(
+                    port, "POST", "/pair",
+                    body={"installation_id": "android-refresh"},
+                )
+                first_token = str(first_payload.get("device_token") or "")
+
+                refresh_status, refresh_payload, _ = await http(
+                    port, "POST", "/pair",
+                    body={"installation_id": "android-refresh"},
+                )
+                refreshed_token = str(refresh_payload.get("device_token") or "")
+
+                old_status, _, _ = await http(
+                    port, "POST", "/bootstrap", token=first_token,
+                )
+                new_status, new_payload, _ = await http(
+                    port, "POST", "/bootstrap", token=refreshed_token,
+                )
+            finally:
+                await stop(adapter)
+        return (
+            first_status, first_payload, first_token,
+            refresh_status, refresh_payload, refreshed_token,
+            old_status, new_status, new_payload,
+        )
+
+    (
+        first_status, first_payload, first_token,
+        refresh_status, refresh_payload, refreshed_token,
+        old_status, new_status, new_payload,
+    ) = run(scenario())
+
+    assert first_status == 201, first_payload
+    assert refresh_status == 200, refresh_payload
+    assert first_token and refreshed_token and refreshed_token != first_token
+    assert refresh_payload.get("installation_id") == "android-refresh"
+    assert refresh_payload.get("token_type") == "Bearer"
+    assert "pairing_code" not in refresh_payload
+    assert old_status == 401, "the replaced device token must stop authenticating immediately"
+    assert new_status == 200, new_payload
+    assert new_payload.get("bound") is True

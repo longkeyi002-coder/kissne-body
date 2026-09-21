@@ -50,10 +50,9 @@ class PrototypeBridge(
                 .put("installation_id", store.installationId())
                 .put("existing", true)
         }
-        val paired = client().pairPayload(
-            store.installationId(),
-            rotateToken = true,
-        )
+        // auto_pair contract: only installation_id is required. No pairing code,
+        // no legacy rotate flag. The server returns a fresh device_token.
+        val paired = client().pairPayload(store.installationId())
         val token = paired.optString("device_token")
         if (token.isBlank()) throw IllegalStateException("device_token_missing")
         store.saveToken(token)
@@ -183,6 +182,7 @@ class PrototypeBridge(
                     try {
                         /*
                          * auto_pair contract: POST /mobile/pair with installation_id only.
+                         * No pairing_code or extra rotation field is sent.
                          * MobileTransportClient.pairPayload() is unauthenticated and
                          * MobileSessionStore.saveToken() persists the replacement token
                          * in EncryptedSharedPreferences without resetting the cursor.

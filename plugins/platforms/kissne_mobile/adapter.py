@@ -781,8 +781,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # --- auto_pair mode: skip pairing code validation ---
         auto_pair = self.config.extra.get("auto_pair", True)
         if auto_pair and not code:
-            # Existing credentials are stored only as hashes: session switching keeps the
-            # current token, while explicit recovery may rotate it.
+            # auto_pair contract: installation_id alone always yields a fresh device token.
+            # Existing plaintext tokens are not recoverable from storage (only hashes are kept),
+            # so rotate the credential atomically from the client's point of view.
             existing = store.lookup_installation(installation)
             if existing is not None:
                 conversation_key = str(body.get("session_key") or "").strip()
@@ -790,17 +791,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     bound = await asyncio.to_thread(self.bind_conversation, installation, conversation_key)
                 else:
                     bound = await asyncio.to_thread(self.ensure_initial_conversation, installation)
-                response = {
+                await asyncio.to_thread(store.revoke_installation, installation)
+                replacement = await asyncio.to_thread(store.create_device_token, installation)
+                return _json_response({
                     "ok": True,
                     "installation_id": installation,
+                    "device_token": replacement,
+                    "token_type": "Bearer",
                     "conversation_bound": bound,
-                }
-                if bool(body.get("rotate_token", False)):
-                    await asyncio.to_thread(store.revoke_installation, installation)
-                    replacement = await asyncio.to_thread(store.create_device_token, installation)
-                    response["device_token"] = replacement
-                    response["token_type"] = "Bearer"
-                return _json_response(response)
+                })
             # New installation — create token directly without pairing code
             token = await asyncio.to_thread(store.create_device_token, installation)
             conversation_key = str(body.get("session_key") or "").strip()
