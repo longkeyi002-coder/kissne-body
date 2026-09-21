@@ -20,7 +20,15 @@
     function nativeBase(value) {
       var v = String(value || '').trim();
       if (!v) return String(Native.getBase() || '').replace(/\/+$/, '');
-      if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+      if (!/^https?:\/\//i.test(v)) {
+        /* Bare private/LAN endpoints are the only implicit cleartext case.
+           Public names keep HTTPS as the safe default. */
+        var host = v.split('/')[0].split(':')[0].toLowerCase();
+        var local = host === 'localhost' || host === '127.0.0.1' ||
+          /^10\./.test(host) || /^192\.168\./.test(host) ||
+          /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+        v = (local ? 'http://' : 'https://') + v;
+      }
       return v.replace(/\/+$/, '');
     }
     function nativeMessageId() {
