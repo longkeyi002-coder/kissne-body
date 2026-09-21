@@ -14,6 +14,18 @@ class TransportContractTest {
     @Test fun retry_keeps_client_message_id() { val first = OutboundMessage("msg-1", "hello"); assertEquals(first.messageId, first.copy().messageId) }
     @Test fun nullable_wire_values_stay_null() { assertNull(JSONObjectProbe.nullable(null)) }
 
+    @Test fun admin_routes_keep_mobile_proxy_prefix() {
+        val base = "https://yeqingxu.cyou/mobile/"
+        assertEquals(
+            "https://yeqingxu.cyou/mobile/admin/sessions",
+            resolveMobileRequestUrl(base, "/admin/sessions"),
+        )
+        assertEquals(
+            "https://yeqingxu.cyou/mobile/pair",
+            resolveMobileRequestUrl(base, "/pair"),
+        )
+    }
+
     @Test fun session_switch_is_serialized_with_send_transport() {
         assertEquals(BridgeLane.TRANSPORT, bridgeLane("sendText"))
         assertEquals(BridgeLane.TRANSPORT, bridgeLane("selectSession"))

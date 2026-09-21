@@ -18,20 +18,16 @@ class MobileTransportClient(
     private fun nullableString(json: JSONObject, key: String): String? =
         if (json.isNull(key)) null else json.optString(key).ifBlank { null }
 
-    private fun adminBaseUrl(): String {
-        val base = baseUrl.trimEnd('/')
-        return if (base.endsWith("/mobile")) base.removeSuffix("/mobile") else base
-    }
+    private fun requestUrl(path: String): URL =
+        URL(resolveMobileRequestUrl(baseUrl, path))
 
     private fun request(
         method: String,
         path: String,
         body: JSONObject? = null,
         auth: Boolean = true,
-        adminRoot: Boolean = false,
     ): JSONObject {
-        val requestBase = if (adminRoot) adminBaseUrl() else baseUrl.trimEnd('/')
-        val connection = (URL(requestBase + path).openConnection() as HttpURLConnection).apply {
+        val connection = (requestUrl(path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
@@ -63,7 +59,7 @@ class MobileTransportClient(
     }
 
     fun sessionsPayload(): JSONObject =
-        request("GET", "/admin/sessions", adminRoot = true)
+        request("GET", "/admin/sessions")
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
@@ -175,18 +171,22 @@ class MobileTransportClient(
         request("POST", "/revoke")
 
     fun adminStatusPayload(): JSONObject =
-        request("GET", "/admin/status", adminRoot = true)
+        request("GET", "/admin/status")
 
     fun adminMergePayload(): JSONObject =
-        request("POST", "/admin/merge", adminRoot = true)
+        request("POST", "/admin/merge")
 
     fun adminRollbackPayload(): JSONObject =
-        request("POST", "/admin/rollback", adminRoot = true)
+        request("POST", "/admin/rollback")
 
     fun adminDeployLogPayload(lines: Int = 100): JSONObject {
         val safeLines = lines.coerceIn(1, 500)
-        return request("GET", "/admin/deploy-log?lines=$safeLines", adminRoot = true)
+        return request("GET", "/admin/deploy-log?lines=$safeLines")
     }
 
     fun cancel(turnId: String): String = cancelPayload(turnId).optString("state", "cancelled")
 }
+
+
+internal fun resolveMobileRequestUrl(baseUrl: String, path: String): String =
+    baseUrl.trimEnd('/') + "/" + path.trimStart('/')
