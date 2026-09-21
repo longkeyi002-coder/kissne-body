@@ -220,6 +220,16 @@
     var idx = window.KissneSessionIndex || {};
     return Array.isArray(idx.sessions) ? idx.sessions : [];
   }
+  function sessionMetaText(s, active) {
+    if (active) return '当前会话';
+    var parts = [];
+    if (s && s.messageCount) parts.push(s.messageCount + ' 条消息');
+    if (s && s.updatedAt) {
+      var d = new Date(s.updatedAt);
+      parts.push(isNaN(d.getTime()) ? String(s.updatedAt) : d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
+    }
+    return parts.join(' · ') || '服务器会话';
+  }
   function sessionDrawerHtml() {
     var idx = window.KissneSessionIndex || {};
     var sessions = remoteSessions();
@@ -237,7 +247,7 @@
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
           + (s.key ? '' : ' disabled')
           + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-          + '<span class="sessiondrawer__meta">' + esc(active ? '当前会话' : (s.updatedAt ? String(s.updatedAt) : '')) + '</span></button>';
+          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -854,7 +864,7 @@
             + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
             + (s.key ? '' : ' disabled')
             + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-            + '<span class="sessiondrawer__meta">' + esc(active ? '当前会话' : (s.updatedAt ? String(s.updatedAt) : '')) + '</span></button>';
+            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
         }).join('');
       }
       function setSessionDrawer(open) {
