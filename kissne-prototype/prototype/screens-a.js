@@ -1251,6 +1251,10 @@
           resolveApprovalCard(event.approval_id, String(event.decision || event.status || 'denied'));
           return;
         }
+        if (type === 'delta' && String(event.presentation || '') === 'tool_progress') {
+          setSessionStatus('正在调用工具…');
+          return;
+        }
         var el = liveEnsure(turnId);
         if (type === 'pending') {
           liveText(el, '正在思考…', true);
@@ -1263,6 +1267,7 @@
           liveCurrentTurn = turnId || liveCurrentTurn;
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
+          setSessionStatus('');
           var finalText = String(event.text || '');
           liveText(el, finalText, false);
           liveAvatar(el, 'happy');
@@ -1272,6 +1277,7 @@
           }
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
+          setSessionStatus('');
           liveText(el, '已停止回复', false);
           liveAvatar(el, 'idle');
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
