@@ -273,7 +273,7 @@ async def _handle_admin_sessions(request: Any) -> Any:
         conn = _sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=3)
         try:
             rows = conn.execute(
-                "SELECT id, source, user_id, message_count, started_at, model "
+                "SELECT id, source, user_id, title, message_count, started_at, model "
                 "FROM sessions ORDER BY started_at DESC LIMIT 200"
             ).fetchall()
             for row in rows:
@@ -281,10 +281,10 @@ async def _handle_admin_sessions(request: Any) -> Any:
                     "session_id": row[0] or "",
                     "source": row[1] or "",
                     "user_id": row[2] or "",
-                    "message_count": row[3] or 0,
-                    "created_at": row[4],
-                    "model": row[5] or "",
-                    "title": f"{row[1] or '?'}: {row[2] or 'local'}",
+                    "title": row[3] or f"{row[1] or '?'}: {row[2] or 'local'}",
+                    "message_count": row[4] or 0,
+                    "created_at": row[5],
+                    "model": row[6] or "",
                 })
         finally:
             conn.close()
