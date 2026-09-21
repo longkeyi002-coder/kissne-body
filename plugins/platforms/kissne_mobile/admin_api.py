@@ -351,12 +351,12 @@ CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
 
 def _read_config_yaml() -> dict:
     import yaml
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 def _write_config_yaml(cfg: dict) -> None:
     import yaml
-    with open(CONFIG_PATH, "w") as f:
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
 
 
