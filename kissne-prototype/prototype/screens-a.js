@@ -535,7 +535,38 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 真机只显示简短运行状态；不渲染原始思考链或演示工具详情。 */
+  /* 思考 / 工具折叠框使用同一套 Kissne 装饰语言。
+     用户给的分隔线全部保留为可轮换样式；窄屏会居中裁切，不会横向撑破页面。 */
+  var TLOG_DECOS = [
+    '₊⁺ ꒰১┈┈┈┈┈┈ ♡ ┈┈┈┈┈┈໒꒱ ⁺₊',
+    '๑┈┈┈┈┈┈૮⑅•̤ ༝ •̤⑅ა┈┈┈┈┈┈๑',
+    '☆──⚝───˗ˋˏ ♡ ˎˊ˗───⚝──☆',
+    '⑅ --- ･ --- ･ ---- ･ --- ･ ---ᦏᦑ--- ･ --- ･ --- ･ --- ･ --- ⑅',
+    '♡₊˚‧⸝⸝⸝♡₊˚‧⸝⸝⸝𓆩♡𓆪⸝⸝⸝‧˚₊ ♡⸝⸝⸝‧˚₊ ♡',
+    '˖✧꙳⊹☆₊★⁺☆℡★℡☆₊★⁺☆₊⁺ ⊹꙳✧˖',
+    '⌁⌁⌁⋆❤︎⋆⌁⌁⌁ 𓆩☘︎𓆪 ⌁⌁⌁⋆❤︎⋆⌁⌁⌁',
+    '♬• * ¨ * •. ¸¸ ♬• * ¨ * •. ¸¸ ♬• * ¨ * •. ¸¸ ♬',
+    '—————·★₊˚☪︎.‎˖ ♥︎ ·˖✶—————'
+  ];
+  function tlogDeco(seed, kind) {
+    var s = String(seed || '') + ':' + String(kind || '');
+    var h = 0;
+    for (var i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) >>> 0;
+    return TLOG_DECOS[h % TLOG_DECOS.length];
+  }
+  function tlogHtml(kind, title, body, seed, open) {
+    var deco = tlogDeco(seed, kind);
+    return '<div class="tlog tlog--' + esc(kind) + (open ? ' is-open' : '') + '" data-tlog-kind="' + esc(kind) + '">'
+      + '<button type="button" class="tlog__row" aria-expanded="' + (open ? 'true' : 'false') + '">'
+      + '<span class="tlog__orn">' + esc(deco) + '</span>'
+      + '<span class="tlog__rowmeta"><span class="tlog__label">' + esc(title) + '</span>'
+      + '<span class="tlog__state" data-tlog-state>' + (open ? '展开' : '已折叠') + '</span>'
+      + '<i class="tlog__car">⌄</i></span></button>'
+      + '<div class="tlog__body" data-tlog-body>' + esc(body || '') + '</div>'
+      + '<span class="tlog__orn tlog__bottom">' + esc(deco) + '</span></div>';
+  }
+
+  /* 真机只显示允许公开的运行摘要；不渲染 terminal 命令、工具内部参数或 provider hidden reasoning。 */
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
      之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
@@ -1038,7 +1069,11 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        append(aiMsg('正在思考' + dots(), 'is-pending', clockNow(), '思考', 'think'));
+        var activity = '<div data-live-activity>'
+          + tlogHtml('thought', '思考', '正在整理思路并组织回复…', id || 'pending', true)
+          + '</div>';
+        append(aiMsg(activity + '<div class="liveanswer is-pending" data-live-answer>正在思考' + dots() + '</div>',
+          '', clockNow(), '思考', 'think'));
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
@@ -1046,9 +1081,37 @@
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
       }
+      function ensureActivity(el, kind, turnId) {
+        if (!el) return null;
+        var host = el.querySelector('[data-live-activity]');
+        if (!host) return null;
+        var found = host.querySelector('[data-tlog-kind="' + kind + '"]');
+        if (found) return found;
+        var title = kind === 'tool' ? '工具调用' : '思考';
+        var body = kind === 'tool' ? 'Hermes 正在执行工具调用…' : '正在整理思路并组织回复…';
+        host.insertAdjacentHTML('beforeend', tlogHtml(kind, title, body, turnId || kind, true));
+        return host.lastElementChild;
+      }
+      function activityState(block, body, done) {
+        if (!block) return;
+        var b = block.querySelector('[data-tlog-body]');
+        if (b) b.textContent = String(body || '');
+        var st = block.querySelector('[data-tlog-state]');
+        if (st) st.textContent = done ? '完成 · 点按展开' : '进行中';
+        if (done) block.classList.remove('is-open');
+        var row = block.querySelector('.tlog__row');
+        if (row) row.setAttribute('aria-expanded', done ? 'false' : 'true');
+      }
+      function finishActivities(el) {
+        if (!el) return;
+        var thought = el.querySelector('[data-tlog-kind="thought"]');
+        var tool = el.querySelector('[data-tlog-kind="tool"]');
+        activityState(thought, '思考已完成。', true);
+        if (tool) activityState(tool, '工具调用已完成。', true);
+      }
       function liveText(el, text, pending) {
         if (!el) return;
-        var box = el.querySelector('.msg__text');
+        var box = el.querySelector('[data-live-answer]') || el.querySelector('.msg__text');
         if (!box) return;
         box.classList.toggle('is-pending', !!pending);
         box.textContent = String(text || '');
@@ -1111,6 +1174,10 @@
           return;
         }
         if (type === 'delta' && String(event.presentation || '') === 'tool_progress') {
+          var toolEl = liveEnsure(turnId);
+          var toolBlock = ensureActivity(toolEl, 'tool', turnId);
+          activityState(toolBlock, 'Hermes 正在执行工具调用…', false);
+          liveAvatar(toolEl, 'work');
           setSessionStatus('正在调用工具…');
           return;
         }
@@ -1127,6 +1194,7 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           setSessionStatus('');
+          finishActivities(el);
           var finalText = String(event.text || '');
           liveText(el, finalText, false);
           liveAvatar(el, 'happy');
@@ -1137,6 +1205,7 @@
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
           setSessionStatus('');
+          finishActivities(el);
           liveText(el, '已停止回复', false);
           liveAvatar(el, 'idle');
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -1341,7 +1410,12 @@
         while (t && t !== list && !(t.classList && t.classList.contains('tlog__row'))) t = t.parentNode;
         if (!t || t === list) return;
         var blk = t.parentNode;
-        if (blk && blk.classList) blk.classList.toggle('is-open');
+        if (blk && blk.classList) {
+          var open = blk.classList.toggle('is-open');
+          t.setAttribute('aria-expanded', open ? 'true' : 'false');
+          var st = blk.querySelector('[data-tlog-state]');
+          if (st) st.textContent = open ? '展开' : '已折叠';
+        }
       }
       async function onApprovalTap(e) {
         var control = e.target.closest && e.target.closest('[data-approval-decision]');
