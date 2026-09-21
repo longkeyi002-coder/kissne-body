@@ -236,3 +236,33 @@ def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_pat
     assert rows[1]["attachments"][0]["label"] == "notes.txt"
     assert rows[2]["message_ref"] == "turn:kbm_turn_quote:assistant"
 
+
+
+def test_mobile_history_filters_internal_tool_and_reasoning_rows(tmp_path):
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+
+        assert adapter._mobile_visible_transcript_row({
+            "role": "user", "content": "真实用户消息"
+        }) is True
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "最终可见回复",
+            "reasoning_content": "durable provider replay sidecar",
+        }) is True
+
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "terminal ls ~/.hermes/memories/",
+            "tool_name": "terminal",
+        }) is False
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "Reading SELF.md",
+            "tool_calls": [{"name": "read"}],
+        }) is False
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "internal status",
+            "display_kind": "internal_notification",
+        }) is False
+        assert adapter._mobile_visible_transcript_row({
+            "role": "assistant", "content": "hidden reasoning text",
+            "display_kind": "reasoning",
+        }) is False
