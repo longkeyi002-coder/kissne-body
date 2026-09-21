@@ -842,21 +842,32 @@
         if (MODEL_OPTIONS_LOADING) return;
         if (!force && MODEL_OPTIONS_LOADED_AT && Date.now() - MODEL_OPTIONS_LOADED_AT < 30000) return;
         MODEL_OPTIONS_LOADING = true;
-        T.modelOptions().then(function (payload) {
+        var modelTimeout = null;
+        var timeoutPromise = new Promise(function (_, reject) {
+          modelTimeout = setTimeout(function () {
+            var error = new Error('model_options_timeout');
+            error.code = 'timeout';
+            reject(error);
+          }, 8000);
+        });
+        Promise.race([T.modelOptions(), timeoutPromise]).then(function (payload) {
           applyHermesModelOptions(payload);
           updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
         }).catch(function (err) {
           var status = Number(err && err.status) || 0;
-          MODEL_OPTIONS_ERROR = status === 401
-            ? '模型控制接口认证失败，聊天连接保持不变'
-            : '无法读取 Hermes 模型列表';
-          MODELS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
-          EFFORTS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
+          MODEL_OPTIONS_ERROR = err && err.code === 'timeout'
+            ? '模型列表读取超时，聊天仍可正常使用'
+            : (status === 401
+                ? '模型控制接口认证失败，聊天连接保持不变'
+                : '无法读取 Hermes 模型列表');
+          MODELS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
+          EFFORTS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
           MODEL_OPTIONS_LOADED_AT = Date.now();
           updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
         }).finally(function () {
+          clearTimeout(modelTimeout);
           MODEL_OPTIONS_LOADING = false;
         });
       }
