@@ -826,6 +826,7 @@
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
       var liveCurrentTurn = '';
+      var liveSendInFlight = false;
       var liveBootstrapTimer = null;
       var retryMessageId = '';
       var retryMessageText = '';
@@ -1295,6 +1296,7 @@
         }
       }
       async function push() {
+        if (liveSendInFlight) return;
         if (live && send.getAttribute('data-live-cancel') === '1') {
           await liveCancel();
           return;
@@ -1321,6 +1323,7 @@
         }
 
         if (live) {
+          liveSendInFlight = true;
           try {
             var accepted = await T.sendText(v, messageId);
             retryMessageId = '';
@@ -1340,6 +1343,8 @@
                 setSessionStatus('认证已恢复，请再次点击发送。');
               }
             }
+          } finally {
+            liveSendInFlight = false;
           }
           return;
         }
@@ -1377,12 +1382,15 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
         /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
            先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) {
+        if (live && !liveSendInFlight) {
+          liveSendInFlight = true;
           T.sendText('[表情包：' + s2.label + ']').then(function (accepted) {
             liveCurrentTurn = String((accepted && accepted.turn_id) || '');
             if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
             scheduleLivePoll(0);
-          }).catch(function () {});
+          }).catch(function () {}).then(function () {
+            liveSendInFlight = false;
+          });
         }
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
@@ -1552,8 +1560,8 @@
           setSessionDrawer(false);
           return;
         }
-        if (liveCurrentTurn) {
-          setSessionStatus('当前回复尚未结束，请先停止后再切换会话。');
+        if (liveSendInFlight || liveCurrentTurn) {
+          setSessionStatus('当前消息或回复尚未结束，请先完成或停止后再切换会话。');
           setSessionDrawer(false);
           return;
         }

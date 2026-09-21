@@ -216,7 +216,7 @@
   async function pair(opts) {
     opts = opts || {};
     var base = setBase(opts.apiBase || '');
-    var body = { installation_id: installationId() };
+    var body = { installation_id: installationId(), rotate_token: true };
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) { set(KEY.token, out.device_token); set(KEY.cursor, '0'); }
     return out;

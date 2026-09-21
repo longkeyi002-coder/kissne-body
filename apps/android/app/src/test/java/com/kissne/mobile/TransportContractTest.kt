@@ -13,6 +13,14 @@ class TransportContractTest {
     }
     @Test fun retry_keeps_client_message_id() { val first = OutboundMessage("msg-1", "hello"); assertEquals(first.messageId, first.copy().messageId) }
     @Test fun nullable_wire_values_stay_null() { assertNull(JSONObjectProbe.nullable(null)) }
+
+    @Test fun session_switch_is_serialized_with_send_transport() {
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("sendText"))
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("selectSession"))
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("poll"))
+        assertEquals(BridgeLane.CONTROL, bridgeLane("sessions"))
+        assertEquals(BridgeLane.CONTROL, bridgeLane("modelOptions"))
+    }
 }
 
 private object JSONObjectProbe { fun nullable(value: String?): String? = value?.ifBlank { null } }

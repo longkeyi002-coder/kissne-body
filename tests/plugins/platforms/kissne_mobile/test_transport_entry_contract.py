@@ -269,3 +269,40 @@ def test_pairing_attempts_are_rate_limited(tmp_path):
     first_throttle = statuses.index(429)
     assert first_throttle >= 1, (
         "the very first pairing attempt was throttled: the limit must allow normal use")
+
+
+def test_deployment_routes_require_operator_scoped_token(tmp_path, monkeypatch):
+    async def scenario():
+        from plugins.platforms.kissne_mobile import admin_api
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter.set_session_store(build_session_store(home))
+            port = await start(adapter)
+            try:
+                device_status, device_pair, _ = await http(
+                    port, "POST", "/pair",
+                    body={"installation_id": "ordinary-device"},
+                )
+                device_token = str(device_pair.get("device_token") or "")
+                merge_device = await http(port, "POST", "/admin/merge", token=device_token)
+                rollback_device = await http(port, "POST", "/admin/rollback", token=device_token)
+
+                code = adapter.issue_pairing_code()
+                admin_status, admin_pair, _ = await http(
+                    port, "POST", "/pair",
+                    body={"installation_id": "operator-device", "pairing_code": code},
+                )
+                admin_token = str(admin_pair.get("device_token") or "")
+                monkeypatch.setattr(admin_api, "DEPLOY_SCRIPT", tmp_path / "missing-deploy.sh")
+                merge_admin = await http(port, "POST", "/admin/merge", token=admin_token)
+            finally:
+                await stop(adapter)
+        return device_status, device_pair, merge_device, rollback_device, admin_status, admin_pair, merge_admin
+
+    device_status, device_pair, merge_device, rollback_device, admin_status, admin_pair, merge_admin = run(scenario())
+    assert device_status == 201, device_pair
+    assert merge_device[0] == 403 and merge_device[1].get("error") == "admin_scope_required", merge_device
+    assert rollback_device[0] == 403 and rollback_device[1].get("error") == "admin_scope_required", rollback_device
+    assert admin_status == 201, admin_pair
+    assert merge_admin[0] == 404 and merge_admin[1].get("error") == "deploy script not found", merge_admin

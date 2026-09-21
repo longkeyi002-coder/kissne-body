@@ -50,7 +50,10 @@ class PrototypeBridge(
                 .put("installation_id", store.installationId())
                 .put("existing", true)
         }
-        val paired = client().pairPayload(store.installationId())
+        val paired = client().pairPayload(
+            store.installationId(),
+            rotateToken = true,
+        )
         val token = paired.optString("device_token")
         if (token.isBlank()) throw IllegalStateException("device_token_missing")
         store.saveToken(token)
@@ -78,7 +81,7 @@ class PrototypeBridge(
         action in setOf(
             "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
-            "adminStatus", "adminMerge", "adminRollback", "adminDeployLog",
+            "adminStatus", "adminDeployLog",
         )
 
     private fun executeAction(action: String, body: JSONObject): JSONObject =
@@ -153,10 +156,9 @@ class PrototypeBridge(
 
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
-        val executor = when (action) {
-            "modelOptions", "setModel", "sessions", "selectSession",
-            "adminStatus", "adminMerge", "adminRollback", "adminDeployLog" -> controlExecutor
-            else -> transportExecutor
+        val executor = when (bridgeLane(action)) {
+            BridgeLane.CONTROL -> controlExecutor
+            BridgeLane.TRANSPORT -> transportExecutor
         }
         executor.execute {
             val body = try {

@@ -128,8 +128,25 @@ async def _authenticated_admin(request: Any) -> Optional[str]:
     """Verify the request carries a valid device token. Returns installation_id or None."""
     if _adapter_ref is None:
         return None
-    installation = await _adapter_ref._authenticated_installation(request)
-    return installation
+    return await _adapter_ref._authenticated_installation(request)
+
+
+async def _authenticated_operator(request: Any) -> tuple[Optional[str], int]:
+    """Require the separate admin scope for deployment-changing routes."""
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return None, 401
+    if _adapter_ref is None:
+        return None, 401
+    token = _adapter_ref._presented_token(request)
+    privileged = await asyncio.to_thread(
+        _adapter_ref.device_store().authenticate,
+        token,
+        required_scope="admin",
+    )
+    if privileged != installation:
+        return None, 403
+    return privileged, 200
 
 
 # --- GET /admin/status ---
@@ -163,9 +180,10 @@ async def _handle_admin_status(request: Any) -> Any:
 async def _handle_admin_merge(request: Any) -> Any:
     from aiohttp import web
 
-    installation = await _authenticated_admin(request)
+    installation, auth_status = await _authenticated_operator(request)
     if not installation:
-        return web.json_response({"error": "unauthorized"}, status=401)
+        error = "unauthorized" if auth_status == 401 else "admin_scope_required"
+        return web.json_response({"error": error}, status=auth_status)
 
     if _deploy_state["running"]:
         return web.json_response({"error": "deploy already in progress", "type": _deploy_state["type"]}, status=409)
@@ -199,9 +217,10 @@ async def _handle_admin_merge(request: Any) -> Any:
 async def _handle_admin_rollback(request: Any) -> Any:
     from aiohttp import web
 
-    installation = await _authenticated_admin(request)
+    installation, auth_status = await _authenticated_operator(request)
     if not installation:
-        return web.json_response({"error": "unauthorized"}, status=401)
+        error = "unauthorized" if auth_status == 401 else "admin_scope_required"
+        return web.json_response({"error": error}, status=auth_status)
 
     if _deploy_state["running"]:
         return web.json_response({"error": "deploy already in progress", "type": _deploy_state["type"]}, status=409)

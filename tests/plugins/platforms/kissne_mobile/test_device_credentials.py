@@ -147,3 +147,17 @@ def test_full_token_is_never_logged(caplog):
     assert plugin_records, "the device store emitted no log records — logging must be reviewable"
     leaking = [r.getMessage() for r in plugin_records if token in str(r.getMessage())]
     assert not leaking, f"the full device token appears in log output: {leaking}"
+
+
+def test_admin_scope_is_separate_from_auto_pair_device_scope():
+    store, _module = _new_store()
+    device = store.create_device_token("inst-scope")
+    admin = store.redeem_pairing_code(
+        store.issue_pairing_code(), installation_id="inst-scope", scope="admin"
+    )
+
+    assert store.authenticate(device) == "inst-scope"
+    assert store.authenticate(device, required_scope="admin") is None
+    assert store.authenticate(admin) == "inst-scope"
+    assert store.authenticate(admin, required_scope="admin") == "inst-scope"
+    store.close()

@@ -44,8 +44,8 @@ android {
         applicationId = "com.kissne.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 6
+        versionName = "0.2.4"
         manifestPlaceholders["appLabel"] = "Kissne"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MOBILE_BASE_URL", "\"${mobileBaseUrl.get()}\"")

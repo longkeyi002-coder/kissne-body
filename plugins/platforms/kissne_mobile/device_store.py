@@ -255,17 +255,22 @@ class DeviceStore:
         logger.info("[kissne_mobile] issued pairing code %s (ttl=%.1fs)", _fingerprint(digest), ttl)
         return code
 
-    def redeem_pairing_code(self, code: str, installation_id: str) -> str:
-        """Consume ``code`` once and return the PLAINTEXT device token for ``installation_id``.
+    def redeem_pairing_code(
+        self, code: str, installation_id: str, *, scope: str = "device"
+    ) -> str:
+        """Consume ``code`` once and return a scoped plaintext token for ``installation_id``.
 
-        Raises :class:`PairingCodeInvalid` / :class:`PairingCodeExpired` / :class:`PairingCodeReplayed`
-        — a code is accepted exactly once, and only inside its validity window.
+        ``scope="admin"`` is reserved for an operator-issued pairing code. Auto-pair never
+        creates that scope, so a normal mobile device credential cannot authorize deployment.
         """
         if not isinstance(code, str) or not code.strip():
             raise PairingCodeInvalid("empty pairing code")
         installation = str(installation_id or "").strip()
         if not installation:
             raise ValueError("installation_id is required to redeem a pairing code")
+        token_scope = str(scope or "").strip().lower()
+        if token_scope not in {"device", "admin"}:
+            raise ValueError("token scope must be 'device' or 'admin'")
         digest = _digest(code.strip())
         now = time.time()
         with self._lock:
@@ -300,8 +305,8 @@ class DeviceStore:
                     raise PairingCodeReplayed("pairing code was already redeemed")
                 conn.execute(
                     "INSERT INTO devices (token_hash, installation_id, scope, created_at) "
-                    "VALUES (?, ?, 'device', ?)",
-                    (token_hash, installation, now),
+                    "VALUES (?, ?, ?, ?)",
+                    (token_hash, installation, token_scope, now),
                 )
                 conn.commit()
             except PairingError:
@@ -315,21 +320,28 @@ class DeviceStore:
 
     # -- device tokens -----------------------------------------------------------------------------
 
-    def authenticate(self, token: str) -> Optional[str]:
-        """Installation id for a live token, or ``None`` when it is unknown or revoked."""
+    def authenticate(self, token: str, *, required_scope: Optional[str] = None) -> Optional[str]:
+        """Installation id for a live token, optionally requiring an exact credential scope."""
         if not isinstance(token, str) or not token.strip():
             return None
         digest = _digest(token.strip())
         with self._lock:
             conn = self._db()
             row = conn.execute(
-                "SELECT installation_id, revoked_at FROM devices WHERE token_hash = ?", (digest,)
+                "SELECT installation_id, scope, revoked_at FROM devices WHERE token_hash = ?", (digest,)
             ).fetchone()
             if row is None:
                 logger.warning("[kissne_mobile] device token %s refused: unknown", _fingerprint(digest))
                 return None
             if row["revoked_at"] is not None:
                 logger.warning("[kissne_mobile] device token %s refused: revoked", _fingerprint(digest))
+                return None
+            token_scope = str(row["scope"] or "device")
+            if required_scope is not None and token_scope != str(required_scope):
+                logger.warning(
+                    "[kissne_mobile] device token %s refused: scope %s does not satisfy %s",
+                    _fingerprint(digest), token_scope, required_scope,
+                )
                 return None
             installation = str(row["installation_id"])
             try:
@@ -407,7 +419,7 @@ class DeviceStore:
     def create_device_token(self, installation_id: str) -> str:
         """Create a device token directly (no pairing code needed). Used in auto_pair mode."""
         installation = self._installation(installation_id)
-        token = secrets.token_urlsafe(32)
+        token = f"{TOKEN_PREFIX}{_DEVICE_MARK}_{secrets.token_urlsafe(32)}"
         token_hash = _digest(token)
         now = time.time()
         with self._lock:
