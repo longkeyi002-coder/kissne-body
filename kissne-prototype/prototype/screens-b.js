@@ -417,8 +417,19 @@
       function handleError(err, retryDeployLog) {
         var status = Number(err && err.status) || 0;
         if (status === 401) {
-          showNotice('error', '设备认证已失效，请重新配对。');
-          location.hash = '#/connect';
+          showNotice('working', 'device token 已失效，正在自动刷新认证…');
+          if (T && typeof T.ensureToken === 'function') {
+            T.ensureToken(true).then(function () {
+              if (retryDeployLog) pollDeployLog(100);
+              else loadStatus();
+            }).catch(function () {
+              showNotice('error', '暂时无法恢复设备认证，请稍后重试。');
+              setBusy(false);
+            });
+          } else {
+            showNotice('error', '暂时无法恢复设备认证，请稍后重试。');
+            setBusy(false);
+          }
           return;
         }
         if (status === 409) {
@@ -441,6 +452,7 @@
       }
       async function loadStatus() {
         try {
+          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
           var data = await T.adminStatus();
           if (disposed) return;
           var running = applyStatus(data);
