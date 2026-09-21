@@ -97,8 +97,15 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
-      selectSession: function (sessionKey) {
-        return nativeCall('selectSession', { session_key: String(sessionKey || '') });
+      memories: function () { return nativeCall('memories', {}); },
+      deleteMemory: function (memoryId) {
+        return nativeCall('deleteMemory', { memory_id: String(memoryId || '') });
+      },
+      selectSession: function (sessionKey, sessionId) {
+        return nativeCall('selectSession', {
+          session_key: String(sessionKey || ''),
+          session_id: String(sessionId || '')
+        });
       },
       bootstrap: function () { return nativeCall('bootstrap', { cursor: Number(Native.getCursor()) || 0 }); },
       sendText: function (text, messageId) {
@@ -240,13 +247,28 @@
       base: adminBase()
     });
   }
-  async function selectSession(sessionKey) {
+  function memories() {
+    return request('/admin/memory', { method: 'GET', base: adminBase() });
+  }
+  function deleteMemory(memoryId) {
+    var id = String(memoryId || '').trim();
+    if (!id) throw new ApiError(400, { error: 'memory_id_required' }, 'memory_id_required');
+    return request('/admin/memory/' + encodeURIComponent(id), {
+      method: 'DELETE',
+      base: adminBase()
+    });
+  }
+  async function selectSession(sessionKey, sessionId) {
     var key = String(sessionKey || '').trim();
-    if (!key) throw new ApiError(400, { error: 'session_key_required' }, 'session_key_required');
+    var id = String(sessionId || '').trim();
+    if (!key && !id) throw new ApiError(400, { error: 'session_identity_required' }, 'session_identity_required');
     var oldToken = deviceToken();
+    var body = { installation_id: installationId() };
+    if (key) body.session_key = key;
+    if (id) body.session_id = id;
     var out = await request('/mobile/pair', {
       method: 'POST',
-      body: { installation_id: installationId(), session_key: key },
+      body: body,
       auth: false
     });
     if (out.device_token && out.device_token !== oldToken) {
@@ -330,6 +352,8 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    memories: memories,
+    deleteMemory: deleteMemory,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
