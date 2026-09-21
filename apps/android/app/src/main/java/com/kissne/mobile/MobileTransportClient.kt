@@ -18,13 +18,13 @@ class MobileTransportClient(
     private fun nullableString(json: JSONObject, key: String): String? =
         if (json.isNull(key)) null else json.optString(key).ifBlank { null }
 
-    private fun request(method: String, path: String, body: JSONObject? = null): JSONObject {
+    private fun request(method: String, path: String, body: JSONObject? = null, auth: Boolean = true): JSONObject {
         val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
             setRequestProperty("Accept", "application/json")
-            tokenProvider()?.takeIf { it.isNotBlank() }?.let {
+            if (auth) tokenProvider()?.takeIf { it.isNotBlank() }?.let {
                 setRequestProperty("Authorization", "Bearer $it")
             }
             if (body != null) {
@@ -89,7 +89,7 @@ class MobileTransportClient(
             .put("pairing_code", pairingCode)
             .put("installation_id", installationId)
         sessionKey?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
-        return request("POST", "/pair", body)
+        return request("POST", "/pair", body, auth = false)
     }
 
     fun pair(pairingCode: String, installationId: String, sessionKey: String? = null): String =
@@ -137,6 +137,9 @@ class MobileTransportClient(
 
     fun cancelPayload(turnId: String): JSONObject =
         request("POST", "/cancel", JSONObject().put("turn_id", turnId))
+
+    fun revoke(): JSONObject =
+        request("POST", "/revoke")
 
     fun cancel(turnId: String): String = cancelPayload(turnId).optString("state", "cancelled")
 }
