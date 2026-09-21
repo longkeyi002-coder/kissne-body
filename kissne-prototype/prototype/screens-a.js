@@ -616,15 +616,8 @@
     if (!list) return false;
     return list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
   }
-  /* 演示用：塞两条"你没看见的"AI 消息，落到未读里 */
-  function seedUnread() {
-    ['顺便说一句，「美术馆」周六上午人少，我记下了。',
-     '你上次问的那个展，票根我放进记忆库了。'].forEach(function (t) {
-      CHAT_LOG.push({ who: 'ai', html: t, time: clockNow() });
-      if (!UNREAD.n) UNREAD.first = CHAT_LOG.length - 1;
-      UNREAD.n++;
-    });
-  }
+  /* 真机模式不注入演示未读消息。 */
+  function seedUnread() {}
   K.unreadBadge = function () { return UNREAD.n; };
   /* 最近一次「通话记录行」写进聊天记录的时间，防止切状态重渲染时重复写 */
   var CALL_LOGGED_AT = 0;
@@ -1019,6 +1012,7 @@
       var retryMessageId = '';
       var retryMessageText = '';
       var liveApprovals = Object.create(null);
+      var bootstrapStatusEl = null;
       var sessionStatus = root.querySelector('[data-session-status]');
       function setSessionStatus(text) {
         if (!sessionStatus) return;
@@ -1146,6 +1140,22 @@
         return '<div class="chatempty">' + ph('FOX_STATE_EMOTION', { size: 132 })
           + '<div class="chatempty__t">还没有消息</div>'
           + '<div class="chatempty__s">发一条消息，开始和叶青栩对话。</div></div>';
+      }
+      function setBootstrapStatus(text) {
+        if (!text) {
+          if (bootstrapStatusEl && bootstrapStatusEl.parentNode) bootstrapStatusEl.parentNode.removeChild(bootstrapStatusEl);
+          bootstrapStatusEl = null;
+          return;
+        }
+        if (!bootstrapStatusEl || !bootstrapStatusEl.isConnected) {
+          var wrap = document.createElement('div');
+          wrap.innerHTML = '<div class="msg msg--sys" data-bootstrap-status>'
+            + '<div class="msg__sysline"></div></div>';
+          bootstrapStatusEl = wrap.firstElementChild;
+          list.appendChild(bootstrapStatusEl);
+        }
+        var line = bootstrapStatusEl.querySelector('.msg__sysline');
+        if (line) line.textContent = text;
       }
       function hydrateHistory(history) {
         CHAT_LOG.length = 0;
