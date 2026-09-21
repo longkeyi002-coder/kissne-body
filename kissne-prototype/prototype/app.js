@@ -61,6 +61,10 @@
     if (!COLD && String(to).indexOf('#/welcome') === 0) {
       to = '#/home';
     }
+    if (COLD && String(to).indexOf('#/welcome') !== 0) {
+      COLD = false;
+      clearTimeout(splashTimer);
+    }
     /* Once anything leaves the splash, cancel every pending splash timer/event
        before changing hash. Connection/home/chat can never be pulled back. */
     if (COLD && String(to).indexOf('#/welcome') !== 0) {
