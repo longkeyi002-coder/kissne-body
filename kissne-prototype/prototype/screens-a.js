@@ -652,7 +652,7 @@
     }).join('')
       + '<div class="tlog__kv"><span>状态</span><b data-tool-status>'
       + (status || ('已完成 · ' + (cost || '0.8s'))) + '</b></div>';
-    return tlogBlock('tool', '调用工具 · ' + name + '（示例）', kv, open);
+    return tlogBlock('tool', '调用工具 · ' + name', kv, open);
   }
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
@@ -880,7 +880,7 @@
               ] })
             + toolCard('写备忘录', [
                 ['内容', '「周六去看展」'],
-                ['结果', '待写入 · 需你确认（待接入）']
+                ['结果', '需你确认']
               ], '0.6s')
             + '<div>写好了，放在备忘录第一条。要改随时说。</div>', '', '09:43', '便签', 'work');
         }
@@ -2074,7 +2074,7 @@
         + '\n          <div class="mapstack__actor' + (aiOnActive ? '' : ' is-hidden') + '"'
         + ' style="left:' + aiSpot[0] + '%;top:' + aiSpot[1] + '%"'
         + ' data-placeholder="FOX_PIXEL_SPRITE"'
-        + ' title="FOX_PIXEL_SPRITE · 叶青栩像素小人（纯色块拼，占位）"'
+        + ' title="FOX_PIXEL_SPRITE · 叶青栩"'
         + ' data-asset="characters/yeqingxu/actions/pixel.svg"'
         + ' data-nav="' + aiNav + '">' + sprite('') + '</div>'
         + (entered
@@ -2277,7 +2277,7 @@
       var share = CALL.kind === 'share';
       var status = connecting ? '正在连接…'
                  : (share ? '屏幕共享中' : '通话中')
-                   + (muted ? ' · 已静音（示例）' : '')
+                   + (muted ? ' · 已静音' : '')
                    + ' · <span data-calltime>' + callClock() + '</span>';
 
       return `
@@ -2422,7 +2422,6 @@
             + '<span class="stkup__box">' + icon('plus', 20) + '</span>'
             + '<span class="stkup__main"><b>上传表情包</b>'
             + '<span>从相册选图，上传后我和叶青栩都能用</span></span>'
-            + chip('待接入', 'warn')
             + '</div>'
             + '<div class="stkrule">'
             + '<div class="stkrule__row"><b>尺寸</b><span>240×240px（按微信表情的规格）</span></div>'
