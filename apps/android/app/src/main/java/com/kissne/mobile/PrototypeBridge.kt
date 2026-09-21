@@ -1,5 +1,6 @@
 package com.kissne.mobile
 
+import android.view.HapticFeedbackConstants
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONObject
@@ -33,6 +34,13 @@ class PrototypeBridge(
     @JavascriptInterface fun getCursor(): Long = store.cursor
 
     @JavascriptInterface
+    fun haptic() {
+        webView.post {
+            webView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+
+    @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         executor.execute {
             try {
@@ -47,7 +55,10 @@ class PrototypeBridge(
                             sessionKey = store.sessionKey.ifBlank { null },
                         )
                         paired.optString("device_token").takeIf { it.isNotBlank() }?.let(store::saveToken)
-                        paired
+                        JSONObject()
+                            .put("ok", paired.optBoolean("ok", true))
+                            .put("installation_id", paired.optString("installation_id"))
+                            .put("conversation_bound", paired.optBoolean("conversation_bound", false))
                     }
                     "bootstrap" -> client().bootstrapPayload(body.optLong("cursor", store.cursor))
                     "sendText" -> client().sendPayload(
