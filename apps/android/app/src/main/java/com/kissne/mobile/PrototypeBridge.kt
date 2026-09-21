@@ -79,7 +79,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
+            "sessions", "memories", "deleteMemory", "bootstrap", "sendText", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus", "adminDeployLog",
         )
@@ -91,10 +91,23 @@ class PrototypeBridge(
                 ensureDeviceToken(body.optBoolean("force", false))
             }
             "sessions" -> client().sessionsPayload()
+            "memories" -> client().memoriesPayload()
+            "deleteMemory" -> {
+                val memoryId = body.optString("memory_id")
+                if (memoryId.isBlank()) throw IllegalArgumentException("memory_id_required")
+                client().deleteMemoryPayload(memoryId)
+            }
             "selectSession" -> {
                 val sessionKey = body.optString("session_key")
-                if (sessionKey.isBlank()) throw IllegalArgumentException("session_key_required")
-                val selected = client().pairPayload(store.installationId(), sessionKey)
+                val sessionId = body.optString("session_id")
+                if (sessionKey.isBlank() && sessionId.isBlank()) {
+                    throw IllegalArgumentException("session_identity_required")
+                }
+                val selected = client().pairPayload(
+                    installationId = store.installationId(),
+                    sessionKey = sessionKey.takeIf { it.isNotBlank() },
+                    sessionId = sessionId.takeIf { it.isNotBlank() },
+                )
                 val returnedToken = selected.optString("device_token")
                 if (returnedToken.isNotBlank() && returnedToken != store.deviceToken) {
                     store.saveToken(returnedToken)
