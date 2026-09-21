@@ -554,6 +554,19 @@
     for (var i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) >>> 0;
     return TLOG_DECOS[h % TLOG_DECOS.length];
   }
+  function cleanActivityText(value, fallback) {
+    var text = String(value == null ? '' : value);
+    /* Activity rows are intentionally text-only: remove pictographic emoji,
+       variation selectors and ZWJ sequences. The decorative frame is separate
+       and is not passed through this sanitizer. */
+    try {
+      text = text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '');
+    } catch (e) {
+      text = text.replace(/[\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF\uFE0F\u200D]/g, '');
+    }
+    text = text.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
+    return text || String(fallback || '');
+  }
   function tlogHtml(kind, title, body, seed, open) {
     var deco = tlogDeco(seed, kind);
     return '<div class="tlog tlog--' + esc(kind) + (open ? ' is-open' : '') + '" data-tlog-kind="' + esc(kind) + '">'
@@ -562,7 +575,7 @@
       + '<span class="tlog__rowmeta"><span class="tlog__label">' + esc(title) + '</span>'
       + '<span class="tlog__state" data-tlog-state>' + (open ? '展开' : '已折叠') + '</span>'
       + '<i class="tlog__car">⌄</i></span></button>'
-      + '<div class="tlog__body" data-tlog-body>' + esc(body || '') + '</div>'
+      + '<div class="tlog__body" data-tlog-body>' + esc(cleanActivityText(body, '处理中…')) + '</div>'
       + '<span class="tlog__orn tlog__bottom">' + esc(deco) + '</span></div>';
   }
 
@@ -571,6 +584,54 @@
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
      之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
   var CHAT_LOG = [];
+  /* UI-rich state is kept outside the transient DOM so a chat rerender cannot
+     erase an in-flight/completed thought/tool fold. Backend history still
+     remains the source of truth for message text. */
+  var TURN_ACTIVITY = Object.create(null);
+  var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
+
+  function activityForTurn(turnId) {
+    var id = String(turnId || 'pending');
+    if (!TURN_ACTIVITY[id]) {
+      TURN_ACTIVITY[id] = { thought: true, tool: false, done: false };
+    }
+    return TURN_ACTIVITY[id];
+  }
+  function activityMarkupForTurn(turnId, done) {
+    var id = String(turnId || 'pending');
+    var state = activityForTurn(id);
+    var closed = done === true || state.done === true;
+    var html = tlogHtml('thought', '思考', closed ? '思考已完成。' : '正在整理思路并组织回复…', id, !closed);
+    if (state.tool) {
+      html += tlogHtml('tool', '工具调用', closed ? '工具调用已完成。' : 'Hermes 正在执行工具调用…', id, !closed);
+    }
+    return '<div class="activity-history" data-activity-turn="' + esc(id) + '">' + html + '</div>';
+  }
+  function rememberFinalActivity(text, turnId) {
+    var raw = String(text || '');
+    if (!raw) return '';
+    var state = activityForTurn(turnId);
+    state.done = true;
+    var html = activityMarkupForTurn(turnId, true);
+    FINAL_ACTIVITY_BY_TEXT[raw] = html;
+    return html;
+  }
+  function stickerFromWire(text) {
+    var raw = String(text == null ? '' : text).trim();
+    var m = /^\[表情包：(.+)\]$/.exec(raw);
+    if (!m || !STICKERS || !STICKERS.length) return '';
+    var label = m[1];
+    for (var i = 0; i < STICKERS.length; i++) {
+      if (STICKERS[i].label === label || STICKERS[i].k === label) {
+        return '<span class="stkmsg">' + K.sticker(STICKERS[i].k, { alt: STICKERS[i].label }) + '</span>';
+      }
+    }
+    return '';
+  }
+  function chatHtmlFromWire(text) {
+    var sticker = stickerFromWire(text);
+    return sticker || esc(String(text == null ? '' : text));
+  }
   function clockNow() {
     var d = new Date();
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
@@ -611,7 +672,9 @@
   function logRender() {
     return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
-      return m.who === 'ai' ? aiMsg(m.html, m.cls || '', m.time) : meMsg(m.html, m.meta || '', m.time);
+      return m.who === 'ai'
+        ? aiMsg((m.activity || '') + m.html, m.cls || '', m.time)
+        : meMsg(m.html, m.meta || '', m.time);
     }).join('');
   }
 
@@ -1052,9 +1115,11 @@
         liveApprovals = Object.create(null);
         (history || []).forEach(function (item) {
           if (!item || (item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string') return;
+          var rawText = String(item.text);
           CHAT_LOG.push({
             who: item.role === 'user' ? 'me' : 'ai',
-            html: esc(item.text),
+            html: chatHtmlFromWire(rawText),
+            activity: item.role === 'assistant' ? (FINAL_ACTIVITY_BY_TEXT[rawText] || '') : '',
             time: historyClock(item.created_at)
           });
         });
@@ -1069,9 +1134,8 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        var activity = '<div data-live-activity>'
-          + tlogHtml('thought', '思考', '正在整理思路并组织回复…', id || 'pending', true)
-          + '</div>';
+        activityForTurn(id || 'pending');
+        var activity = '<div data-live-activity>' + activityMarkupForTurn(id || 'pending', false) + '</div>';
         append(aiMsg(activity + '<div class="liveanswer is-pending" data-live-answer>正在思考' + dots() + '</div>',
           '', clockNow(), '思考', 'think'));
         var el = list.lastElementChild;
@@ -1085,6 +1149,7 @@
         if (!el) return null;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return null;
+        if (kind === 'tool') activityForTurn(turnId || 'pending').tool = true;
         var found = host.querySelector('[data-tlog-kind="' + kind + '"]');
         if (found) return found;
         var title = kind === 'tool' ? '工具调用' : '思考';
@@ -1095,15 +1160,16 @@
       function activityState(block, body, done) {
         if (!block) return;
         var b = block.querySelector('[data-tlog-body]');
-        if (b) b.textContent = String(body || '');
+        if (b) b.textContent = cleanActivityText(body, done ? '已完成。' : '处理中…');
         var st = block.querySelector('[data-tlog-state]');
         if (st) st.textContent = done ? '完成 · 点按展开' : '进行中';
         if (done) block.classList.remove('is-open');
         var row = block.querySelector('.tlog__row');
         if (row) row.setAttribute('aria-expanded', done ? 'false' : 'true');
       }
-      function finishActivities(el) {
+      function finishActivities(el, turnId) {
         if (!el) return;
+        activityForTurn(turnId || 'pending').done = true;
         var thought = el.querySelector('[data-tlog-kind="thought"]');
         var tool = el.querySelector('[data-tlog-kind="tool"]');
         activityState(thought, '思考已完成。', true);
@@ -1194,18 +1260,19 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           setSessionStatus('');
-          finishActivities(el);
+          finishActivities(el, turnId);
           var finalText = String(event.text || '');
+          var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
           liveText(el, finalText, false);
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
-            CHAT_LOG.push({ who: 'ai', html: esc(finalText), time: clockNow() });
+            CHAT_LOG.push({ who: 'ai', html: esc(finalText), activity: finalActivity, time: clockNow() });
           }
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
           setSessionStatus('');
-          finishActivities(el);
+          finishActivities(el, turnId);
           liveText(el, '已停止回复', false);
           liveAvatar(el, 'idle');
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -1356,19 +1423,52 @@
             scheduleLivePoll(0);
           }).catch(function () {});
         }
-        location.hash = '#/chat?state=' + stkState;      /* 收起面板 */
+        /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
+           会把仍在 DOM 里的工具/思考进度一起销毁。 */
+        var panelEl = root.querySelector('.stkpanel');
+        if (panelEl && panelEl.parentNode) panelEl.parentNode.removeChild(panelEl);
+        var stickerToggle = root.querySelector('.qbtn.is-on');
+        if (stickerToggle) stickerToggle.classList.remove('is-on');
+        try { history.replaceState(null, '', '#/chat?state=' + stkState); } catch (ignore) {}
       }
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
-      /* 输入区保持在聊天页 flex 文档流底部。
-         真机软键盘出现/收起时由浏览器 visual viewport 调整可视区域，
-         不再手动写 bottom / transform / padding，避免 Android 收键盘后残留在半屏。 */
+      /* Android WebView 在不同系统/键盘上对 adjustResize 的 viewport 行为并不一致。
+         同时监听 visualViewport：如果系统已经 resize，lift=0；如果键盘覆盖 WebView，
+         就把输入区按实际遮挡高度抬起。这样不会写死 150/180px。 */
       var scr = root.querySelector('.screen--chat');
       var cwrap = root.querySelector('.composerwrap');
-      function onFocus() { if (scr) scr.classList.add('is-typing'); }
-      function onBlur()  { if (scr) scr.classList.remove('is-typing'); }
+      var vv = window.visualViewport || null;
+      var keyboardT = null;
+      function syncKeyboardLift() {
+        if (!cwrap) return;
+        var focused = document.activeElement === input;
+        var lift = 0;
+        if (focused && vv) {
+          lift = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        }
+        cwrap.style.setProperty('--keyboard-lift', lift + 'px');
+        if (focused) {
+          requestAnimationFrame(function () { jumpTo(list.scrollHeight); });
+        }
+      }
+      function onFocus() {
+        if (scr) scr.classList.add('is-typing');
+        syncKeyboardLift();
+        clearTimeout(keyboardT);
+        keyboardT = setTimeout(syncKeyboardLift, 80);
+      }
+      function onBlur()  {
+        if (scr) scr.classList.remove('is-typing');
+        clearTimeout(keyboardT);
+        if (cwrap) cwrap.style.setProperty('--keyboard-lift', '0px');
+      }
       input.addEventListener('focus', onFocus);
       input.addEventListener('blur', onBlur);
+      if (vv) {
+        vv.addEventListener('resize', syncKeyboardLift);
+        vv.addEventListener('scroll', syncKeyboardLift);
+      }
 
       /* —— 未读胶囊：显示 / 点击跳到最早那条未读 / 滚到底自动清掉 —— */
       var upill = root.querySelector('[data-unread]');
@@ -1460,6 +1560,13 @@
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         pushLog({ who: 'me', html: html, time: clockNow() });
+        if (live) {
+          T.sendText('[表情包：' + sk.label + ']').then(function (accepted) {
+            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
+            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            scheduleLivePoll(0);
+          }).catch(function () {});
+        }
       }
 
       if (live) liveBootstrap();
@@ -1473,6 +1580,11 @@
         input.removeEventListener('keydown', onKey);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
+        if (vv) {
+          vv.removeEventListener('resize', syncKeyboardLift);
+          vv.removeEventListener('scroll', syncKeyboardLift);
+        }
+        clearTimeout(keyboardT);
 
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
