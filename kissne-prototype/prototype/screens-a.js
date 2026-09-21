@@ -407,8 +407,8 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 思考 / 工具折叠框使用同一套 Kissne 装饰语言。
-     用户给的分隔线全部保留为可轮换样式；窄屏会居中裁切，不会横向撑破页面。 */
+  /* 显式思考摘要 / 工具折叠框使用同一套 Kissne 装饰语言。
+     没有真实 activity 事件时绝不凭空创建“思考”折叠框。 */
   var TLOG_DECOS = [
     '₊⁺ ꒰১┈┈┈┈┈┈ ♡ ┈┈┈┈┈┈໒꒱ ⁺₊',
     '๑┈┈┈┈┈┈૮⑅•̤ ༝ •̤⑅ა┈┈┈┈┈┈๑',
@@ -465,7 +465,7 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { thought: true, tool: false, done: false };
+      TURN_ACTIVITY[id] = { thought: false, tool: false, done: false };
     }
     return TURN_ACTIVITY[id];
   }
@@ -473,11 +473,14 @@
     var id = String(turnId || 'pending');
     var state = activityForTurn(id);
     var closed = done === true || state.done === true;
-    var html = tlogHtml('thought', '思考', closed ? '思考已完成。' : '正在整理思路并组织回复…', id, !closed);
+    var html = '';
+    if (state.thought) {
+      html += tlogHtml('thought', '思考', closed ? '思考已完成。' : '正在整理思路并组织回复…', id, !closed);
+    }
     if (state.tool) {
       html += tlogHtml('tool', '工具调用', closed ? '工具调用已完成。' : 'Hermes 正在执行工具调用…', id, !closed);
     }
-    return '<div class="activity-history" data-activity-turn="' + esc(id) + '">' + html + '</div>';
+    return html ? '<div class="activity-history" data-activity-turn="' + esc(id) + '">' + html + '</div>' : '';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
@@ -485,7 +488,8 @@
     var state = activityForTurn(turnId);
     state.done = true;
     var html = activityMarkupForTurn(turnId, true);
-    FINAL_ACTIVITY_BY_TEXT[raw] = html;
+    if (html) FINAL_ACTIVITY_BY_TEXT[raw] = html;
+    else delete FINAL_ACTIVITY_BY_TEXT[raw];
     return html;
   }
   function stickerFromWire(text) {
@@ -1080,9 +1084,10 @@
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         activityForTurn(id || 'pending');
-        var activity = '<div data-live-activity>' + activityMarkupForTurn(id || 'pending', false) + '</div>';
-        append(aiMsg(activity + '<div class="liveanswer is-pending" data-live-answer>正在思考' + dots() + '</div>',
-          '', clockNow(), '思考', 'think'));
+        var activityMarkup = activityMarkupForTurn(id || 'pending', false);
+        var activity = '<div data-live-activity>' + activityMarkup + '</div>';
+        append(aiMsg(activity + '<div class="liveanswer is-pending" data-live-answer>正在回复' + dots() + '</div>',
+          '', clockNow(), '', 'think'));
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
@@ -1094,7 +1099,9 @@
         if (!el) return null;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return null;
-        if (kind === 'tool') activityForTurn(turnId || 'pending').tool = true;
+        var activityStateForTurn = activityForTurn(turnId || 'pending');
+        if (kind === 'tool') activityStateForTurn.tool = true;
+        if (kind === 'thought') activityStateForTurn.thought = true;
         var found = host.querySelector('[data-tlog-kind="' + kind + '"]');
         if (found) return found;
         var title = kind === 'tool' ? '工具调用' : '思考';
@@ -1194,7 +1201,7 @@
         }
         var el = liveEnsure(turnId);
         if (type === 'pending') {
-          liveText(el, '正在思考…', true);
+          liveText(el, '正在回复…', true);
           liveAvatar(el, 'think');
           liveCurrentTurn = turnId || liveCurrentTurn;
           liveSetCancel(!!liveCurrentTurn);
