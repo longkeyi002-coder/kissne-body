@@ -332,29 +332,28 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return True
 
     def bind_conversation_id(self, installation_id: str, session_id: str) -> bool:
-        """Resume one historical Mobile-owned Hermes conversation by its stable session id."""
+        """Resume a real Hermes conversation from the same runtime/profile by stable session id."""
         store = getattr(self, "_session_store", None)
         installation = str(installation_id or "").strip()
         target_id = str(session_id or "").strip()
         if store is None or not installation or not target_id:
             return False
 
+        route_key = self.mobile_session_key(installation)
         try:
-            owned = {
-                str(row.get("id") or row.get("session_id") or "").strip()
-                for row in self._mobile_history_sessions(installation)
-                if not bool(row.get("archived"))
-            }
+            db = store._db_for_key(route_key)
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            raw = get_session(target_id) if callable(get_session) else None
+            target = dict(raw) if isinstance(raw, dict) else None
         except Exception:
-            logger.warning("[kissne_mobile] failed to enumerate conversations for %s",
-                           _fingerprint(installation), exc_info=True)
+            logger.warning("[kissne_mobile] failed to validate session id %s for installation %s",
+                           _fingerprint(target_id), _fingerprint(installation), exc_info=True)
             return False
-        if target_id not in owned:
-            logger.warning("[kissne_mobile] refusing foreign/archived session id %s for installation %s",
+        if target is None or bool(target.get("archived")):
+            logger.warning("[kissne_mobile] refusing missing/archived session id %s for installation %s",
                            _fingerprint(target_id), _fingerprint(installation))
             return False
 
-        route_key = self.mobile_session_key(installation)
         current = store.peek_session_id(route_key)
         if current == target_id:
             return True
@@ -784,29 +783,37 @@ class KissneMobileAdapter(BasePlatformAdapter):
             yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     async def _handle_model_options(self, request: web.Request) -> web.Response:
-        """GET /model-options — available models, efforts, current values."""
+        """GET /model-options — all models from the same inventory used by the dashboard."""
         identity = await self._authenticated_installation(request)
         if not identity:
             return _json_response({"error": "unauthorized"}, 401)
 
         cfg = self._read_hermes_config()
-
-        # --- models from providers ---
         models: list[str] = []
-        providers = cfg.get("providers", {})
-        for pname, pdef in providers.items():
-            if isinstance(pdef, dict):
-                for m in pdef.get("models", []):
-                    if m not in models:
-                        models.append(m)
+        current_model = cfg.get("model", {}).get("default", "")
+        try:
+            from hermes_cli.inventory import build_model_options_payload, load_picker_context
+            payload = await asyncio.to_thread(
+                build_model_options_payload, load_picker_context()
+            )
+            for provider in payload.get("providers", []):
+                if provider.get("is_current"):
+                    current_model = provider.get("current_model", current_model)
+                for item in provider.get("models", []):
+                    model_id = item.get("id", "") if isinstance(item, dict) else str(item)
+                    if model_id and model_id not in models:
+                        models.append(model_id)
+        except Exception as exc:
+            logger.warning("[kissne_mobile] model-options: hermes_cli fallback (%s)", exc)
+            for _provider_name, provider_def in cfg.get("providers", {}).items():
+                if isinstance(provider_def, dict):
+                    for item in provider_def.get("models", []):
+                        model_id = item.get("id", "") if isinstance(item, dict) else str(item)
+                        if model_id and model_id not in models:
+                            models.append(model_id)
+            if current_model and current_model not in models:
+                models.insert(0, current_model)
 
-        # also include the default model
-        default_model = cfg.get("model", {}).get("default", "")
-        if default_model and default_model not in models:
-            models.append(default_model)
-
-        # --- efforts ---
-        efforts = ["minimal", "low", "medium", "high"]
         current_effort = (
             cfg.get("agent", {}).get("reasoning_effort")
             or cfg.get("model", {}).get("reasoning_effort")
@@ -816,8 +823,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return _json_response({
             "ok": True,
             "models": models,
-            "efforts": efforts,
-            "current_model": default_model,
+            "efforts": ["minimal", "low", "medium", "high"],
+            "current_model": current_model,
             "current_effort": current_effort,
         })
 
