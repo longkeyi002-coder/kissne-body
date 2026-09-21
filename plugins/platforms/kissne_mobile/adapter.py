@@ -1554,7 +1554,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         body = payload or {}
         model = str(body.get("model") or "").strip()
         effort = str(body.get("effort") or "").strip().lower()
-        from agent.reasoning_effort import EFFORT_LADDER
+        from hermes_constants import VALID_REASONING_EFFORTS
         if effort and effort not in ("none", *VALID_REASONING_EFFORTS):
             return _error_response("invalid_reasoning_effort", 400)
         if not model and not effort:
