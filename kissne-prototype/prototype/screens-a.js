@@ -312,7 +312,7 @@
             showFeedback('error', '设备已配对，但会话尚未就绪。请稍后重试。');
             return;
           }
-          location.hash = '#/connect/success';
+          location.replace('#/connect/success');
         } catch (err) {
           var name = (err && err.payload && err.payload.error) || (err && err.message) || '';
           if (name === 'invalid_pairing_code' || name === 'pairing_code_expired' || name === 'pairing_code_replayed') {
@@ -1217,7 +1217,11 @@
         if (!live) return;
         try {
           var boot = await T.bootstrap();
-          if (!boot || !boot.bound) { live = false; location.hash = '#/connect'; return; }
+          if (!boot || !boot.bound) {
+            live = false;
+            append(sysMsg('设备已连接，但会话还在准备中。稍后可在这里重试，不会退出当前页面。', clockNow()));
+            return;
+          }
           hydrateHistory(boot.history || []);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
