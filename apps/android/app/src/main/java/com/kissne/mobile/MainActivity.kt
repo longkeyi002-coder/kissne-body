@@ -7,6 +7,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 
 class MainActivity : AppCompatActivity() {
@@ -40,6 +42,15 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(0, bars.top, 0, bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(webView)
 
         bridge = PrototypeBridge(webView, store)
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
