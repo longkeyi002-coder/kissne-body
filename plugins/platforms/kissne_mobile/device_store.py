@@ -585,18 +585,6 @@ class DeviceStore:
             ).fetchone()
         return str(row["turn_id"]) if row is not None else None
 
-    def unique_pending_turn_id(self, installation_id: str) -> Optional[str]:
-        """Return the pending turn only when exactly one exists; ambiguity must not close a turn."""
-        installation = self._installation(installation_id)
-        with self._lock:
-            rows = self._db().execute(
-                "SELECT turn_id FROM turns WHERE installation_id = ? AND state = ? "
-                "ORDER BY created_at DESC LIMIT 2",
-                (installation, TURN_PENDING),
-            ).fetchall()
-        return str(rows[0]["turn_id"]) if len(rows) == 1 else None
-
-
     def record_attachment_message(self, installation_id: str, turn_id: str, text: str,
                                   attachments: List[Dict[str, Any]]) -> None:
         """Persist presentation metadata only; never duplicate attachment binary bytes."""

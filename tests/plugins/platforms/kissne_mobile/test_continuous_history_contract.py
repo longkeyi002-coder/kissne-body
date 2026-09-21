@@ -212,9 +212,9 @@ def test_auxiliary_send_is_notice_and_does_not_complete_pending_turn(tmp_path):
 
     result, turn, events = run(scenario())
     assert result.success is True
-    assert turn["state"] == "completed"
+    assert turn["state"] == "pending"
     assert len(events) == 1
-    assert events[0]["type"] == "completed"
+    assert events[0]["type"] == "notice"
     assert events[0]["text"] == "transcript/status echo"
 
 

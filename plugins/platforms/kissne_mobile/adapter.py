@@ -481,16 +481,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             candidate = await asyncio.to_thread(store.turn, reply_anchor)
             if candidate and str(candidate.get("installation_id") or "") == str(chat_id or "").strip():
                 target_turn = reply_anchor
-        # Some BasePlatformAdapter/test paths do not pass reply_to back on final delivery. Correlate
-        # only when exactly one mobile turn is pending; choosing the newest of several queued turns
-        # would close the wrong turn. Exact reply_to remains the canonical production path.
-        if not target_turn:
-            target_turn = await asyncio.to_thread(store.unique_pending_turn_id, chat_id) or ""
-
-        # BasePlatformAdapter final delivery replies to the triggering MessageEvent.message_id.
-        # Mobile deliberately sets that id to its server turn_id, so an exact target proves this is
-        # the terminal reply for that turn. Sends without that proof are auxiliary notices and must
-        # neither close nor visually complete whichever newer turn happens to be pending.
+        # Only an exact reply anchor proves terminal delivery. An unanchored send may be status,
+        # approval, or other auxiliary traffic; even when exactly one turn is pending, pending-count
+        # uniqueness is not evidence that this payload is the final answer.
         is_final = bool(target_turn)
 
         pending_reset_turn = self._session_reset_turns.get(chat_id, "")

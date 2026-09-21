@@ -162,7 +162,8 @@ def test_cancelling_a_finished_or_unknown_turn_fails_closed(tmp_path):
                 missing_status, _, _ = await http(port, "POST", "/cancel", token=token, body={})
 
                 turn = await _open_turn(port, token)
-                await adapter.send(INSTALLATION, "already answered")
+                await adapter.send(
+                    INSTALLATION, "already answered", reply_to=turn["turn_id"])
                 late_status, late_payload, _ = await http(
                     port, "POST", "/cancel", token=token, body={"turn_id": turn["turn_id"]})
                 twice = await _open_turn(port, token, message_id="m-cancel-2")

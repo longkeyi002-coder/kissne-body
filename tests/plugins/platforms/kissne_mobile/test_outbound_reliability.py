@@ -56,7 +56,7 @@ def test_queued_replies_are_typed_events_with_turn_correlation(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=existing)
                 turn = await _open_turn(port, token)
-                await adapter.send(INSTALLATION, "the final answer")
+                await adapter.send(INSTALLATION, "the final answer", reply_to=turn["turn_id"])
                 payload = await _drain(port, token, 0)
             finally:
                 await stop(adapter)
@@ -125,7 +125,8 @@ def test_incremental_deltas_are_distinguishable_from_the_final_reply(tmp_path):
                 supports = bool(adapter.supports_draft_streaming(chat_id=INSTALLATION))
                 await adapter.send_draft(INSTALLATION, 1, "answer so")
                 await adapter.send_draft(INSTALLATION, 1, "answer so far")
-                await adapter.send(INSTALLATION, "answer so far and done")
+                await adapter.send(
+                    INSTALLATION, "answer so far and done", reply_to=turn["turn_id"])
                 payload = await _drain(port, token, 0)
             finally:
                 await stop(adapter)
