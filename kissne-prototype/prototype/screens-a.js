@@ -213,6 +213,41 @@
     { key: 'effort-menu',    label: '思考强度' }
   ];
 
+  var CURRENT_SESSION_ID = '';
+  var CURRENT_SESSION_KEY = '';
+
+  function remoteSessions() {
+    var idx = window.KissneSessionIndex || {};
+    return Array.isArray(idx.sessions) ? idx.sessions : [];
+  }
+  function sessionDrawerHtml() {
+    var idx = window.KissneSessionIndex || {};
+    var sessions = remoteSessions();
+    var body = '';
+    if (!idx.loaded && idx.error) {
+      body = '<div class="sessiondrawer__empty">暂时无法读取服务器会话列表</div>';
+    } else if (!sessions.length) {
+      body = '<div class="sessiondrawer__empty">服务器暂无会话</div>';
+    } else {
+      body = sessions.map(function (s) {
+        var active = (CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
+          || (CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY)
+          || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
+        return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
+          + (s.key ? '' : ' disabled')
+          + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+          + '<span class="sessiondrawer__meta">' + esc(active ? '当前会话' : (s.updatedAt ? String(s.updatedAt) : '')) + '</span></button>';
+      }).join('');
+    }
+    return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
+      + '<aside class="sessiondrawer" data-session-drawer-panel hidden>'
+      + '<div class="sessiondrawer__head"><span>会话</span>'
+      + '<button type="button" class="iconbtn" data-session-refresh aria-label="刷新会话">' + icon('refresh', 16) + '</button></div>'
+      + '<div class="sessiondrawer__list" data-session-list>' + body + '</div>'
+      + '</aside>';
+  }
+
   /* —— 模型 / 思考强度：完全由 Hermes canonical mobile controls 提供 ——
      App 不维护模型名或 reasoning ladder。/model-options 的数据源来自
      Hermes provider catalog + agent.reasoning_effort.EFFORT_LADDER；
@@ -651,7 +686,7 @@
         <!-- 顶端：左=叶青栩，中=模型 / 思考强度（都可点开下拉，列表由 Hermes 提供）。
              不放头像与右上角表情。字号刻意压小，不要抢消息区的视觉。 -->
         <header class="chathead">
-          <button class="iconbtn chathead__back" data-nav="#/home" aria-label="返回">${icon('back')}</button>
+          <button class="iconbtn chathead__back" data-session-drawer-open aria-label="会话列表">${icon('chat')}</button>
           <span class="chathead__name">叶青栩</span>
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
@@ -675,6 +710,7 @@
           </button>
           ${stkPanel}${quickbar}${composer}</div>
         <div data-chat-menu-host>${menuLayer}</div>
+        ${sessionDrawerHtml()}
         ${bs === 'request-enter' ? modal({
           title: '小机星 · 进入请示',
           body: '<p>叶青栩：可以，我开门给你。</p>'
@@ -786,11 +822,50 @@
       var liveApprovals = Object.create(null);
       var bootstrapStatusEl = null;
       var sessionStatus = root.querySelector('[data-session-status]');
+      var sessionDrawer = root.querySelector('[data-session-drawer-panel]');
+      var sessionScrim = root.querySelector('[data-session-drawer-close]');
+      var sessionOpen = root.querySelector('[data-session-drawer-open]');
+      var sessionRefresh = root.querySelector('[data-session-refresh]');
       function setSessionStatus(text) {
         if (!sessionStatus) return;
         var value = String(text || '');
         sessionStatus.textContent = value;
         sessionStatus.hidden = !value;
+      }
+
+      function paintSessionList() {
+        var host = root.querySelector('[data-session-list]');
+        if (!host) return;
+        var idx = window.KissneSessionIndex || {};
+        var sessions = remoteSessions();
+        if (!idx.loaded && idx.error) {
+          host.innerHTML = '<div class="sessiondrawer__empty">暂时无法读取服务器会话列表</div>';
+          return;
+        }
+        if (!sessions.length) {
+          host.innerHTML = '<div class="sessiondrawer__empty">服务器暂无会话</div>';
+          return;
+        }
+        host.innerHTML = sessions.map(function (s) {
+          var active = (CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
+            || (CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY)
+            || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
+          return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
+            + (s.key ? '' : ' disabled')
+            + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+            + '<span class="sessiondrawer__meta">' + esc(active ? '当前会话' : (s.updatedAt ? String(s.updatedAt) : '')) + '</span></button>';
+        }).join('');
+      }
+      function setSessionDrawer(open) {
+        if (sessionDrawer) sessionDrawer.hidden = !open;
+        if (sessionScrim) sessionScrim.hidden = !open;
+      }
+      async function refreshSessions() {
+        if (typeof window.KissneRefreshSessions === 'function') {
+          await window.KissneRefreshSessions();
+          if (!liveStopped) paintSessionList();
+        }
       }
 
       var menuHost = root.querySelector('[data-chat-menu-host]');
@@ -1174,6 +1249,15 @@
             return;
           }
           setSessionStatus('');
+          var conversation = boot.conversation || {};
+          CURRENT_SESSION_ID = String(conversation.session_id || conversation.id || CURRENT_SESSION_ID || '');
+          CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
+          var sessionIndex = window.KissneSessionIndex || {};
+          (sessionIndex.sessions || []).forEach(function (s) {
+            s.active = (!!CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
+              || (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
+          });
+          paintSessionList();
           hydrateHistory(boot.history || []);
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
@@ -1436,6 +1520,69 @@
         }
       }
 
+      async function onSessionDrawerClick(e) {
+        var close = e.target && e.target.closest ? e.target.closest('[data-session-drawer-close]') : null;
+        if (close) { setSessionDrawer(false); return; }
+
+        var refresh = e.target && e.target.closest ? e.target.closest('[data-session-refresh]') : null;
+        if (refresh) {
+          e.preventDefault();
+          refresh.disabled = true;
+          try { await refreshSessions(); } finally { refresh.disabled = false; }
+          return;
+        }
+
+        var item = e.target && e.target.closest ? e.target.closest('[data-session-key]') : null;
+        if (!item || !root.contains(item)) return;
+        e.preventDefault();
+        var key = String(item.getAttribute('data-session-key') || '');
+        var id = String(item.getAttribute('data-session-id') || '');
+        if (!key) return;
+        if ((id && id === CURRENT_SESSION_ID) || key === CURRENT_SESSION_KEY) {
+          setSessionDrawer(false);
+          return;
+        }
+        if (liveCurrentTurn) {
+          setSessionStatus('当前回复尚未结束，请先停止后再切换会话。');
+          setSessionDrawer(false);
+          return;
+        }
+        if (!T || typeof T.selectSession !== 'function') {
+          setSessionStatus('当前版本暂不支持切换服务器会话。');
+          setSessionDrawer(false);
+          return;
+        }
+
+        setSessionStatus('正在切换会话…');
+        setSessionDrawer(false);
+        clearTimeout(livePollTimer);
+        clearTimeout(liveBootstrapTimer);
+        try {
+          await T.selectSession(key);
+          CURRENT_SESSION_ID = id;
+          CURRENT_SESSION_KEY = key;
+          CHAT_LOG.length = 0;
+          liveTurns = Object.create(null);
+          liveCompleted = Object.create(null);
+          liveCovered = Object.create(null);
+          liveCurrentTurn = '';
+          list.innerHTML = liveEmpty();
+          await refreshSessions();
+          await liveBootstrap();
+        } catch (err) {
+          setSessionStatus('会话切换失败，请稍后重试。');
+        }
+      }
+      function onSessionOpen(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSessionDrawer(true);
+        refreshSessions().catch(function () {});
+      }
+      if (sessionOpen) sessionOpen.addEventListener('click', onSessionOpen);
+      if (sessionScrim) sessionScrim.addEventListener('click', onSessionDrawerClick);
+      if (sessionDrawer) sessionDrawer.addEventListener('click', onSessionDrawerClick);
+
       async function startLiveTransport() {
         if (!T) {
           live = false;
@@ -1460,6 +1607,9 @@
       return function () {
         root.removeEventListener('click', onChatMenuTap);
         root.removeEventListener('click', onHermesControl);
+        if (sessionOpen) sessionOpen.removeEventListener('click', onSessionOpen);
+        if (sessionScrim) sessionScrim.removeEventListener('click', onSessionDrawerClick);
+        if (sessionDrawer) sessionDrawer.removeEventListener('click', onSessionDrawerClick);
         input.removeEventListener('keydown', onKey);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
