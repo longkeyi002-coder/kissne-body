@@ -1412,7 +1412,8 @@ html.is-native-shell body{
 }
 html.is-native-shell .panel,
 html.is-native-shell .drawer-btn,
-html.is-native-shell .drawer-scrim{display:none!important}
+html.is-native-shell .drawer-scrim,
+html.is-native-shell .statusbar{display:none!important}
 html.is-native-shell .workbench{
   display:block;
   width:100%;
