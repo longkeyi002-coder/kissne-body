@@ -343,6 +343,7 @@
     { key: 'online',  label: '设备在线（昼 / 夜按本机时间自动）' },
     { key: 'day',     label: '白天外观（强制）' },
     { key: 'night',   label: '夜晚外观（强制）' },
+    { key: 'more',    label: '更多功能' },
     { key: 'offline', label: '设备离线' }
   ];
   function dayPart(ctx) {
@@ -406,8 +407,17 @@
           + '</div>'
         : '';
 
-      /* —— 其余功能：手机桌面式小图标网格 —— */
-      var APPS = [
+      /* —— 其余功能：默认只放两行常用项；低频功能进入「更多」——
+         真机首页不再一次塞满 12 个入口，避免纵向过长。 */
+      var showMore = ctx.state === 'more';
+      var APPS = showMore ? [
+        { t: '语音设置', ic: 'mic',     to: '#/settings' },
+        { t: '对话记录', ic: 'clock',   to: '#/chat' },
+        { t: '账号安全', ic: 'user',    to: '#/settings' },
+        { t: '数据备份', ic: 'refresh', to: '#/settings' },
+        { t: '关于',     ic: 'info',    to: '#/settings' },
+        { t: '返回常用', ic: 'home',    to: '#/home' }
+      ] : [
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: '设备管理', ic: 'plug',   to: '#/device' },
         { t: '连接设置', ic: 'link',   to: '#/connect' },
@@ -415,12 +425,7 @@
         { t: '通知',     ic: 'bell',   to: '#/notifications' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
         { t: '表情包',   ic: 'smile',  to: '#/stickers' },
-        { t: '关于',     ic: 'info',   to: '#/settings' },
-        /* 以下 4 项为功能占位：本阶段只摆位置、不定功能细节 */
-        { t: '语音设置', ic: 'mic',    to: '#/settings' },
-        { t: '对话记录', ic: 'clock',  to: '#/chat' },
-        { t: '账号安全', ic: 'user',   to: '#/settings' },
-        { t: '数据备份', ic: 'refresh', to: '#/settings' }
+        { t: '更多',     ic: 'box',    to: '#/home?state=more' }
       ];
       var appgrid = '<div class="appgrid">' + APPS.map(function (a) {
         return '<a class="appgrid__item" data-nav="' + a.to + '">'
@@ -435,7 +440,7 @@
           ${stars}
           ${devstrip}
           ${offlineBlock}
-          ${sectionTitle('全部功能')}
+          ${sectionTitle(showMore ? '更多功能' : '全部功能')}
           ${appgrid}
           <div class="motifrow">${icon('paw', 15)}${icon('hoof', 15)}${icon('paw', 15)}</div>
           ${offline ? note('设备离线时「人人星」不可进入，避免误以为仍可聊天。') : ''}
