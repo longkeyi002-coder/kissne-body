@@ -11,7 +11,14 @@ class PrototypeBridge(
     private val store: MobileSessionStore,
     private val checkUpdates: () -> Unit = {},
 ) {
-    private val executor = Executors.newSingleThreadExecutor()
+    /*
+     * Keep chat transport isolated from slower control-plane calls.
+     * Provider/model discovery can legitimately take seconds; when every bridge
+     * request shared one single-thread executor it blocked bootstrap, polling
+     * and sendText behind modelOptions, making the send button look dead.
+     */
+    private val transportExecutor = Executors.newSingleThreadExecutor()
+    private val controlExecutor = Executors.newFixedThreadPool(2)
 
     private fun baseUrl(): String = store.apiBase.ifBlank { BuildConfig.MOBILE_BASE_URL }.trimEnd('/')
 
@@ -48,6 +55,11 @@ class PrototypeBridge(
 
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
+        val executor = when (action) {
+            "modelOptions", "setModel",
+            "adminStatus", "adminMerge", "adminRollback", "adminDeployLog" -> controlExecutor
+            else -> transportExecutor
+        }
         executor.execute {
             try {
                 val body = if (payload.isBlank()) JSONObject() else JSONObject(payload)
@@ -122,5 +134,8 @@ class PrototypeBridge(
         webView.post { webView.evaluateJavascript(script, null) }
     }
 
-    fun close() { executor.shutdownNow() }
+    fun close() {
+        transportExecutor.shutdownNow()
+        controlExecutor.shutdownNow()
+    }
 }
