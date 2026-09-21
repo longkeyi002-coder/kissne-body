@@ -588,21 +588,7 @@
 
   /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
      之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
-  var CHAT_LOG = [
-    { who: 'ai', html: '连接已建立，我在。', time: '09:36' },
-    { who: 'me', html: '在吗？',            time: '09:40' },
-    { who: 'ai', html: '在的。',            time: '09:41' },
-    { who: 'me', html: '之前说的周末计划，你还记得吗？', time: '09:44' },
-    { who: 'ai', html: '记得：周六去美术馆，周日下午收拾房间。', time: '09:44' },
-    { who: 'ai', html: '今天想聊点什么？', time: '09:45' },
-    { who: 'me', html: '先看看记忆库写了什么。', time: '09:46' },
-    { who: 'ai', html: '记忆库里 12 条，最近一条就是「周末计划」。', time: '09:46' },
-    { who: 'me', html: '好，那就按这个来。', time: '09:47' },
-    { who: 'me', html: '晚点我还想出去走走。', time: '09:48' },
-    { who: 'ai', html: '好，我记着。要去公园吗？', time: '09:48' },
-    { who: 'me', html: '看情况吧。', time: '09:49' },
-    { who: 'ai', html: '行，随时叫我。', time: '09:49' }
-  ];
+  var CHAT_LOG = [];
   function clockNow() {
     var d = new Date();
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
@@ -914,6 +900,7 @@
         </header>
         ${topBanner}
         <div class="chatbody">${emptyBlock}${base}</div>
+        <div class="chatstatus" data-session-status hidden></div>
         <!-- 输入区位于聊天页 flex 文档流底部；真机键盘由浏览器 viewport 自然处理。 -->
         <div class="composerwrap">
           <!-- 未读胶囊：浮在输入区上方，点了跳到**最早**那条未读 -->
@@ -1032,6 +1019,13 @@
       var retryMessageId = '';
       var retryMessageText = '';
       var liveApprovals = Object.create(null);
+      var sessionStatus = root.querySelector('[data-session-status]');
+      function setSessionStatus(text) {
+        if (!sessionStatus) return;
+        var value = String(text || '');
+        sessionStatus.textContent = value;
+        sessionStatus.hidden = !value;
+      }
 
       var menuHost = root.querySelector('[data-chat-menu-host]');
       var openMenu = menu === 'model' || menu === 'effort' ? menu : null;
@@ -1303,10 +1297,11 @@
         try {
           var boot = await T.bootstrap();
           if (!boot || !boot.bound) {
-            append(sysMsg('设备已连接，但会话还在准备中。正在自动重试，不会退出当前页面。', clockNow()));
+            setSessionStatus('正在连接当前 Hermes 会话…');
             scheduleLiveBootstrap(1800);
             return;
           }
+          setSessionStatus('');
           hydrateHistory(boot.history || []);
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
@@ -1316,7 +1311,10 @@
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) { live = false; location.hash = '#/connect'; }
-          else scheduleLiveBootstrap(1200);
+          else {
+            setSessionStatus('正在重新连接 Hermes…');
+            scheduleLiveBootstrap(1200);
+          }
         }
       }
       async function liveCancel() {
