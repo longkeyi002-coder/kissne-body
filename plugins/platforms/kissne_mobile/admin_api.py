@@ -19,6 +19,7 @@ ADMIN_PATH_MERGE = "/admin/merge"
 ADMIN_PATH_ROLLBACK = "/admin/rollback"
 ADMIN_PATH_DEPLOY_LOG = "/admin/deploy-log"
 ADMIN_PATH_SESSIONS = "/admin/sessions"
+ADMIN_PATH_CONFIG = "/admin/config"
 
 INSTALL = Path("/home/admin/.hermes/hermes-agent")
 DEPLOY_SCRIPT = Path("/home/admin/kissne-workspace/backups/deploy-upstream-merge.sh")
@@ -93,6 +94,8 @@ def _register_admin_routes(app: Any) -> None:
     app.router.add_post(ADMIN_PATH_ROLLBACK, _handle_admin_rollback)
     app.router.add_get(ADMIN_PATH_DEPLOY_LOG, _handle_admin_deploy_log)
     app.router.add_get(ADMIN_PATH_SESSIONS, _handle_admin_sessions)
+    app.router.add_get(ADMIN_PATH_CONFIG, _handle_admin_config)
+    app.router.add_post(ADMIN_PATH_CONFIG, _handle_admin_config_update)
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +313,66 @@ async def _run_deploy(deploy_type: str, cmd: list[str], log_path: Path) -> None:
     finally:
         _deploy_state["running"] = False
         _deploy_state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# --- GET/POST /admin/config ---
+CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
+
+def _read_config_yaml() -> dict:
+    import yaml
+    with open(CONFIG_PATH) as f:
+        return yaml.safe_load(f) or {}
+
+def _write_config_yaml(cfg: dict) -> None:
+    import yaml
+    with open(CONFIG_PATH, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+
+
+async def _handle_admin_config(request: Any) -> Any:
+    from aiohttp import web
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        cfg = _read_config_yaml()
+        model_cfg = cfg.get("model", {})
+        agent_cfg = cfg.get("agent", {})
+        providers = cfg.get("providers", {})
+        return web.json_response({
+            "ok": True,
+            "model": {
+                "default": model_cfg.get("default", ""),
+                "provider": model_cfg.get("provider", ""),
+                "base_url": model_cfg.get("base_url", ""),
+            },
+            "reasoning_effort": agent_cfg.get("reasoning_effort", "medium"),
+            "providers": {
+                name: {"models": p.get("models", {})}
+                for name, p in providers.items()
+                if isinstance(p, dict)
+            },
+        })
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+
+async def _handle_admin_config_update(request: Any) -> Any:
+    from aiohttp import web
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    payload, error = await _adapter_ref._payload(request) if _adapter_ref else (None, "no adapter")
+    if error is not None:
+        return error
+    body = payload or {}
+    try:
+        cfg = _read_config_yaml()
+        if "model" in body:
+            cfg.setdefault("model", {})["default"] = body["model"]
+        if "reasoning_effort" in body:
+            cfg.setdefault("agent", {})["reasoning_effort"] = body["reasoning_effort"]
+        _write_config_yaml(cfg)
+        return web.json_response({"ok": True, "message": "config updated, restart gateway to apply"})
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
