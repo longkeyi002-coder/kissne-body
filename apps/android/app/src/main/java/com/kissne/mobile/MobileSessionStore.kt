@@ -48,7 +48,13 @@ class MobileSessionStore(context: Context) {
         prefs.edit()
             .putString("device_token", token)
             .putBoolean("connection_ready", false)
-            .putLong("cursor", 0L)
+            .apply()
+    }
+
+    fun invalidateToken() {
+        prefs.edit()
+            .remove("device_token")
+            .putBoolean("connection_ready", false)
             .apply()
     }
 
