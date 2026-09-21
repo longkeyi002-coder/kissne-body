@@ -97,6 +97,13 @@
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
+      respondApproval: function (approvalId, decision, scope) {
+        return nativeCall('approval', {
+          approval_id: String(approvalId || ''),
+          decision: String(decision || ''),
+          scope: String(scope || 'once')
+        });
+      },
       revoke: function () { return nativeCall('revoke', {}); }
     };
     return;
@@ -218,6 +225,16 @@
   function cancel(turnId) {
     return request('/mobile/cancel', { method: 'POST', body: { turn_id: String(turnId || '') } });
   }
+  function respondApproval(approvalId, decision, scope) {
+    return request('/mobile/approval', {
+      method: 'POST',
+      body: {
+        approval_id: String(approvalId || ''),
+        decision: String(decision || ''),
+        scope: String(scope || 'once')
+      }
+    });
+  }
 
   window.KissneTransport = {
     ApiError: ApiError,
@@ -234,6 +251,7 @@
     sendText: sendText,
     poll: poll,
     ack: ack,
-    cancel: cancel
+    cancel: cancel,
+    respondApproval: respondApproval
   };
 })();

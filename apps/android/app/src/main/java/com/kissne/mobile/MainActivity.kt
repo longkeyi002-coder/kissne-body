@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(webView)
 
         bridge = PrototypeBridge(webView, store) {
-            updateManager.checkForUpdates()
+            updateManager.checkForUpdates(force = true)
         }
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)

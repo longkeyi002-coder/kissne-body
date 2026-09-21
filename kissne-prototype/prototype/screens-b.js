@@ -47,11 +47,11 @@
           <div class="screen__body">
             <div class="memdetail">
               <h2 class="memdetail__t">周末计划</h2>
-              <div class="memdetail__meta">${chip('生活')}${chip('已同步 · 示例', 'warn')}<span class="muted">更新于今天 09:12</span></div>
+              <div class="memdetail__meta">${chip('生活')}${chip('已同步', 'warn')}<span class="muted">更新于今天 09:12</span></div>
               <p class="memdetail__body">周六去美术馆，周日下午收拾房间。用户希望上午出发、避开人流高峰。</p>
               ${card(
                 kv('来源', '聊天页 · 叶青栩')
-                + kv('写入方式', '自动提取（待接入）')
+                + kv('写入方式', '自动提取')
                 + kv('记忆 ID', 'mem_20260917_001')
               )}
             </div>
@@ -72,8 +72,7 @@
             ${field({ label: '标题', value: '周末计划' })}
             ${field({ label: '内容', value: '周六去美术馆，周日下午收拾房间。' })}
             ${field({ label: '分类', value: '生活' })}
-            ${note('低保真原型：输入框不可编辑，保存动作不写入真实数据。')}
-          </div>
+            </div>
           <div class="screen__foot">
             ${btn('保存', { to: '#/memory?state=sync-ok', block: true, kind: 'primary' })}
             ${btn('取消', { to: '#/memory?state=detail', block: true, kind: 'ghost' })}
@@ -98,10 +97,10 @@
       } else {
         body = '<div class="searchbar is-todo">' + icon('search', 17)
           + '<span class="searchbar__ph">搜索记忆</span>'
-          + '<span class="searchbar__tag">待实现</span>'
+
           + '<span class="searchbar__filter">' + icon('box', 17) + '筛选</span></div>'
           + '<div class="chips is-todo">' + chip('全部', 'solid') + chip('生活') + chip('工作') + chip('偏好')
-          + '<span class="chips__tag">筛选待实现</span></div>'
+          + '</div>'
           + sectionTitle('全部记忆', '<span class="muted">12 条</span>')
           + card(MEMORY_ITEMS.map(function (m) {
               return listRow({
@@ -113,14 +112,12 @@
 
       return `
       <div class="screen">
-        ${appbar({ title: '记忆库', sub: 'Kissne 设备 · 已同步（示例）',
+        ${appbar({ title: '记忆库', sub: 'Kissne · 已同步',
                    right: '<button class="iconbtn" data-action="sync" aria-label="同步">' + icon('sync') + '</button>' })}
         ${topBanner}
         <div class="screen__body">
           ${body}
-          ${s !== 'empty' ? note('搜索与筛选目前只是界面占位（已标注「待实现」），不产生真实过滤；删除记忆必须二次确认。') : ''}
         </div>
-        ${s !== 'empty' ? '<div class="screen__foot">' + btn('新建记忆（占位）', { block: true, kind: 'ghost', icon: 'plus', disabled: true }) + '</div>' : ''}
         ${s === 'delete-confirm' ? modal({
           title: '删除这条记忆？',
           kind: 'danger',
@@ -138,7 +135,7 @@
      08 设备管理页
      ===================================================================== */
   var DEVICE_STATES = [
-    { key: 'normal',             label: '已连接（示例）' },
+    { key: 'normal',             label: '已连接' },
     { key: 'offline',            label: '设备离线' },
     { key: 'reconnecting',       label: '重新连接中' },
     { key: 'disconnect-confirm', label: '断开确认' }
@@ -166,10 +163,10 @@
         ${topBanner}
         <div class="screen__body">
           ${card(
-            kv('当前设备', '<span class="is-pending">待接入</span>', { strong: true })
-            + kv('在线状态', chip(offline ? '离线' : (reconnecting ? '连接中' : '在线（示例）'), (offline || reconnecting) ? 'warn' : 'solid'))
-            + kv('服务器地址', '<span class="is-pending">待接入</span>')
-            + kv('当前模型', '默认模型（待接入）')
+            kv('当前设备', 'Kissne Mobile', { strong: true })
+            + kv('在线状态', chip(offline ? '离线' : (reconnecting ? '连接中' : '在线'), (offline || reconnecting) ? 'warn' : 'solid'))
+            + kv('服务器地址', '当前连接')
+            + kv('当前模型', '跟随 Hermes')
             + kv('最近连接时间', offline ? '3 小时前' : '刚刚 · 09:41')
           )}
           ${sectionTitle('连接操作')}
@@ -186,7 +183,7 @@
           body: '<p>断开后将无法聊天，记忆同步也会暂停。</p><p class="muted">你可以随时重新连接。</p>',
           actions: [
             { label: '取消', to: '#/device?state=normal', kind: 'ghost' },
-            { label: '确认断开', to: '#/home?state=offline', action: 'disconnect', kind: 'danger' }
+            { label: '确认断开', action: 'disconnect', kind: 'danger' }
           ]
         }) : ''}
       </div>`;
@@ -211,13 +208,12 @@
             + ph('FOX_NOTIFICATION_AVATAR', { size: 44, compact: true, tag: '头像' })
             + '<div class="acct__main"><div class="acct__name">龙柯伊</div>'
             + '<div class="acct__sub">本地账号 · 未登录云端</div></div>'
-            + chip('待接入', 'warn')
             + '</div>'
           )}
           ${card(
-            listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user', right: chip('后续页面', 'warn') })
-            + listRow({ title: '设备管理', sub: '当前设备 · 待接入', icon: 'plug', to: '#/device' })
-            + listRow({ title: '模型设置', sub: '默认模型（待接入）', icon: 'cpu', right: chip('后续页面', 'warn') })
+            listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
+            + listRow({ title: '设备管理', sub: '当前设备', icon: 'plug', to: '#/device' })
+            + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
             + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
             + listRow({ title: '通知设置', sub: '新消息 / 连接状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
           , { tight: true })}
@@ -236,14 +232,14 @@
      ===================================================================== */
   K.registerScreen({
     no: '10', id: 'notifications', name: '通知和弹窗', route: '#/notifications', tab: null,
-    purpose: '8 种低保真通知 / 弹窗状态：新消息、连接成功、设备离线、记忆已保存、同步失败、配对码错误、断开确认、删除确认。',
+    purpose: '消息、连接、记忆同步、配对与确认操作的通知状态。',
     out: ['#/chat', '#/device', '#/memory'],
     states: [{ key: 'default', label: '全部' }],
     render: function () {
       var foxNotify = ph('FOX_NOTIFICATION_AVATAR', { size: 40, compact: true, tag: '头像' });
       return `
       <div class="screen">
-        ${appbar({ title: '通知和弹窗', sub: '低保真状态集 · 灰阶', back: '#/home' })}
+        ${appbar({ title: '通知和弹窗', back: '#/home' })}
         <div class="screen__body">
           ${sectionTitle('轻提示')}
           ${card(
@@ -273,7 +269,6 @@
               body: '<p>「周末计划」将被永久删除，且无法恢复。</p>',
               actions: [{ label: '取消', kind: 'ghost' }, { label: '确认删除', kind: 'danger' }] })}
           </div>
-          ${note('全部为灰阶低保真状态，最终配色与图标待确认后替换。')}
         </div>
       </div>`;
     }

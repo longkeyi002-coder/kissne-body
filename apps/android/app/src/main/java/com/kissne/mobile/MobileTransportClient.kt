@@ -140,6 +140,16 @@ class MobileTransportClient(
     fun cancelPayload(turnId: String): JSONObject =
         request("POST", "/cancel", JSONObject().put("turn_id", turnId))
 
+    fun approvalPayload(approvalId: String, decision: String, scope: String): JSONObject =
+        request(
+            "POST",
+            "/approval",
+            JSONObject()
+                .put("approval_id", approvalId)
+                .put("decision", decision)
+                .put("scope", scope),
+        )
+
     fun revoke(): JSONObject =
         request("POST", "/revoke")
 

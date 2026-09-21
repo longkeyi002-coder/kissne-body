@@ -81,6 +81,11 @@ class PrototypeBridge(
                         JSONObject().put("ok", true).put("cursor", cursor)
                     }
                     "cancel" -> client().cancelPayload(body.optString("turn_id"))
+                    "approval" -> client().approvalPayload(
+                        approvalId = body.optString("approval_id"),
+                        decision = body.optString("decision"),
+                        scope = body.optString("scope", "once"),
+                    )
                     "revoke" -> {
                         val result = client().revoke()
                         store.clearToken()

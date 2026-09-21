@@ -385,7 +385,7 @@
   K.registerScreen({
     no: '04', id: 'home', name: '首页 / 控制台', route: '#/home', tab: 'entry',
     purpose: '手机桌面式入口页。最上方左侧「人人星」（小羊素材）→ 聊天页，右侧「小机星」（叶青栩素材）→ AI World；两张星卡是整幅插画，白天 / 夜晚各一版，按本机时间自动切。其余功能以手机桌面式图标网格排列。只有桌面内容，不做列表式的最近活动。白蓝配色。',
-    out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/connect', '#/notifications', '#/assets'],
+    out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/connect', '#/notifications'],
     states: HOME_STATES,
     render: function (ctx) {
       var offline = ctx.state === 'offline';
@@ -489,7 +489,7 @@
     { key: 'normal',        label: '默认对话' },
     { key: 'empty',         label: '空聊天' },
     { key: 'keyboard',      label: '键盘弹出（打字中）' },
-    { key: 'unread',        label: '有未读消息（示例）' },
+    { key: 'unread',        label: '有未读消息' },
     { key: 'search',        label: '历史搜索' },
     { key: 'sending',       label: '消息发送中' },
     { key: 'typing',        label: '正在输入' },
@@ -498,11 +498,11 @@
     { key: 'failed',        label: '回复失败' },
     { key: 'device-offline',label: '设备离线' },
     { key: 'network-lost',  label: '网络断开' },
-    { key: 'cot',           label: '思考链（示例）' },
-    { key: 'tool',          label: '工具调用 · 记忆检索（示例）' },
-    { key: 'tool-web',      label: '工具调用 · 联网搜索（示例）' },
-    { key: 'tool-cal',      label: '工具调用 · 看日程（示例）' },
-    { key: 'tool-write',    label: '工具调用 · 写备忘录（示例）' },
+    { key: 'cot',           label: '思考过程' },
+    { key: 'tool',          label: '工具调用 · 记忆检索' },
+    { key: 'tool-web',      label: '工具调用 · 联网搜索' },
+    { key: 'tool-cal',      label: '工具调用 · 看日程' },
+    { key: 'tool-write',    label: '工具调用 · 写备忘录' },
     { key: 'request-enter', label: '小机星进入请示' },
     { key: 'plus-menu',     label: '「+」菜单展开' },
     { key: 'model-menu',    label: '模型下拉展开' },
@@ -820,7 +820,7 @@
           base += aiMsg(icon('alert', 15) + '<span>回复失败，设备未响应。</span>'
             + btn('重新发送', { small: true, kind: 'ghost', action: 'resend' }), 'is-failed', '09:42', '没连上', 'sad');
         }
-        /* 思考链（示例）：AI 那**一条**消息里，回复文字上方挂一块思考过程。
+        /* 思考过程：AI 那**一条**消息里，回复文字上方挂一块思考过程。
            内容与用时都是占位，真实思考由 Hermes 输出。 */
         if (bs === 'cot') {
           base += aiMsg(cotBlock({
@@ -844,7 +844,7 @@
               ] })
             + toolCard('记忆检索', [
                 ['参数', '关键词 = 「周末计划」'],
-                ['返回', '待接入 · 由 Hermes 工具返回']
+                ['返回', '由 Hermes 返回']
               ], '0.8s')
             + '<div>找到了，你之前提过周末想整理房间——这就要开始吗？</div>', '', '09:42', '记忆', 'work');
         }
@@ -856,7 +856,7 @@
               ] })
             + toolCard('联网搜索', [
                 ['参数', '关键词 = 「周末 天气」'],
-                ['返回', '待接入 · 由 Hermes 工具返回']
+                ['返回', '由 Hermes 返回']
               ], '1.2s')
             + '<div>我查了：周六晴、周日下午有雨——「看展」放周六更合适。</div>', '', '09:43', '联网', 'work');
         }
@@ -868,7 +868,7 @@
               ] })
             + toolCard('查看日程', [
                 ['参数', '范围 = 本周六 ～ 周日'],
-                ['返回', '待接入 · 由 Hermes 工具返回']
+                ['返回', '由 Hermes 返回']
               ], '0.4s')
             + '<div>你周六上午空着。要我先把「美术馆」占上吗？</div>', '', '09:43', '日程', 'work');
         }
@@ -1098,6 +1098,7 @@
       var liveBootstrapTimer = null;
       var retryMessageId = '';
       var retryMessageText = '';
+      var liveApprovals = Object.create(null);
 
       function historyClock(raw) {
         if (typeof raw !== 'number' || !isFinite(raw)) return '';
@@ -1113,6 +1114,7 @@
       }
       function hydrateHistory(history) {
         CHAT_LOG.length = 0;
+        liveApprovals = Object.create(null);
         (history || []).forEach(function (item) {
           if (!item || (item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string') return;
           CHAT_LOG.push({
@@ -1147,12 +1149,61 @@
         box.classList.toggle('is-pending', !!pending);
         box.textContent = String(text || '');
       }
+      function approvalCard(approval) {
+        var id = String(approval && approval.approval_id || '');
+        if (!id) return '';
+        var summary = String(approval.summary || '此操作需要你的允许');
+        var command = approval.tool_input && approval.tool_input.command
+          ? '<div class="muted" style="margin-top:6px;word-break:break-word">' + esc(approval.tool_input.command) + '</div>'
+          : '';
+        var actions = '<button type="button" class="btn btn--primary is-small" data-approval-decision="allow" data-approval-scope="once">允许一次</button>';
+        if (approval.allow_session) {
+          actions += '<button type="button" class="btn btn--ghost is-small" data-approval-decision="allow" data-approval-scope="session">本会话允许</button>';
+        }
+        if (approval.allow_permanent) {
+          actions += '<button type="button" class="btn btn--ghost is-small" data-approval-decision="allow" data-approval-scope="always">始终允许</button>';
+        }
+        actions += '<button type="button" class="btn btn--ghost is-small" data-approval-decision="deny" data-approval-scope="once">拒绝</button>';
+        return '<div class="msg msg--sys approvalcard" data-approval-id="' + esc(id) + '">'
+          + '<div class="card"><b>需要你的允许</b><div style="margin-top:6px">' + esc(summary) + '</div>'
+          + command + '<div class="approvalcard__actions" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">'
+          + actions + '</div><div class="muted" data-approval-status style="margin-top:8px"></div></div></div>';
+      }
+      function showApproval(approval) {
+        var id = String(approval && approval.approval_id || '');
+        if (!id) return null;
+        var current = liveApprovals[id];
+        if (current && current.isConnected) return current;
+        var html = approvalCard(approval);
+        if (!html) return null;
+        append(html);
+        var el = list.lastElementChild;
+        liveApprovals[id] = el;
+        return el;
+      }
+      function resolveApprovalCard(id, decision) {
+        id = String(id || '');
+        var el = liveApprovals[id];
+        if (!el || !el.isConnected) return;
+        var status = el.querySelector('[data-approval-status]');
+        var buttons = el.querySelectorAll('[data-approval-decision]');
+        for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+        if (status) status.textContent = decision === 'approved' ? '已允许' : '已拒绝';
+      }
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
         if (type === 'notice') {
           append(sysMsg(esc(event.text || '系统通知'), clockNow()));
+          return;
+        }
+        if (type === 'approval_required') {
+          showApproval(event);
+          return;
+        }
+        if (type === 'approval_resolved') {
+          resolveApprovalCard(event.approval_id, String(event.decision || event.status || 'denied'));
           return;
         }
         var el = liveEnsure(turnId);
@@ -1216,6 +1267,7 @@
             return;
           }
           hydrateHistory(boot.history || []);
+          (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
           if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
@@ -1263,11 +1315,11 @@
           '有就顺着接，没有就说实话'
         ];
       }
-      function toolRows(t, v) { return [[t.arg, '「' + esc(v) + '」'], ['返回', '待接入 · 由 Hermes 工具返回']]; }
+      function toolRows(t, v) { return [[t.arg, '「' + esc(v) + '」'], ['返回', '由 Hermes 返回']]; }
       function toolCardFor(t, v, status, open) {
         return toolCard(t.name, toolRows(t, v), t.cost, status, open);
       }
-      function replyText(v) { return '<div>（占位回复）我收到了：' + esc(v) + '</div>'; }
+      function replyText(v) { return '<div>我收到了：' + esc(v) + '</div>'; }
 
       function runTurn(v) {
         var t = pickTool(v), t0 = clockNow();
@@ -1345,7 +1397,8 @@
         }
         var v = (input.value || '').trim();
         if (!v) return;
-        var messageId = (retryMessageText === v && retryMessageId) ? retryMessageId : '';
+        var retrying = retryMessageText === v && !!retryMessageId;
+        var messageId = retrying ? retryMessageId : '';
         if (!messageId) {
           var r = '';
           try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -1353,8 +1406,10 @@
           messageId = 'android-web-' + r;
         }
         input.value = '';
-        append(meMsg(esc(v), '', clockNow()));
-        pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        if (!retrying) {
+          append(meMsg(esc(v), '', clockNow()));
+          pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        }
 
         if (live) {
           try {
@@ -1475,7 +1530,36 @@
         var blk = t.parentNode;
         if (blk && blk.classList) blk.classList.toggle('is-open');
       }
+      async function onApprovalTap(e) {
+        var control = e.target.closest && e.target.closest('[data-approval-decision]');
+        if (!control || !list.contains(control)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var cardEl = control.closest('[data-approval-id]');
+        var approvalId = cardEl && cardEl.getAttribute('data-approval-id');
+        if (!approvalId || !T || typeof T.respondApproval !== 'function') return;
+        var decision = control.getAttribute('data-approval-decision') || 'deny';
+        var scope = control.getAttribute('data-approval-scope') || 'once';
+        var buttons = cardEl.querySelectorAll('[data-approval-decision]');
+        var status = cardEl.querySelector('[data-approval-status]');
+        for (var ai = 0; ai < buttons.length; ai++) buttons[ai].disabled = true;
+        if (status) status.textContent = '正在提交…';
+        try {
+          var result = await T.respondApproval(approvalId, decision, scope);
+          resolveApprovalCard(approvalId, String(result && result.status || (decision === 'allow' ? 'approved' : 'denied')));
+          scheduleLivePoll(0);
+        } catch (err) {
+          if (err && (err.status === 404 || err.status === 409)) {
+            if (status) status.textContent = '这项请求已经失效';
+            scheduleLiveBootstrap(0);
+          } else {
+            for (var aj = 0; aj < buttons.length; aj++) buttons[aj].disabled = false;
+            if (status) status.textContent = '提交失败，请重试';
+          }
+        }
+      }
       list.addEventListener('click', onTlogTap);
+      list.addEventListener('click', onApprovalTap);
       paintPill();
 
       /* 从表情包页选了一张：落成一条「我」的消息（贴图不带气泡底板）。
@@ -1505,6 +1589,7 @@
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onTlogTap);
+        list.removeEventListener('click', onApprovalTap);
         send.removeEventListener('click', push);
         liveStopped = true;
         clearTimeout(livePollTimer);
@@ -2201,7 +2286,7 @@
           ${share
             ? '<div class="call__share">'
               + '<span class="call__share-ic">' + icon('screen', 26) + '</span>'
-              + '<span class="call__share-t">正在共享这块屏幕（占位）</span>'
+              + '<span class="call__share-t">正在共享这块屏幕</span>'
               + '<span class="call__share-s">真实共享需设备授权：授权后你在手机上做什么，叶青栩就能看到什么</span>'
               + '</div>'
             : '<div class="call__ava">'
@@ -2258,7 +2343,7 @@
       var now = Date.now();
       if (!CALL_LOGGED_AT || now - CALL_LOGGED_AT > 60000) {
         CALL_LOGGED_AT = now;
-        pushLog({ who: 'sys', html: '📞 ' + callLabel() + '（示例）· 00:32', time: clockNow() });
+        pushLog({ who: 'sys', html: '📞 ' + callLabel() + ' · 00:32', time: clockNow() });
       }
       var i = 0;
       var t = setInterval(function () {

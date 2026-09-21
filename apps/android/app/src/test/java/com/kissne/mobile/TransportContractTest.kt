@@ -4,7 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TransportContractTest {
-    @Test fun event_types_are_closed() { assertEquals(setOf("pending", "delta", "completed", "cancelled", "error"), MobileEventType.values().map { it.wireName }.toSet()) }
+    @Test fun representative_event_types_parse() {
+        assertEquals(MobileEventType.PENDING, MobileEventType.fromWire("pending"))
+        assertEquals(MobileEventType.NOTICE, MobileEventType.fromWire("notice"))
+        assertEquals(MobileEventType.APPROVAL_REQUIRED, MobileEventType.fromWire("approval_required"))
+        assertEquals(MobileEventType.APPROVAL_RESOLVED, MobileEventType.fromWire("approval_resolved"))
+        assertEquals(MobileEventType.ERROR, MobileEventType.fromWire("future_event"))
+    }
     @Test fun retry_keeps_client_message_id() { val first = OutboundMessage("msg-1", "hello"); assertEquals(first.messageId, first.copy().messageId) }
     @Test fun nullable_wire_values_stay_null() { assertNull(JSONObjectProbe.nullable(null)) }
 }

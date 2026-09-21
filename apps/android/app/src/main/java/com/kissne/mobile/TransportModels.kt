@@ -5,6 +5,9 @@ enum class MobileEventType(val wireName: String) {
     DELTA("delta"),
     COMPLETED("completed"),
     CANCELLED("cancelled"),
+    NOTICE("notice"),
+    APPROVAL_REQUIRED("approval_required"),
+    APPROVAL_RESOLVED("approval_resolved"),
     ERROR("error");
 
     companion object {
