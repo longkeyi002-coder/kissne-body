@@ -134,59 +134,93 @@
   /* =====================================================================
      08 设备管理页
      ===================================================================== */
-  var DEVICE_STATES = [
-    { key: 'normal',             label: '已连接' },
-    { key: 'offline',            label: '设备离线' },
-    { key: 'reconnecting',       label: '重新连接中' },
-    { key: 'disconnect-confirm', label: '断开确认' }
-  ];
-
   K.registerScreen({
     no: '08', id: 'device', name: '设备管理页', route: '#/device', tab: null,
-    purpose: '查看当前设备信息、重新连接、断开设备（断开必须二次确认）。',
-    out: ['#/home', '#/connect', '#/settings'],
-    states: DEVICE_STATES,
-    render: function (ctx) {
-      var s = ctx.state || 'normal';
-      var offline = s === 'offline';
-      var reconnecting = s === 'reconnecting';
-
-      var topBanner = '';
-      if (offline) topBanner = banner({ icon: 'wifioff', kind: 'warn', title: '设备离线',
-        body: '最后一次在线：3 小时前。', action: { label: '重新连接', to: '#/device?state=reconnecting' } });
-      if (reconnecting) topBanner = banner({ icon: 'sync', title: '正在重新连接',
-        body: '正在尝试与设备握手…' });
-
+    purpose: '查看 installation_id、服务器地址和真实连接状态。token 由 App 自动领取与刷新。',
+    out: ['#/home', '#/settings'],
+    states: [{ key: 'normal', label: '自动状态' }],
+    render: function () {
       return `
       <div class="screen">
-        ${appbar({ title: '设备管理', back: '#/home' })}
-        ${topBanner}
+        ${appbar({ title: '设备管理', back: '#/home',
+          right: '<button class="iconbtn" data-device-refresh aria-label="刷新">' + icon('refresh') + '</button>' })}
         <div class="screen__body">
+          <div class="adminnotice" data-device-notice hidden></div>
           ${card(
             kv('当前设备', 'Kissne Mobile', { strong: true })
-            + kv('在线状态', chip(offline ? '离线' : (reconnecting ? '连接中' : '在线'), (offline || reconnecting) ? 'warn' : 'solid'))
-            + kv('服务器地址', '当前连接')
+            + kv('在线状态', '<span data-device-status>检测中…</span>')
+            + kv('Installation ID', '<code data-device-id>—</code>')
+            + kv('服务器地址', '<span data-device-base>—</span>')
+            + kv('认证', '<span data-device-auth>自动 device token</span>')
             + kv('当前模型', '跟随 Hermes')
-            + kv('最近连接时间', offline ? '3 小时前' : '刚刚 · 09:41')
           )}
-          ${sectionTitle('连接操作')}
-          ${card(
-            listRow({ title: '重新连接', sub: '重新与设备建立连接', icon: 'refresh', to: '#/device?state=reconnecting' })
-            + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
-            + listRow({ title: '断开设备', sub: '断开后聊天与同步将不可用', icon: 'off', tone: 'danger', to: '#/device?state=disconnect-confirm' })
-          , { tight: true })}
-          ${note('断开设备必须弹出确认框。')}
+          ${note('无需配对码。App 会用 installation_id 自动领取 device token；token 失效时会自动重新领取。')}
         </div>
-        ${s === 'disconnect-confirm' ? modal({
-          title: '断开设备？',
-          kind: 'danger',
-          body: '<p>断开后将无法聊天，记忆同步也会暂停。</p><p class="muted">你可以随时重新连接。</p>',
-          actions: [
-            { label: '取消', to: '#/device?state=normal', kind: 'ghost' },
-            { label: '确认断开', action: 'disconnect', kind: 'danger' }
-          ]
-        }) : ''}
       </div>`;
+    },
+    mount: function (root) {
+      var T = window.KissneTransport;
+      var refresh = root.querySelector('[data-device-refresh]');
+      var notice = root.querySelector('[data-device-notice]');
+      var stopped = false;
+
+      function setText(sel, value) {
+        var el = root.querySelector(sel);
+        if (el) el.textContent = value == null ? '—' : String(value);
+      }
+      function show(kind, text) {
+        if (!notice) return;
+        notice.hidden = !text;
+        notice.className = 'adminnotice' + (kind ? ' is-' + kind : '');
+        notice.textContent = text || '';
+      }
+      async function probe() {
+        if (!T) {
+          setText('[data-device-status]', '离线');
+          show('error', 'Mobile Transport 不可用');
+          return;
+        }
+        setText('[data-device-id]', typeof T.installationId === 'function' ? T.installationId() : '—');
+        setText('[data-device-base]', typeof T.base === 'function' ? T.base() : '—');
+        setText('[data-device-status]', '检测中…');
+        show('', '');
+        try {
+          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          await T.bootstrap();
+          if (!stopped) {
+            setText('[data-device-status]', '在线');
+            setText('[data-device-auth]', 'device token 有效');
+          }
+        } catch (err) {
+          if (err && err.status === 401 && typeof T.ensureToken === 'function') {
+            try {
+              await T.ensureToken(true);
+              await T.bootstrap();
+              if (!stopped) {
+                setText('[data-device-status]', '在线');
+                setText('[data-device-auth]', 'device token 已自动刷新');
+              }
+              return;
+            } catch (retryErr) {}
+          }
+          if (!stopped) {
+            setText('[data-device-status]', '离线');
+            setText('[data-device-auth]', '等待自动恢复');
+            show('error', '当前无法访问 Kissne 服务端。');
+          }
+        }
+      }
+      function onRefresh(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        probe();
+      }
+      if (refresh) refresh.addEventListener('click', onRefresh);
+      probe();
+      return function () {
+        stopped = true;
+        if (refresh) refresh.removeEventListener('click', onRefresh);
+      };
     }
   });
 
@@ -195,8 +229,8 @@
      ===================================================================== */
   K.registerScreen({
     no: '09', id: 'settings', name: '设置页', route: '#/settings', tab: null,
-    purpose: '账号信息、设备、连接、通知与版本更新入口。',
-    out: ['#/home', '#/device', '#/connect'],
+    purpose: '账号信息、设备状态、通知、运维与版本更新入口。',
+    out: ['#/home', '#/device', '#/admin'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return `
@@ -214,8 +248,7 @@
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
             + listRow({ title: '设备管理', sub: '当前设备', icon: 'plug', to: '#/device' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
-            + listRow({ title: '连接设置', sub: '配对码 / 服务器地址', icon: 'link', to: '#/connect' })
-            + listRow({ title: '通知设置', sub: '新消息 / 连接状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
+            + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
             + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })
           , { tight: true })}
           ${card(
@@ -255,8 +288,7 @@
               body: '聊天与同步暂不可用。', action: { label: '重新连接', to: '#/device' } }) + '</div>'
             + '<div class="demo">' + banner({ icon: 'alert', kind: 'warn', title: '记忆同步失败',
               body: '无法访问设备，请检查连接。', action: { label: '重试', action: 'sync' } }) + '</div>'
-            + '<div class="demo">' + banner({ icon: 'alert', kind: 'warn', title: '配对码错误',
-              body: '配对码不正确，请重新核对。' }) + '</div>'
+
           , { tight: true })}
 
           ${sectionTitle('确认弹窗')}
@@ -282,7 +314,7 @@
   K.registerScreen({
     no: '11', id: 'admin', name: '运维与部署', route: '#/admin', tab: null,
     purpose: '查看服务端版本与运行状态，执行上游合并、回滚，并实时查看部署日志。',
-    out: ['#/settings', '#/connect'],
+    out: ['#/settings'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return `
