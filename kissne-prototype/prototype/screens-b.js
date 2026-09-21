@@ -199,7 +199,7 @@
      ===================================================================== */
   K.registerScreen({
     no: '09', id: 'settings', name: '设置页', route: '#/settings', tab: null,
-    purpose: '账号信息与各设置入口，本阶段只做入口，不实现复杂配置。',
+    purpose: '账号信息、设备、连接、通知与版本更新入口。',
     out: ['#/home', '#/device', '#/connect', '#/assets'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
@@ -224,9 +224,10 @@
             + listRow({ title: '素材占位总表', sub: '全部占位标记的登记与说明', icon: 'box', to: '#/assets' })
           , { tight: true })}
           ${card(
-            listRow({ title: '关于 Kissne', sub: 'V0.1 · 低保真原型', icon: 'info', right: chip('后续页面', 'warn') })
+            listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
+            + listRow({ title: '关于 Kissne', sub: 'V0.2.1 · Android 合体版', icon: 'info' })
           , { tight: true })}
-          ${note('本阶段只做设置入口，不实现真实配置项。')}
+          ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
       </div>`;
     }
