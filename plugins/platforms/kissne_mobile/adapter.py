@@ -1234,11 +1234,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def _bootstrap_history_snapshot(
         self, session_id: str
     ) -> Tuple[List[Dict[str, Any]], bool, set[str]]:
-        """Returned history plus turn identities proven by that exact snapshot.
+        """Return bounded complete turns, including safe tool activity metadata.
 
-        ``SessionStore.load_transcript()`` exposes the persisted ``platform_message_id`` as
-        ``message_id`` for JSONL compatibility.  New Mobile inbound writes the server ``turn_id``
-        there; legacy rows carry a client retry id and therefore cannot match a DeviceStore turn.
+        Mobile receives enough structure to rebuild Hermes tool activity, but never raw reasoning.
+        The cap counts conversation turns (user-led groups), not physical transcript rows, so tool
+        chatter cannot shrink the useful history window or leave a tool chain cut in half.
         """
         store = getattr(self, "_session_store", None)
         if store is None or not session_id:
@@ -1248,59 +1248,123 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.warning("[kissne_mobile] could not read history for a bootstrap", exc_info=True)
             return [], False, set()
-        items: List[Dict[str, Any]] = []
+
+        def clipped(value: Any, limit: int = 4096) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, str):
+                text = value
+            else:
+                try:
+                    text = json.dumps(value, ensure_ascii=False, default=str)
+                except Exception:
+                    text = str(value)
+            if len(text) <= limit:
+                return text
+            return text[:limit] + "…[truncated]"
+
+        def safe_tool_calls(value: Any) -> List[Dict[str, Any]]:
+            if not isinstance(value, list):
+                return []
+            result: List[Dict[str, Any]] = []
+            for index, call in enumerate(value[:24]):
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                function = function if isinstance(function, dict) else {}
+                call_id = str(call.get("id") or call.get("tool_call_id") or f"history-tool:{index}")
+                name = str(function.get("name") or call.get("name") or call.get("tool_name") or "")
+                arguments = function.get("arguments", call.get("arguments", ""))
+                result.append({
+                    "id": call_id,
+                    "name": name,
+                    "arguments": clipped(arguments, 4096),
+                })
+            return result
+
+        groups: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
         for row in rows:
             if not isinstance(row, dict):
                 continue
             role = str(row.get("role") or "").strip().lower()
-            if role not in {"user", "assistant"}:
+            if role not in {"user", "assistant", "tool"}:
                 continue
-            text = row.get("content", row.get("text"))
-            if not isinstance(text, str) or not text.strip():
-                continue
-            item: Dict[str, Any] = {"role": role, "text": text}
-            if role == "user":
-                turn_id = str(row.get("message_id") or "").strip()
-                if turn_id:
-                    item["_turn_id"] = turn_id
+            # Deliberately do not read/copy row["reasoning"].
+            text_value = row.get("content", row.get("text"))
+            text = text_value if isinstance(text_value, str) else ""
             stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+
+            if role == "user":
+                if current is not None:
+                    groups.append(current)
+                turn_id = str(row.get("message_id") or "").strip()
+                item: Dict[str, Any] = {"role": "user", "text": text}
+                if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+                    item["created_at"] = float(stamp)
+                if turn_id:
+                    item["message_ref"] = f"turn:{turn_id}:user"
+                current = {"turn_id": turn_id, "items": [item]}
+                continue
+
+            # Never expose orphan assistant/tool rows from before the bounded user-led turn.
+            if current is None:
+                continue
+
+            if role == "assistant":
+                calls = safe_tool_calls(row.get("tool_calls"))
+                if not text.strip() and not calls:
+                    continue
+                item = {"role": "assistant", "text": text}
+                if calls:
+                    item["tool_calls"] = calls
+                    item["activity_only"] = not bool(text.strip())
+                if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+                    item["created_at"] = float(stamp)
+                current["items"].append(item)
+                continue
+
+            # Tool output is intentionally a bounded preview; binary/base64-sized payloads never
+            # travel wholesale through bootstrap.
+            tool_call_id = str(row.get("tool_call_id") or row.get("call_id") or "").strip()
+            tool_name = str(row.get("tool_name") or row.get("name") or "").strip()
+            if not tool_call_id and not tool_name and not text.strip():
+                continue
+            item = {
+                "role": "tool",
+                "text": clipped(text, 4096),
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+            }
             if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
                 item["created_at"] = float(stamp)
-            items.append(item)
+            current["items"].append(item)
+
+        if current is not None:
+            groups.append(current)
 
         cap = max(0, self._history_cap)
-        truncated = bool(cap and len(items) > cap)
+        truncated = bool(cap and len(groups) > cap)
         if truncated:
-            items = items[-cap:]
-        # A bounded tail may cut between user and assistant.  That assistant half-turn cannot prove
-        # reconciliation, so never expose it as the first visible history row.
-        if items and items[0].get("role") == "assistant":
-            items = items[1:]
+            groups = groups[-cap:]
 
+        items: List[Dict[str, Any]] = []
         represented_turn_ids: set[str] = set()
-        # Keep the Runtime turn identity on the wire. The Android/WebView client uses it to
-        # reconcile a fresh local bubble with bootstrap history after any UI remount; matching
-        # by role+text is unsafe because repeated identical messages are legitimate.
-        for item in items:
-            if item.get("role") != "user":
-                continue
-            turn_id = str(item.get("_turn_id") or "").strip()
-            if turn_id:
-                item["message_ref"] = f"turn:{turn_id}:user"
-
-        for current, following in zip(items, items[1:]):
-            if current.get("role") != "user" or following.get("role") != "assistant":
-                continue
-            turn_id = str(current.get("_turn_id") or "").strip()
-            if turn_id:
+        for group in groups:
+            turn_id = str(group.get("turn_id") or "").strip()
+            group_items = list(group.get("items") or [])
+            # The final visible assistant belongs to the originating user turn even when any number
+            # of assistant(tool_calls)/tool rows sit between them. Preserve reconciliation semantics.
+            final_assistant: Optional[Dict[str, Any]] = None
+            for item in group_items:
+                if item.get("role") == "assistant" and str(item.get("text") or "").strip():
+                    final_assistant = item
+            if turn_id and final_assistant is not None:
+                final_assistant["message_ref"] = f"turn:{turn_id}:assistant"
                 represented_turn_ids.add(turn_id)
-                following["message_ref"] = f"turn:{turn_id}:assistant"
+            items.extend(group_items)
 
-        history = [
-            {key: value for key, value in item.items() if key != "_turn_id"}
-            for item in items
-        ]
-        return history, truncated, represented_turn_ids
+        return items, truncated, represented_turn_ids
 
     def _history_tail(self, session_id: str) -> Tuple[List[Dict[str, Any]], bool]:
         """The bounded user/assistant tail retained for existing callers/tests."""
