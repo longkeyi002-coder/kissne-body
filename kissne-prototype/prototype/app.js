@@ -48,11 +48,16 @@
     return list.map(function (item, index) {
       item = item || {};
       var id = String(item.session_id || item.id || item.sessionId || '');
+      var titleSource = String(item.title_source || item.titleSource || '');
+      var rawTitle = String(item.title || item.name || item.label || '').trim();
+      if (!titleSource && (/^Kissne Mobile\b/i.test(rawTitle) || /^kissne_mobile\s*[:/]/i.test(rawTitle))) {
+        rawTitle = '';
+      }
       return {
         id: id,
         key: String(item.session_key || item.key || item.sessionKey || ''),
-        title: String(item.title || item.name || item.label || ('会话 ' + (index + 1))),
-        titleSource: String(item.title_source || item.titleSource || ''),
+        title: rawTitle || ('会话 ' + (index + 1)),
+        titleSource: titleSource,
         updatedAt: item.last_active || item.updated_at || item.updatedAt || null,
         createdAt: item.created_at || item.createdAt || null,
         messageCount: Number(item.message_count || item.messageCount || 0) || 0,
