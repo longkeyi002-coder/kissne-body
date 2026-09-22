@@ -1112,12 +1112,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
             items = items[1:]
 
         represented_turn_ids: set[str] = set()
+        # Keep the Runtime turn identity on the wire. The Android/WebView client uses it to
+        # reconcile a fresh local bubble with bootstrap history after any UI remount; matching
+        # by role+text is unsafe because repeated identical messages are legitimate.
+        for item in items:
+            if item.get("role") != "user":
+                continue
+            turn_id = str(item.get("_turn_id") or "").strip()
+            if turn_id:
+                item["message_ref"] = f"turn:{turn_id}:user"
+
         for current, following in zip(items, items[1:]):
             if current.get("role") != "user" or following.get("role") != "assistant":
                 continue
             turn_id = str(current.get("_turn_id") or "").strip()
             if turn_id:
                 represented_turn_ids.add(turn_id)
+                following["message_ref"] = f"turn:{turn_id}:assistant"
 
         history = [
             {key: value for key, value in item.items() if key != "_turn_id"}
