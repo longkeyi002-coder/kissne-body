@@ -543,6 +543,40 @@
       + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '') + '</span></span>';
   }
 
+  var AVA_STATES = {
+    idle:     '平静',        /* 兜底：普通消息、闲着 */
+    read:     '正在看消息',  /* 已接收这一批用户消息，尚未产生 reasoning/tool/text */
+    think:    '思考中',      /* 托腮 + 问号泡泡 */
+    work:     '干活中',      /* 手忙脚乱那张（暂无正脸"在忙"素材，先借它） */
+    talk:     '说话',        /* 平静微笑，正好也是兜底图 */
+    happy:    '开心',        /* 大笑 */
+    confused: '没听懂',      /* 问号（词表里留着，等页面用得上再接） */
+    sad:      '委屈 / 出错',
+    sleep:    '睡着 / 离线',
+    panic:    '卡住了'
+  };
+
+  function ava(code, tag, state) {
+    /* 头像是**透明底**素材，**不切圆形** —— 狐狸耳朵是尖的，切圆会吃掉耳朵和蝴蝶结。
+       直接按素材自己的轮廓显示（圆角/底色由 .ph--img 在 CSS 里清掉）。 */
+    return '<div class="msg__ava">'
+      + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
+      + '</div>';
+  }
+  function aiMsg(html, cls, time, tag, state, activity) {
+    return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
+      + '<div class="msg__body">' + (activity || '')
+      + '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
+      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
+      + '</div>';
+  }
+  /* 「我」这一侧：头像是**小羊**（人人星）。
+     状态词表和狐狸共用一套（AVA_STATES），缺图自动回落兜底那张平静脸。
+
+     MY_AVA 是**模块级**的当前表情 —— 渲染时按页面状态写一次，meMsg 默认读它，
+     省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
+       设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
+  var MY_AVA = 'idle';
   function meMsg(html, meta, time, state) {
     return '<div class="msg msg--me">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
@@ -2441,10 +2475,6 @@
         liveStopped = true;
         clearTimeout(livePollTimer);
         clearTimeout(liveOutboxTimer);
-        /* 演出用的一串定时器：切页/重渲染时必须全清，
-           否则会在已经销毁的 DOM 上继续改东西 */
-        for (var sq = 0; sq < seqTs.length; sq++) clearTimeout(seqTs[sq]);
-        seqTs = [];
         clearTimeout(hitT);
         clearTimeout(bootT);
       };
