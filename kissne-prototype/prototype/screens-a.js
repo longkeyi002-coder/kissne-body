@@ -485,6 +485,31 @@
   }
 
   var CHAT_LOG = [];
+  var CHAT_LOG_STORAGE_KEY = 'kissne.chat.local_log.v1';
+  function persistChatLog() {
+    try {
+      var safe = CHAT_LOG.slice(-240).map(function (m) {
+        return {
+          who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
+          day: m.day || '', messageRef: m.messageRef || '', turnId: m.turnId || '',
+          localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly
+        };
+      });
+      localStorage.setItem(CHAT_LOG_STORAGE_KEY, JSON.stringify(safe));
+    } catch (e) {}
+  }
+  function loadChatLog() {
+    try {
+      var raw = localStorage.getItem(CHAT_LOG_STORAGE_KEY);
+      var rows = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(rows)) return;
+      rows.slice(-240).forEach(function (m) {
+        if (!m || !/^(me|ai|sys)$/.test(String(m.who || ''))) return;
+        CHAT_LOG.push(m);
+      });
+    } catch (e) {}
+  }
+  loadChatLog();
   /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
      are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
      answering stay buffered and become one follow-up turn when that reply finishes. */
@@ -768,6 +793,7 @@
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     CHAT_LOG.push(m);
+    persistChatLog();
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
       if (!UNREAD.n) UNREAD.first = CHAT_LOG.length - 1;
@@ -1421,6 +1447,7 @@
         clientSystem.forEach(function (m) {
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
+        persistChatLog();
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
         jumpTo(list.scrollHeight);
       }
@@ -1659,6 +1686,7 @@
                 localOwned: true,
                 optimistic: true
               });
+              persistChatLog();
             }
           }
           if (turnId) delete livePendingTurns[turnId];
@@ -2258,6 +2286,7 @@
           CURRENT_SESSION_ID = '';
           CURRENT_SESSION_KEY = '';
           CHAT_LOG.length = 0;
+          persistChatLog();
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
           liveCovered = Object.create(null);
