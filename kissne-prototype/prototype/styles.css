@@ -280,6 +280,9 @@ code{font-family:var(--mono)}
   outline:none;-webkit-tap-highlight-color:transparent}
 .sessionpage__row:focus,.sessionpage__row:active{outline:none}
 html.is-native-shell .sessionpage__row:focus{background:transparent;box-shadow:none}
+html.is-native-shell .sessionpage__row:hover,
+html.is-native-shell .sessionpage__row:active{background:transparent;box-shadow:none}
+
 .row--plain{border-bottom:0;padding:2px 0}
 .row__icon{width:30px;height:30px;flex:none;border-radius:9px;background:var(--g2);
   display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
