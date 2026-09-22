@@ -546,9 +546,9 @@
     CHAT_LOG.length = 0;
     loadChatLogFor(sid).forEach(function (m) { CHAT_LOG.push(m); });
   }
-  /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
-     are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
-     answering stay buffered and become one follow-up turn when that reply finishes. */
+  /* Human-style composer: every tap creates its own visible bubble. The 1.6s value is only a
+     maximum coalescing guard; actual drain follows live composer typing state. Messages sent while
+     the AI is active steer the work without surfacing a fake user-visible "stopped" reply. */
   var CHAT_OUTBOX = [];
   var CHAT_OUTBOX_BUSY = false;
   var CHAT_OUTBOX_RETRY = null;
@@ -1976,7 +1976,7 @@
       }
 
       var OUTBOX_BATCH_DELAY_MS = 1600;
-      var USER_TYPING_IDLE_MS = 1600;
+      var USER_TYPING_IDLE_MS = 420;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -1987,11 +1987,16 @@
         var now = Date.now();
         var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
         var sinceTyping = now - CHAT_USER_INPUT_AT;
-        return Math.max(
-          0,
-          OUTBOX_BATCH_DELAY_MS - sinceBubble,
-          CHAT_USER_INPUT_AT ? USER_TYPING_IDLE_MS - sinceTyping : 0
-        );
+        /* If the composer is still non-empty, typing is authoritative: wait for a short idle
+           edge, capped by the 1.6s coalescing guard. Once the composer is empty, do not make
+           every ordinary message pay the full 1.6s latency. */
+        if (String(input && input.value || '').trim() && CHAT_USER_INPUT_AT) {
+          return Math.max(0, Math.min(
+            OUTBOX_BATCH_DELAY_MS - sinceBubble,
+            USER_TYPING_IDLE_MS - sinceTyping
+          ));
+        }
+        return 0;
       }
       function scheduleOutboxDrain() {
         clearTimeout(liveOutboxTimer);
@@ -2055,6 +2060,8 @@
         liveSendInFlight += 1;
         try {
           if (liveCurrentTurn || Object.keys(livePendingTurns).length) {
+            /* A second user message is steering, not a user-requested stop. Cancel only the
+               obsolete execution turn; liveSteeredTurns suppresses its cancelled UI. */
             await interruptForSteer();
           }
           var accepted = await T.sendText(batch.text, batch.messageId);
