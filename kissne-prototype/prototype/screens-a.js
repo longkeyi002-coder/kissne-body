@@ -621,10 +621,12 @@
       var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
-      rows.push('<div class="activity-item" data-tool-call-id="' + esc(tool.id || key) + '">'
+      var meta = tool.name ? '<span class="activity-toolname">' + esc(tool.name) + '</span>' : '';
+      rows.push('<div class="activity-item activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
+        + '<span class="activity-statusdot" aria-hidden="true"></span>'
         + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
-        + '<span class="activity-label">' + esc(tool.label || '使用工具') + '</span>'
+        + '<span class="activity-copy"><span class="activity-label">' + esc(tool.label || '使用工具') + '</span>' + meta + '</span>'
         + '<span class="activity-count">' + esc(statusText) + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
         + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
