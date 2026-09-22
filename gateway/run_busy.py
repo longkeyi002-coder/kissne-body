@@ -727,9 +727,11 @@ class GatewayBusySessionMixin:
         ):
             await self._interrupt_running_agent_for_busy_event(event, adapter, running_agent)
 
-        # Disabled ack: still process input. Checked before debounce so an undelivered ack never
-        # stamps the "last ack" timestamp.
-        if os.environ.get("HERMES_GATEWAY_BUSY_ACK_ENABLED", "true").lower() != "true":
+        # Disabled ack: still process input. A platform may suppress busy acks when its UI
+        # already represents queued messages (Kissne Mobile), without changing other platforms.
+        adapter_ack = getattr(adapter, "busy_ack_enabled", None)
+        global_ack = os.environ.get("HERMES_GATEWAY_BUSY_ACK_ENABLED", "true").lower() == "true"
+        if adapter_ack is False or (adapter_ack is None and not global_ack):
             logger.debug("Busy ack suppressed for session %s", session_key)
             return True  # input still processed, just no ack sent
 
