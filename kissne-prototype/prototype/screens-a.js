@@ -1484,6 +1484,17 @@
             return;
           }
           if (role === 'system') {
+            /* Hermes/CLI may persist tool progress as a system row (for example
+               "Reading SELF.md"). It is activity, not a centered chat notice. */
+            if (looksLikeToolTranscript(rawText)) {
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: item.tool_call_id || ('history-system:' + String(CHAT_LOG.length)),
+                tool_name: item.tool_name || '',
+                detail: rawText,
+                status: 'completed'
+              }, 'result');
+              return;
+            }
             CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
             return;
           }
@@ -1943,8 +1954,8 @@
         }
       }
 
-      var OUTBOX_BATCH_DELAY_MS = 650;
-      var USER_TYPING_IDLE_MS = 1800;
+      var OUTBOX_BATCH_DELAY_MS = 1600;
+      var USER_TYPING_IDLE_MS = 1600;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
