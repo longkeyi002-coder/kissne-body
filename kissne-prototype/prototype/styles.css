@@ -1196,6 +1196,15 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .attachmsg__body{min-width:0;display:flex;flex-direction:column;gap:1px}
 .attachmsg__body b{font-size:11.5px;font-weight:650;overflow-wrap:anywhere;word-break:break-word}
 .attachmsg__body small{font-size:9.5px;color:var(--ink-3)}
+.attachmsg__status{margin-top:1px}
+.attachmsg--sent .attachmsg__status{color:var(--ink-3)}
+.attachmsg--failed .attachmsg__status{color:var(--danger,#a33)}
+.attachmsg__spin{
+  flex:none;width:12px;height:12px;border:1.5px solid var(--line);
+  border-top-color:var(--ink-2);border-radius:50%;
+  animation:attachspin .8s linear infinite
+}
+@keyframes attachspin{to{transform:rotate(360deg)}}
 /* —— 输入栏上方的磁吸快捷条：表情包 / 语音通话 / 屏幕共享 ——
    吸附在输入框上沿（负下边距让它压住一点点），不再是「＋」里的浮层入口。 */
 .quickbar{
