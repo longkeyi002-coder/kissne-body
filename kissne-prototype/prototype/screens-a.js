@@ -374,12 +374,12 @@
             ? String(entry || '').trim()
             : String((entry || {}).model || (entry || {}).id || (entry || {}).value || '').trim();
           if (!model) return;
-          var wire = model.indexOf('/') > 0 ? model : slug + '/' + model;
+          var key = slug + '::' + model;
           var label = typeof entry === 'string'
             ? model
             : String((entry || {}).label || model);
           if (label.indexOf(slug + '/') === 0) label = label.slice(slug.length + 1);
-          nextModels.push({ k: wire, raw: model, v: label, d: name, p: slug });
+          nextModels.push({ k: key, raw: model, v: label, d: name, p: slug });
         });
       });
       if (!reportedCurrentProvider) {
@@ -398,7 +398,7 @@
           var label = slash > 0 ? value.slice(slash + 1) : value;
           if (!provider && value === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
           if (provider) providerLabels[provider] = provider;
-          return { k: value, raw: label, v: label, d: provider || 'Hermes', p: provider };
+          return { k: (provider ? provider + '::' : '') + value, raw: value, v: label, d: provider || 'Hermes', p: provider };
         }
         item = item || {};
         var provider = String(item.provider || item.provider_slug || item.provider_id || '').trim();
@@ -406,13 +406,13 @@
         if (!model) return null;
         if (!provider && model.indexOf('/') > 0) provider = model.slice(0, model.indexOf('/'));
         if (!provider && model === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
-        var key = provider && model.indexOf('/') < 0 ? provider + '/' + model : model;
+        var key = (provider ? provider + '::' : '') + model;
         var providerLabel = String(item.provider_label || provider || '').trim();
         if (provider) providerLabels[provider] = providerLabel || provider;
         return {
           k: key,
-          raw: model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model,
-          v: String(item.label || (model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model) || key),
+          raw: model,
+          v: String(item.label || model || key),
           d: providerLabel || provider || 'Hermes',
           p: provider
         };
@@ -445,11 +445,8 @@
 
     MODEL_CURRENT = currentModel;
     var currentMatch = MODELS.filter(function (m) {
-      if (m.k === currentModel) return true;
-      if (reportedCurrentProvider && m.p === reportedCurrentProvider) {
-        return m.raw === currentModel || m.k === reportedCurrentProvider + '/' + currentModel;
-      }
-      return false;
+      if (reportedCurrentProvider && m.p === reportedCurrentProvider && m.raw === currentModel) return true;
+      return !reportedCurrentProvider && (m.raw === currentModel || m.k === currentModel);
     })[0];
     PROVIDER_CURRENT = reportedCurrentProvider || (currentMatch && currentMatch.p) || '';
     if (!PROVIDER_CURRENT) {
@@ -509,7 +506,7 @@
           return '<button type="button" class="modelpick__row' + (active ? ' is-active' : '') + '"'
             + (!m.k ? ' disabled' : '')
             + ' data-hermes-control="model" data-hermes-provider="' + esc(selectedProvider) + '"'
-            + ' data-hermes-value="' + esc(m.k) + '" data-hermes-origin="normal">'
+            + ' data-hermes-key="' + esc(m.k) + '" data-hermes-value="' + esc(m.raw) + '" data-hermes-origin="normal">'
             + '<span class="modelpick__main">' + esc(m.v) + '</span>'
             + (active ? icon('check', 14) : '') + '</button>';
         }).join('') : '<div class="modelpick__empty">这个供应商当前没有可用模型</div>')
@@ -1391,12 +1388,13 @@
         if (!value) return;
         el.disabled = true;
         var modelValue = kind === 'model' ? value : '';
-        T.setModel(modelValue, kind === 'effort' ? value : '')
+        var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
+        var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
+        T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
           .then(function () {
             if (kind === 'model') {
-              MODEL_CURRENT = value;
-              var selected = pick(MODELS, value, value);
-              PROVIDER_CURRENT = selected.p || PROVIDER_CURRENT;
+              MODEL_CURRENT = modelKey || value;
+              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
             }
             if (kind === 'effort') EFFORT_CURRENT = value;
             MODEL_OPTIONS_LOADED_AT = 0;
