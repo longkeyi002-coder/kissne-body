@@ -191,6 +191,9 @@ class MainActivity : AppCompatActivity() {
                     ?: if (kind == "photo") "photo" else "file"
                 val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
                     ?: "application/octet-stream"
+                if (::bridge.isInitialized) {
+                    bridge.notifyAttachmentSelected(requestId, kind, name, mime)
+                }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
                 if (::bridge.isInitialized) {
                     bridge.uploadPickedAttachment(requestId, kind, name, mime, bytes)
