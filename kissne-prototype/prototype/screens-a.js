@@ -1414,7 +1414,7 @@
         if (line) line.textContent = text;
       }
       function turnIdFromMessageRef(ref) {
-        var match = /^turn:(kbm_turn_[^:]+):(user|assistant)$/.exec(String(ref || ''));
+        var match = /^turn:([^:]+):(user|assistant)$/.exec(String(ref || ''));
         return match ? match[1] : '';
       }
       function hydrateHistory(history) {
@@ -1447,21 +1447,17 @@
 
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
+        var historyTurnCursor = '';
         (history || []).forEach(function (item) {
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
-          var historyTurnId = '';
+          var messageRef = String(item.message_ref || '');
+          var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
+          if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
+          var historyTurnId = explicitTurnId || historyTurnCursor;
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
           if (role === 'assistant' && historyCalls.length) {
-            historyTurnId = String(item.turn_id || '');
-            if (!historyTurnId) {
-              for (var bi = CHAT_LOG.length - 1; bi >= 0; bi--) {
-                if (CHAT_LOG[bi] && CHAT_LOG[bi].who === 'me' && CHAT_LOG[bi].turnId) {
-                  historyTurnId = CHAT_LOG[bi].turnId; break;
-                }
-              }
-            }
             historyCalls.forEach(function (call, ci) {
               var fn = call && call.function && typeof call.function === 'object' ? call.function : {};
               upsertToolActivity(historyTurnId || 'history', {
@@ -1474,14 +1470,6 @@
             if (!rawText.trim()) return;
           }
           if (role === 'tool') {
-            historyTurnId = String(item.turn_id || '');
-            if (!historyTurnId) {
-              for (var ti = CHAT_LOG.length - 1; ti >= 0; ti--) {
-                if (CHAT_LOG[ti] && CHAT_LOG[ti].who === 'me' && CHAT_LOG[ti].turnId) {
-                  historyTurnId = CHAT_LOG[ti].turnId; break;
-                }
-              }
-            }
             upsertToolActivity(historyTurnId || 'history', {
               tool_call_id: item.tool_call_id || '',
               tool_name: item.tool_name || '',
@@ -1496,7 +1484,6 @@
           }
           if (role !== 'user' && role !== 'assistant') return;
 
-          var messageRef = String(item.message_ref || '');
           var localRows = messageRef && localByRef[messageRef];
           if (localRows && localRows.length) {
             localRows.forEach(function (m) {
