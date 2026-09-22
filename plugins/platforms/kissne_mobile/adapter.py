@@ -176,6 +176,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._pair_attempts: Dict[str, Deque[float]] = {}
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
+        self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -460,7 +461,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self, event: Any, *, mode: str = "all", preview_max_len: int = 40,
     ) -> Optional[str]:
         """Encode a semantic Activity record; send_draft separates it from assistant text."""
-        from gateway.stream_events import ToolCallChunk
+        from gateway.stream_events import ToolCallChunk, ToolCallFinished
+        if isinstance(event, ToolCallFinished):
+            index = int(event.index or 0)
+            return self._encode_activity_marker({
+                "kind": "tool_result",
+                "tool_call_id": f"draft-tool:{index}",
+                "tool_name": str(event.tool_name or ""),
+                "index": index,
+                "status": "completed" if bool(event.ok) else "failed",
+                "duration": round(float(event.duration or 0.0), 3),
+            })
         if not isinstance(event, ToolCallChunk):
             return None
         command = self._tool_command(event.args)
@@ -501,10 +512,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     def _clear_draft_state(self, installation_id: str) -> None:
         installation = str(installation_id or "")
-        keys = set(self._draft_text_last) | set(self._draft_activity_seen)
+        keys = set(self._draft_text_last) | set(self._draft_activity_seen) | set(self._draft_tool_labels)
         for key in [key for key in keys if key[0] == installation]:
             self._draft_text_last.pop(key, None)
             self._draft_activity_seen.pop(key, None)
+            self._draft_tool_labels.pop(key, None)
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
@@ -573,6 +585,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         key = (installation, int(draft_id))
         visible, activities = self._split_draft_frame(content)
         seen = self._draft_activity_seen.setdefault(key, set())
+        labels = self._draft_tool_labels.setdefault(key, {})
         last_message_id: Optional[str] = None
 
         for activity in activities:
@@ -580,14 +593,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 activity.get("tool_call_id")
                 or f"draft-tool:{activity.get('index', '')}"
             )
-            if identity in seen:
+            kind = str(activity.get("kind") or "tool_call")
+            phase_key = f"{kind}:{identity}"
+            if phase_key in seen:
                 continue
-            seen.add(identity)
+            seen.add(phase_key)
+            if kind == "tool_call":
+                labels[identity] = str(activity.get("label") or "")
+            elif kind == "tool_result" and not activity.get("label"):
+                activity["label"] = labels.get(identity, "") or self._semantic_activity_label(
+                    str(activity.get("tool_name") or ""), None, None)
+            presentation = "tool_result" if kind == "tool_result" else "tool_call"
             last_message_id = await self._queue_event(
                 installation, EVENT_DELTA, content="",
                 extra={
                     "draft_id": int(draft_id),
-                    "presentation": "tool_call",
+                    "presentation": presentation,
                     "tool_call_id": identity,
                     "activity": activity,
                 })
