@@ -18,7 +18,7 @@
     { key: 'detail', label: '记忆详情' },
     { key: 'delete-confirm', label: '删除确认' }
   ];
-  var MEMORY_INDEX = { items: [], loaded: false, error: '' };
+  var MEMORY_INDEX = { items: [], loaded: false, error: '', providerConfigured: false, provider: '' };
 
   function memoryItemById(id) {
     id = String(id || '');
@@ -39,10 +39,13 @@
     if (!MEMORY_INDEX.loaded) {
       return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
     }
+    if (!MEMORY_INDEX.providerConfigured) {
+      return '<div class="mempty"><div class="mempty__t">未配置记忆供应商</div>'
+        + '<div class="mempty__s">当前不会显示 Hermes 的 MEMORY.md / USER.md，也不会生成演示记忆。</div></div>';
+    }
     if (!MEMORY_INDEX.items.length) {
-      return '<div class="mempty">' + ph('MEMORY_EMPTY_ILLUSTRATION', { size: 140 })
-        + '<div class="mempty__t">暂无记忆</div>'
-        + '<div class="mempty__s">这里只显示真实写入 MEMORY.md / USER.md 的内容。</div></div>';
+      return '<div class="mempty"><div class="mempty__t">暂无记忆</div>'
+        + '<div class="mempty__s">已连接记忆供应商，但目前没有可显示的记忆。</div></div>';
     }
     return card(MEMORY_INDEX.items.map(function (item) {
       var source = item.target === 'user' ? '用户资料' : '长期记忆';
@@ -93,7 +96,11 @@
       return '<div class="screen">'
         + appbar({
             title: '记忆库',
-            sub: MEMORY_INDEX.loaded ? ('真实记忆 · ' + MEMORY_INDEX.items.length + ' 条') : 'Hermes 真实记忆',
+            sub: MEMORY_INDEX.loaded
+              ? (MEMORY_INDEX.providerConfigured
+                  ? ('记忆供应商 · ' + MEMORY_INDEX.items.length + ' 条')
+                  : '未配置记忆供应商')
+              : '正在检查记忆供应商',
             back: '#/home',
             right: '<button class="iconbtn" data-memory-refresh aria-label="刷新">' + icon('sync') + '</button>'
           })
@@ -128,6 +135,8 @@
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
           var payload = await T.memories();
           MEMORY_INDEX.items = Array.isArray(payload && payload.items) ? payload.items : [];
+          MEMORY_INDEX.providerConfigured = !!(payload && payload.provider_configured);
+          MEMORY_INDEX.provider = String(payload && payload.provider || '');
           MEMORY_INDEX.loaded = true;
           MEMORY_INDEX.error = '';
           if (!stopped) { show(''); paint(); }
@@ -343,7 +352,7 @@
           right: '<button class="iconbtn" data-sessions-refresh aria-label="刷新会话">' + icon('refresh') + '</button>'
         })}
         <div class="screen__body">
-          <div class="srchbox">
+          <div class="srchbox sessionpage__search">
             ${icon('search', 15)}
             <input class="srchbox__in" data-sessions-search type="text" placeholder="搜索会话" aria-label="搜索会话">
           </div>
