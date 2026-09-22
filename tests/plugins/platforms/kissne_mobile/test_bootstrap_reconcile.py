@@ -288,6 +288,7 @@ def test_bootstrap_preserves_tool_chain_and_final_turn_identity(tmp_path):
     assert [row["role"] for row in history] == ["user", "assistant", "tool", "assistant"]
     assert history[0]["message_ref"] == "turn:kbm_turn_tools:user"
     assert history[-1]["message_ref"] == "turn:kbm_turn_tools:assistant"
+    assert all(row["turn_id"] == "kbm_turn_tools" for row in history)
     assert represented == {"kbm_turn_tools"}
     assert history[1]["tool_calls"][0]["id"] == "call-1"
     assert history[2]["tool_call_id"] == "call-1"
@@ -328,3 +329,4 @@ def test_bootstrap_cap_keeps_whole_tool_turns_within_message_ceiling(tmp_path):
     assert history[-1]["text"] == "new-a"
     assert truncated is True
     assert represented == {"new"}
+    assert all(row["turn_id"] == "new" for row in history)
