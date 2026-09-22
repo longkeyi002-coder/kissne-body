@@ -363,7 +363,9 @@
       item = item || {};
       var provider = String(item.provider || '');
       var model = String(item.model || item.id || item.value || '');
-      var key = provider && model.indexOf('/') < 0 ? provider + '/' + model : model;
+      var key = provider
+        ? (model.indexOf(provider + '/') === 0 ? model : provider + '/' + model)
+        : model;
       if (provider && !providerLabels[provider]) providerLabels[provider] = String(item.provider_label || provider);
       return {
         k: key,
@@ -1161,9 +1163,11 @@
         var modelValue = kind === 'model' ? value : '';
         if (kind === 'provider') {
           var candidates = modelsForProvider(value).filter(function (m) { return m.p === value && m.k; });
-          var currentModelId = MODEL_CURRENT.indexOf('/') > 0 ? MODEL_CURRENT.slice(MODEL_CURRENT.indexOf('/') + 1) : MODEL_CURRENT;
+          var currentProvider = PROVIDER_CURRENT || (MODEL_CURRENT.indexOf('/') > 0 ? MODEL_CURRENT.slice(0, MODEL_CURRENT.indexOf('/')) : '');
+          var currentModelId = currentProvider && MODEL_CURRENT.indexOf(currentProvider + '/') === 0
+            ? MODEL_CURRENT.slice(currentProvider.length + 1) : MODEL_CURRENT;
           var same = candidates.filter(function (m) {
-            var id = m.k.indexOf('/') > 0 ? m.k.slice(m.k.indexOf('/') + 1) : m.k;
+            var id = m.p && m.k.indexOf(m.p + '/') === 0 ? m.k.slice(m.p.length + 1) : m.k;
             return id === currentModelId;
           })[0];
           modelValue = (same || candidates[0] || {}).k || '';
