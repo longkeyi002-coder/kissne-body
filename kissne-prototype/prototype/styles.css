@@ -632,7 +632,10 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   display:flex;flex-direction:column;gap:2px;width:100%;max-width:100%;min-width:0;
   margin:1px 0 7px;padding:0;color:var(--ink-3)
 }
-.activity-item{width:100%;max-width:100%;min-width:0}
+.activity-item{width:100%;max-width:100%;min-width:0;position:relative}
+.activity-item + .activity-item:before{
+  content:"";position:absolute;left:5px;top:-4px;width:1px;height:8px;background:var(--line-2)
+}
 .activity-row{
   width:100%;max-width:100%;min-width:0;min-height:24px;
   display:flex;align-items:center;gap:7px;padding:2px 0;border:0;background:transparent;
@@ -642,7 +645,20 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .activity-row:active{opacity:.66}
 .activity-icon{flex:none;width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink-3)}
 .activity-icon .ico{width:13px;height:13px}
-.activity-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activity-statusdot{
+  flex:none;width:7px;height:7px;border-radius:50%;background:var(--g5);
+  box-shadow:0 0 0 3px #fff;transition:transform .16s ease,background .16s ease
+}
+.activity-item--running .activity-statusdot{animation:activityPulse 1.25s ease-in-out infinite}
+.activity-item--completed .activity-statusdot{background:var(--g8)}
+.activity-item--failed .activity-statusdot{background:var(--ink)}
+@keyframes activityPulse{0%,100%{transform:scale(.78);opacity:.55}50%{transform:scale(1);opacity:1}}
+.activity-copy{min-width:0;flex:1;display:flex;align-items:baseline;gap:6px}
+.activity-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.activity-toolname{
+  min-width:0;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:9.5px;color:var(--g6);font-family:ui-monospace,SFMono-Regular,Menlo,monospace
+}
 .activity-count{flex:none;font-size:9.5px;color:var(--g6)}
 .activity-chevron{
   flex:none;margin-left:2px;color:var(--g6);transform:rotate(90deg);transition:transform .16s ease
