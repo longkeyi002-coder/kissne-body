@@ -70,50 +70,13 @@
     return (h >= 6 && h < 18) ? 'day' : 'night';
   }
 
-  /* Home connection state is page-lifetime state, not route-lifetime state.
-     Returning from another feature must not look like a reconnect. A real
-     probe happens once per app page load, on explicit refresh, or after auth
-     recovery elsewhere changes the native bootstrap cache. */
-  var HOME_CONNECTION = {
-    checked: false,
-    kind: 'checking',
-    text: '检测中',
-    sub: '正在验证服务器与 device token…'
-  };
-  function homeConnectionSnapshot(T) {
-    var hasToken = !!(T && typeof T.hasToken === 'function' && T.hasToken());
-    if (HOME_CONNECTION.checked && HOME_CONNECTION.kind === 'online' && !hasToken) {
-      HOME_CONNECTION = {
-        checked: true,
-        kind: 'offline',
-        text: '未连接',
-        sub: 'device token 不可用 · 点击刷新重试'
-      };
-    }
-    var hasCache = !!(T
-      && typeof T.hasBootstrapCache === 'function'
-      && T.hasBootstrapCache());
-    if (hasCache && (!HOME_CONNECTION.checked || HOME_CONNECTION.kind !== 'online')) {
-      HOME_CONNECTION = {
-        checked: true,
-        kind: 'online',
-        text: '在线',
-        sub: '已连接 · 使用本地会话缓存'
-      };
-    }
-    return HOME_CONNECTION;
-  }
-
   K.registerScreen({
     no: '04', id: 'home', name: '首页 / 控制台', route: '#/home', tab: 'entry',
-    purpose: 'Kissne 入口页。优先读取客户端 bootstrap 缓存；仅冷启动、手动刷新或认证失效时重新探测。',
-    out: ['#/chat', '#/universe', '#/memory', '#/skills', '#/mcp', '#/device', '#/settings', '#/notifications'],
+    purpose: 'Kissne 入口页。启动后直接可用；认证、会话恢复与服务重连全部由 App 在后台自动完成。',
+    out: ['#/chat', '#/universe', '#/memory', '#/skills', '#/mcp', '#/settings', '#/notifications'],
     states: HOME_STATES,
     render: function (ctx) {
       var part = dayPart(ctx);
-      var homeTransport = window.KissneTransport;
-      var homeConnection = homeConnectionSnapshot(homeTransport);
-      var cachedOnline = homeConnection.kind === 'online';
       var head = `
         <header class="appbar appbar--brand">
           <div class="appbar__l"><span class="brand">Kissne</span></div>
@@ -134,16 +97,6 @@
           </div>
         </div>`;
 
-      var devstrip = `
-        <div class="devstrip" data-home-device>
-          <span class="devstrip__ic">${icon('server', 18)}</span>
-          <span class="devstrip__main">
-            <span class="devstrip__t">当前设备 <span class="chip${cachedOnline ? ' chip--solid' : ' chip--warn'}" data-home-status><i class="dot"></i><span data-home-status-text>${esc(homeConnection.text)}</span></span></span>
-            <span class="devstrip__s" data-home-status-detail>${esc(homeConnection.sub)}</span>
-          </span>
-          <button type="button" class="btn btn--ghost is-small" data-home-refresh><span>刷新</span></button>
-        </div>`;
-
       var showMore = ctx.state === 'more';
       var APPS = showMore ? [
         { t: '语音设置', ic: 'mic',     to: '#/settings' },
@@ -156,7 +109,6 @@
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: 'Skills',   ic: 'box',    to: '#/skills' },
         { t: 'MCP',      ic: 'link',   to: '#/mcp' },
-        { t: '设备管理', ic: 'plug',   to: '#/device' },
         { t: '会话列表', ic: 'chat',   to: '#/sessions' },
         { t: '通知',     ic: 'bell',   to: '#/notifications' },
         { t: '运维',     ic: 'server', to: '#/admin' },
@@ -175,84 +127,12 @@
         ${head}
         <div class="screen__body">
           ${stars}
-          ${devstrip}
           ${sectionTitle(showMore ? '更多功能' : '全部功能')}
           ${appgrid}
           <div class="motifrow">${icon('paw', 15)}${icon('hoof', 15)}${icon('paw', 15)}</div>
         </div>
       </div>`;
-    },
-    mount: function (root) {
-      var T = window.KissneTransport;
-      var badge = root.querySelector('[data-home-status]');
-      var label = root.querySelector('[data-home-status-text]');
-      var detail = root.querySelector('[data-home-status-detail]');
-      var refresh = root.querySelector('[data-home-refresh]');
-      var stopped = false;
 
-      function paint(kind, text, sub, remember) {
-        if (remember) {
-          HOME_CONNECTION = {
-            checked: true,
-            kind: kind,
-            text: text,
-            sub: sub
-          };
-        }
-        if (badge) {
-          badge.className = 'chip' + (kind === 'online' ? ' chip--solid' : ' chip--warn');
-        }
-        if (label) label.textContent = text;
-        if (detail) detail.textContent = sub;
-      }
-      async function probe(force) {
-        if (!T || typeof T.bootstrap !== 'function') {
-          paint('offline', '离线', 'Mobile Transport 不可用', true);
-          return;
-        }
-        if (!force) {
-          var remembered = homeConnectionSnapshot(T);
-          if (remembered.checked) {
-            paint(remembered.kind, remembered.text, remembered.sub, false);
-            return;
-          }
-        }
-        paint('checking', '检测中', '正在验证服务器与 device token…', false);
-        try {
-          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          var boot = await T.bootstrap(!!force);
-          if (!boot || !boot.bound) {
-            if (!stopped) paint('checking', '准备中', '服务器可达 · 会话尚未绑定', true);
-            return;
-          }
-          if (!stopped) paint('online', '在线', '服务器可达 · device token 有效 · 跟随 Hermes', true);
-        } catch (err) {
-          if (err && err.status === 401 && typeof T.ensureToken === 'function') {
-            try {
-              await T.ensureToken(true);
-              var retryBoot = await T.bootstrap(true);
-              if (!retryBoot || !retryBoot.bound) {
-                if (!stopped) paint('checking', '准备中', '认证已恢复 · 会话尚未绑定', true);
-                return;
-              }
-              if (!stopped) paint('online', '在线', '已自动刷新 device token · 跟随 Hermes', true);
-              return;
-            } catch (retryErr) {}
-          }
-          if (!stopped) paint('offline', '离线', '无法连接服务器，点击刷新重试', true);
-        }
-      }
-      function onRefresh(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        probe(true);
-      }
-      if (refresh) refresh.addEventListener('click', onRefresh);
-      probe(false);
-      return function () {
-        stopped = true;
-        if (refresh) refresh.removeEventListener('click', onRefresh);
-      };
     }
   });
 
@@ -264,8 +144,6 @@
     { key: 'empty',          label: '空聊天' },
     { key: 'search',         label: '历史搜索' },
     { key: 'failed',         label: '发送失败' },
-    { key: 'device-offline', label: '设备离线' },
-    { key: 'network-lost',   label: '网络断开' },
     { key: 'request-enter',  label: '小机星进入请示' },
     { key: 'plus-menu',      label: '更多操作' },
     { key: 'provider-menu',  label: '供应商选择' },
@@ -1334,10 +1212,10 @@
 
       function refreshHermesModelControls(force) {
         if (!live || !T || typeof T.modelOptions !== 'function') {
-          PROVIDERS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取供应商' }];
-          MODELS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取模型', p: '' }];
-          EFFORTS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取思考强度' }];
-          MODEL_OPTIONS_ERROR = '尚未连接 Kissne';
+          PROVIDERS = [{ k: '', v: '暂不可用', d: '服务恢复后自动读取供应商' }];
+          MODELS = [{ k: '', v: '暂不可用', d: '服务恢复后自动读取模型', p: '' }];
+          EFFORTS = [{ k: '', v: '暂不可用', d: '服务恢复后自动读取思考强度' }];
+          MODEL_OPTIONS_ERROR = '服务正在自动恢复';
           MODEL_OPTIONS_LOADED_AT = Date.now();
           updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
@@ -1363,7 +1241,7 @@
           MODEL_OPTIONS_ERROR = err && err.code === 'timeout'
             ? '模型列表读取超时，聊天仍可正常使用'
             : (status === 401
-                ? '模型控制接口认证失败，聊天连接保持不变'
+                ? '模型控制接口认证失败，聊天状态不受影响'
                 : '无法读取 Hermes 模型列表');
           PROVIDERS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
           MODELS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR, p: '' }];
@@ -1826,7 +1704,7 @@
           return true;
         } catch (e) {
           live = false;
-          setSessionStatus('暂时无法连接 Kissne');
+          setSessionStatus('服务暂时不可用，正在自动恢复…');
           return false;
         }
       }
@@ -1896,7 +1774,7 @@
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
-          setSessionStatus('正在重新连接…');
+          setSessionStatus('正在恢复服务…');
           scheduleLiveBootstrap(1200);
         }
       }
@@ -2059,7 +1937,7 @@
           }
           scheduleLivePoll(0);
         } catch (err) {
-          setSessionStatus('消息暂未送达，连接恢复后会继续发送。');
+          setSessionStatus('消息暂未送达，服务恢复后会继续发送。');
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) setSessionStatus('');
@@ -2079,7 +1957,7 @@
         var v = (input.value || '').trim();
         if (!v) return;
         if (!live) {
-          setSessionStatus('尚未连接 Kissne，连接后才能发送消息。');
+          setSessionStatus('服务正在自动恢复，请稍后再试。');
           return;
         }
         setSessionStatus('');
@@ -2130,7 +2008,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!live || !T || typeof T.pickAttachment !== 'function') {
-          setSessionStatus('当前版本还不能发送附件。');
+          setSessionStatus('服务正在自动恢复，暂时无法发送附件。');
           return;
         }
         var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
@@ -2425,7 +2303,7 @@
           liveBootstrap();
         } catch (err) {
           live = false;
-          setSessionStatus('暂时无法连接 Kissne');
+          setSessionStatus('服务暂时不可用，正在自动恢复…');
         }
       }
       startLiveTransport();
