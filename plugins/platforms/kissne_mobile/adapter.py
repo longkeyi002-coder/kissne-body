@@ -1091,7 +1091,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         def _build() -> Dict[str, Any]:
             from contextlib import nullcontext
-            from agent.reasoning_effort import EFFORT_LADDER
             from hermes_cli.inventory import build_model_options_payload, load_picker_context
 
             scope = nullcontext()
@@ -1106,8 +1105,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     current_model=current_model or None,
                     current_provider=current_provider or None,
                 )
-                payload = build_model_options_payload(ctx, include_unconfigured=True)
-            payload["efforts"] = list(EFFORT_LADDER)
+                try:
+                    payload = build_model_options_payload(ctx, include_unconfigured=True)
+                except TypeError as exc:
+                    # Compatibility with older/mocked Dashboard inventory call signatures.
+                    if "include_unconfigured" not in str(exc):
+                        raise
+                    payload = build_model_options_payload(ctx)
+            # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
+            # across the mobile-plugin boundary.
+            payload["efforts"] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
             if current_model:
                 payload["model"] = current_model
             if current_provider:
