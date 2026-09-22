@@ -565,6 +565,15 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .chatbody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;
   padding:16px;
   -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.chatdivider{
+  width:100%;max-width:100%;min-width:0;display:flex;align-items:center;justify-content:center;
+  gap:8px;overflow:hidden;color:var(--g6);font-size:9.5px;line-height:1;margin:1px 0 0
+}
+.chatdivider__orn{
+  flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-align:center;
+  letter-spacing:.01em;opacity:.72
+}
+.chatdivider__label{flex:none;white-space:nowrap;color:var(--ink-3);font-size:9.5px}
 /* 消息：两侧都带头像 —— AI 在左、我在右 */
 .msg{display:flex;flex-direction:row;gap:8px;max-width:100%}
 .msg--ai{align-items:flex-start}
@@ -590,31 +599,26 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .aipresence .dots{transform:translateY(1px)}
 .aipresence .dots i{width:3px;height:3px}
 
-/* —— 真实思考 / 工具过程：一个折叠区 —— */
+/* —— GPT 式轻量 Activity 流：只显示动作摘要，不展示原始 reasoning / terminal 命令 —— */
 .activity-history{width:100%;max-width:100%;min-width:0}
-.tlog{display:block;width:100%;max-width:100%;min-width:0;margin:2px 0 7px}
-.tlog__row{
-  display:flex;align-items:center;width:100%;min-height:26px;
-  border:0;background:transparent;padding:2px 0;margin:0;cursor:pointer;
-  font-family:inherit;color:var(--ink-3);-webkit-appearance:none;appearance:none;
+.activity-stream{
+  display:flex;flex-direction:column;gap:4px;width:100%;max-width:100%;min-width:0;
+  margin:1px 0 6px;padding:1px 0;color:var(--ink-3)
 }
-.tlog__rowmeta{display:flex;align-items:center;gap:7px;width:100%;min-width:0;
-  font-size:11px;line-height:1.35;color:var(--ink-3)}
-.tlog__label{font-weight:600;color:var(--ink-2);white-space:nowrap}
-.tlog__state{font-size:10px;color:var(--g6);white-space:nowrap}
-.tlog__car{margin-left:auto;flex:none;font-style:normal;font-size:9px;color:var(--g5);
-  transition:transform .18s ease}
-.tlog.is-open .tlog__car{transform:rotate(180deg)}
-.tlog__body{
-  display:none;margin:2px 0 3px;padding:4px 0 5px 9px;
-  max-width:100%;min-width:0;border-left:1px solid var(--line-2);
-  font-size:11.5px;line-height:1.55;color:var(--g6);
-  white-space:normal;overflow-wrap:anywhere;word-break:break-word;
+.activity-row{
+  display:flex;align-items:center;gap:7px;min-width:0;min-height:18px;
+  font-size:10.8px;line-height:1.35;color:var(--ink-3)
 }
-.tlog.is-open .tlog__body{display:flex;flex-direction:column;gap:7px}
-.tlog__entry{display:grid;grid-template-columns:34px minmax(0,1fr);gap:7px;align-items:start}
-.tlog__kind{font-size:10px;color:var(--g5);white-space:nowrap}
-.tlog__text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.activity-dot{
+  flex:none;width:5px;height:5px;border-radius:50%;background:var(--g5)
+}
+.activity-stream:not(.is-done) .activity-row:last-child .activity-dot{
+  animation:blink 1.2s infinite
+}
+.activity-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.activity-count{flex:none;font-size:9.5px;color:var(--g6)}
+.activity-row--more{color:var(--g6)}
+.activity-stream.is-done .activity-dot{opacity:.7}
 
 .liveanswer{
   max-width:100%;min-width:0;font-size:13px;color:var(--ink);line-height:1.6;
@@ -633,7 +637,14 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 /* 气泡字号与输入框一致（13px）：之前 13.5px 比输入框还大，视觉上头重脚轻 */
 .bubble{
   background:var(--g2);border-radius:14px;padding:8px 12px;
-  font-size:13px;line-height:1.5;max-width:80%;color:var(--ink);
+  font-size:13px;line-height:1.5;max-width:80%;min-width:0;box-sizing:border-box;color:var(--ink);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word
+}
+.bubble code,.bubble a,.msg__text code,.msg__text a{
+  max-width:100%;overflow-wrap:anywhere;word-break:break-all
+}
+.bubble pre,.msg__text pre{
+  max-width:100%;overflow-x:auto;overflow-y:hidden;white-space:pre;word-break:normal
 }
 .msg__meta{font-size:10px;color:var(--ink-3);margin-top:4px}
 .msg__meta-in{color:var(--ink-3)}

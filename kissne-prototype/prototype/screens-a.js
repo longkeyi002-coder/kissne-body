@@ -544,6 +544,27 @@
     return text || String(fallback || '');
   }
 
+  function toolActivityLabel(value) {
+    var text = cleanActivityText(value, '').toLowerCase();
+    if (!text) return '使用工具';
+    if (/\b(git|github|commit|branch|pull request|pr\b)/.test(text)) return '检查 Git';
+    if (/\b(find|grep|rg|ripgrep|search|locate)\b/.test(text)) return '搜索文件';
+    if (/\b(cat|head|tail|sed|read|open|fetch_file)\b/.test(text)) return '读取代码';
+    if (/\b(pytest|test|tests|gradle|lint|check)\b/.test(text)) return '运行检查';
+    if (/\b(write|edit|patch|update_file|create_file|replace)\b/.test(text)) return '修改文件';
+    if (/\b(web|browser|curl|http|https|fetch)\b/.test(text)) return '访问网络';
+    if (/\b(terminal|shell|bash|sh|python|node|npm|pnpm|yarn)\b/.test(text)) return '运行命令';
+    return '使用工具';
+  }
+
+  function looksLikeToolTranscript(value) {
+    var text = String(value == null ? '' : value).trim();
+    return /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
+      || /^(terminal|tool)\s*[:：]/i.test(text)
+      || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
+      || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text);
+  }
+
   var CHAT_LOG = [];
   /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
      are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
@@ -554,7 +575,7 @@
   var CHAT_OUTBOX_UPDATED_AT = 0;
   var CHAT_USER_INPUT_AT = 0;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
-  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v1';
+  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v2';
   var TURN_ACTIVITY = Object.create(null);
 
   function loadTurnActivity() {
@@ -565,9 +586,15 @@
       Object.keys(parsed).slice(-120).forEach(function (id) {
         var row = parsed[id];
         if (!row || typeof row !== 'object') return;
+        var tools = [];
+        (Array.isArray(row.tools) ? row.tools : []).forEach(function (x) {
+          var label = typeof x === 'string' ? toolActivityLabel(x) : String(x && x.label || '');
+          if (label && tools.indexOf(label) < 0) tools.push(label);
+        });
         TURN_ACTIVITY[id] = {
-          reasoning: Array.isArray(row.reasoning) ? row.reasoning.filter(function (x) { return typeof x === 'string' && x; }).slice(-40) : [],
-          tools: Array.isArray(row.tools) ? row.tools.filter(function (x) { return typeof x === 'string' && x; }).slice(-40) : [],
+          reasoning: Array.isArray(row.reasoning) && row.reasoning.length ? ['思考'] : [],
+          tools: tools.slice(-12),
+          counts: row.counts && typeof row.counts === 'object' ? row.counts : {},
           done: !!row.done,
           updatedAt: Number(row.updatedAt) || 0
         };
@@ -589,56 +616,60 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: [], tools: [], done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { reasoning: [], tools: [], counts: {}, done: false, updatedAt: Date.now() };
     }
+    if (!TURN_ACTIVITY[id].counts) TURN_ACTIVITY[id].counts = {};
     return TURN_ACTIVITY[id];
   }
   function appendActivity(turnId, kind, value) {
-    var text = cleanActivityText(value, '');
-    if (!text) return false;
     var state = activityForTurn(turnId);
-    var bucket = kind === 'reasoning' ? state.reasoning : state.tools;
-    if (bucket.length && bucket[bucket.length - 1] === text) return false;
-    bucket.push(text);
-    if (bucket.length > 40) bucket.splice(0, bucket.length - 40);
+    if (kind === 'reasoning') {
+      if (!state.reasoning.length) state.reasoning.push('思考');
+      state.updatedAt = Date.now();
+      persistTurnActivity();
+      return true;
+    }
+    var label = toolActivityLabel(value);
+    if (!label) return false;
+    var count = Number(state.counts[label] || 0) + 1;
+    state.counts[label] = count;
+    if (state.tools.indexOf(label) < 0) {
+      state.tools.push(label);
+      if (state.tools.length > 12) state.tools.splice(0, state.tools.length - 12);
+    }
     state.updatedAt = Date.now();
     persistTurnActivity();
     return true;
   }
-  function activitySummary(state, closed) {
-    var hasReasoning = !!state.reasoning.length;
-    var hasTools = !!state.tools.length;
-    if (hasReasoning && hasTools) return closed ? '思考与工具调用' : '思考与工具调用中';
-    if (hasReasoning) return closed ? '思考过程' : '思考中';
-    if (hasTools) return closed ? '工具调用' : '工具调用中';
-    return '';
-  }
-  function activityBody(state) {
-    var html = '';
-    state.reasoning.forEach(function (text) {
-      html += '<div class="tlog__entry"><span class="tlog__kind">思考</span>'
-        + '<span class="tlog__text">' + esc(text) + '</span></div>';
+  function activityRows(state, closed) {
+    var rows = [];
+    if (state.reasoning && state.reasoning.length) {
+      rows.push('<div class="activity-row activity-row--reasoning"><span class="activity-dot"></span>'
+        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span></div>');
+    }
+    (state.tools || []).forEach(function (label) {
+      var count = Number(state.counts && state.counts[label] || 1);
+      rows.push('<div class="activity-row"><span class="activity-dot"></span>'
+        + '<span class="activity-label">' + esc(label) + '</span>'
+        + (count > 1 ? '<span class="activity-count">×' + count + '</span>' : '') + '</div>');
     });
-    state.tools.forEach(function (text) {
-      html += '<div class="tlog__entry"><span class="tlog__kind">工具</span>'
-        + '<span class="tlog__text">' + esc(text) + '</span></div>';
-    });
-    return html;
+    var maxRows = 4;
+    if (rows.length > maxRows) {
+      var hidden = rows.length - maxRows + 1;
+      rows = rows.slice(rows.length - (maxRows - 1));
+      rows.unshift('<div class="activity-row activity-row--more"><span class="activity-dot"></span>'
+        + '<span class="activity-label">另外 ' + hidden + ' 个步骤</span></div>');
+    }
+    return rows.join('');
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
     var state = activityForTurn(id);
     var closed = done === true || state.done === true;
-    var summary = activitySummary(state, closed);
-    if (!summary) return '';
-    return '<div class="activity-history" data-activity-turn="' + esc(id) + '">'
-      + '<div class="tlog tlog--activity' + (closed ? '' : ' is-open') + '" data-tlog-kind="activity">'
-      + '<button type="button" class="tlog__row" aria-expanded="' + (closed ? 'false' : 'true') + '">'
-      + '<span class="tlog__rowmeta"><span class="tlog__label">' + esc(summary) + '</span>'
-      + '<span class="tlog__state" data-tlog-state>' + (closed ? '已折叠' : '展开') + '</span>'
-      + '<i class="tlog__car">⌄</i></span></button>'
-      + '<div class="tlog__body" data-tlog-body>' + activityBody(state) + '</div>'
-      + '</div></div>';
+    var rows = activityRows(state, closed);
+    if (!rows) return '';
+    return '<div class="activity-stream' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
+      + rows + '</div>';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
@@ -706,11 +737,44 @@
     var d = new Date();
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
   }
+  function chatDayKey(raw) {
+    var d;
+    if (raw === undefined || raw === null || raw === '') d = new Date();
+    else if (typeof raw === 'number') d = new Date(raw < 100000000000 ? raw * 1000 : raw);
+    else d = new Date(raw);
+    if (isNaN(d.getTime())) d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  function chatDayLabel(key) {
+    var today = chatDayKey(Date.now());
+    var yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    var yesterday = chatDayKey(yesterdayDate.getTime());
+    if (key === today) return '今天';
+    if (key === yesterday) return '昨天';
+    var bits = String(key || '').split('-');
+    return bits.length === 3 ? bits[1] + '/' + bits[2] : key;
+  }
+  var CHAT_DIVIDER_PATTERNS = [
+    '₊⁺ ♡₊⁺',
+    '°. ⑅♡⑅.°',
+    '𓂃𓈒𓐍 *ﾟ.',
+    'ଘ*⑅┈⋆°˖┈⑅*ଓ',
+    '✩₊ ·̩͙. ᘏ▸◂ᘏ .·̩͙ ₊ ✩'
+  ];
+  function chatDivider(day, index) {
+    var pattern = CHAT_DIVIDER_PATTERNS[Math.abs(Number(index) || 0) % CHAT_DIVIDER_PATTERNS.length];
+    return '<div class="chatdivider" aria-label="' + esc(chatDayLabel(day)) + '">'
+      + '<span class="chatdivider__orn">' + esc(pattern) + '</span>'
+      + '<span class="chatdivider__label">' + esc(chatDayLabel(day)) + '</span>'
+      + '<span class="chatdivider__orn">' + esc(pattern) + '</span></div>';
+  }
   function sysMsg(html, time) {
     return '<div class="msg msg--sys"><div class="msg__sysline">' + html + '</div>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
   function pushLog(m) {
+    if (m && !m.day) m.day = chatDayKey(Date.now());
     CHAT_LOG.push(m);
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
@@ -740,11 +804,16 @@
      模块级，删除与清空都是真的生效（只在本会话内）。 */
   var SEARCH_LOG = [];
   function logRender() {
-    return CHAT_LOG.map(function (m) {
-      if (m.who === 'sys') return sysMsg(m.html, m.time);
-      return m.who === 'ai'
-        ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
-        : meMsg(m.html, m.meta || '', m.time);
+    var lastDay = '';
+    return CHAT_LOG.map(function (m, index) {
+      var day = m.day || chatDayKey(Date.now());
+      var divider = day !== lastDay ? chatDivider(day, index) : '';
+      lastDay = day;
+      var row = m.who === 'sys' ? sysMsg(m.html, m.time)
+        : (m.who === 'ai'
+          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
+          : meMsg(m.html, m.meta || '', m.time));
+      return divider + row;
     }).join('');
   }
 
@@ -1340,7 +1409,8 @@
             who: role === 'user' ? 'me' : 'ai',
             html: chatHtmlFromWire(rawText),
             activity: activity,
-            time: historyClock(item.created_at)
+            time: historyClock(item.created_at),
+            day: chatDayKey(item.created_at)
           });
         });
         clientSystem.forEach(function (m) {
@@ -1510,8 +1580,18 @@
 
         var el = liveEnsure(turnId);
         if (type === 'delta') {
+          var deltaText = String(event.text || '');
+          if (looksLikeToolTranscript(deltaText)) {
+            livePresence(el, false);
+            addActivity(el, 'tool', turnId, deltaText);
+            liveAvatar(el, 'work');
+            liveCurrentTurn = turnId || liveCurrentTurn;
+            if (turnId) livePendingTurns[turnId] = true;
+            liveSetCancel(!!liveCurrentTurn);
+            return;
+          }
           livePresence(el, false);
-          liveText(el, event.text || '', true);
+          liveText(el, deltaText, true);
           liveAvatar(el, 'talk');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
@@ -1526,7 +1606,7 @@
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
-            CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow() });
+            CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow(), day: chatDayKey(Date.now()) });
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -1958,7 +2038,6 @@
           }
         }
       }
-      list.addEventListener('click', onTlogTap);
       list.addEventListener('click', onApprovalTap);
       paintPill();
 
@@ -2104,7 +2183,6 @@
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
-        list.removeEventListener('click', onTlogTap);
         list.removeEventListener('click', onApprovalTap);
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
