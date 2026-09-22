@@ -514,10 +514,13 @@
   }
 
   var CHAT_LOG = [];
-  /* Human-style composer: taps create visible user bubbles immediately; transport dispatch stays
-     turn-ordered so an older server configured for busy=interrupt cannot cut off the answer above it. */
+  /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
+     are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
+     answering stay buffered and become one follow-up turn when that reply finishes. */
   var CHAT_OUTBOX = [];
   var CHAT_OUTBOX_BUSY = false;
+  var CHAT_OUTBOX_RETRY = null;
+  var CHAT_OUTBOX_UPDATED_AT = 0;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
   var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v1';
   var TURN_ACTIVITY = Object.create(null);
@@ -985,6 +988,7 @@
       var livePendingTurns = Object.create(null);
       var liveSendInFlight = 0;
       var liveBootstrapTimer = null;
+      var liveOutboxTimer = null;
       var liveApprovals = Object.create(null);
       var bootstrapStatusEl = null;
       var sessionStatus = root.querySelector('[data-session-status]');
@@ -1437,7 +1441,7 @@
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-          setTimeout(drainOutbox, 80);
+          scheduleOutboxDrain();
         } else if (type === 'cancelled') {
           setSessionStatus('');
           finishActivities(el, turnId);
@@ -1445,7 +1449,7 @@
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-          setTimeout(drainOutbox, 80);
+          scheduleOutboxDrain();
         }
       }
       function scheduleLivePoll(ms) {
@@ -1526,7 +1530,7 @@
               paintActivity(pendingEl, restoredPendingTurn, false);
             }
           }
-          drainOutbox();
+          scheduleOutboxDrain();
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) {
@@ -1595,27 +1599,53 @@
         }
       }
 
+      var OUTBOX_BATCH_DELAY_MS = 900;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
         if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-        return 'android-web-' + r;
+        return 'android-web-batch-' + r;
       }
-      function queueOutboundText(text, messageId) {
+      function scheduleOutboxDrain() {
+        clearTimeout(liveOutboxTimer);
+        if (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) return;
+        var elapsed = Date.now() - CHAT_OUTBOX_UPDATED_AT;
+        var delay = Math.max(0, OUTBOX_BATCH_DELAY_MS - elapsed);
+        liveOutboxTimer = setTimeout(drainOutbox, delay);
+      }
+      function queueOutboundText(text) {
         var value = String(text || '').trim();
         if (!value) return;
-        CHAT_OUTBOX.push({ text: value, messageId: messageId || nextMessageId() });
-        drainOutbox();
+        CHAT_OUTBOX.push({ text: value });
+        CHAT_OUTBOX_UPDATED_AT = Date.now();
+        scheduleOutboxDrain();
       }
       async function drainOutbox() {
-        if (CHAT_OUTBOX_BUSY || !CHAT_OUTBOX.length || !live || liveStopped) return;
+        clearTimeout(liveOutboxTimer);
+        if (CHAT_OUTBOX_BUSY || (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) || !live || liveStopped) return;
         if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) return;
-        var item = CHAT_OUTBOX[0];
+
+        if (!CHAT_OUTBOX_RETRY) {
+          var elapsed = Date.now() - CHAT_OUTBOX_UPDATED_AT;
+          if (elapsed < OUTBOX_BATCH_DELAY_MS) {
+            scheduleOutboxDrain();
+            return;
+          }
+          var count = CHAT_OUTBOX.length;
+          CHAT_OUTBOX_RETRY = {
+            count: count,
+            text: CHAT_OUTBOX.slice(0, count).map(function (item) { return item.text; }).join('\n'),
+            messageId: nextMessageId()
+          };
+        }
+
+        var batch = CHAT_OUTBOX_RETRY;
         CHAT_OUTBOX_BUSY = true;
         liveSendInFlight += 1;
         try {
-          var accepted = await T.sendText(item.text, item.messageId);
-          CHAT_OUTBOX.shift();
+          var accepted = await T.sendText(batch.text, batch.messageId);
+          CHAT_OUTBOX.splice(0, batch.count);
+          CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
           if (acceptedTurn) {
             livePendingTurns[acceptedTurn] = true;
@@ -1627,18 +1657,18 @@
           setSessionStatus('消息暂未送达，连接恢复后会继续发送。');
           if (err && err.status === 401) {
             live = false;
-            if (await recoverLiveAuth()) {
-              setSessionStatus('');
-            }
+            if (await recoverLiveAuth()) setSessionStatus('');
           }
         } finally {
           liveSendInFlight = Math.max(0, liveSendInFlight - 1);
           CHAT_OUTBOX_BUSY = false;
         }
-        /* Only recurse when the server accepted no active turn (defensive for legacy responses).
-           Normally acceptedTurn blocks here until its completed/cancelled event calls drainOutbox(). */
-        if (live && !liveCurrentTurn && !Object.keys(livePendingTurns).length && CHAT_OUTBOX.length) {
-          setTimeout(drainOutbox, 0);
+
+        /* New bubbles typed after this batch started remain in CHAT_OUTBOX and are grouped separately.
+           On failure CHAT_OUTBOX_RETRY preserves the exact same payload + id for idempotent retry. */
+        if (live && !liveCurrentTurn && !Object.keys(livePendingTurns).length
+            && (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY)) {
+          scheduleOutboxDrain();
         }
       }
       async function push() {
@@ -1853,7 +1883,8 @@
           setSessionDrawer(false);
           return;
         }
-        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length || CHAT_OUTBOX.length) {
+        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length
+            || CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY) {
           setSessionStatus('当前消息或回复尚未结束，请先完成或停止后再切换会话。');
           setSessionDrawer(false);
           return;
@@ -1946,6 +1977,7 @@
         if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
         clearTimeout(livePollTimer);
+        clearTimeout(liveOutboxTimer);
         /* 演出用的一串定时器：切页/重渲染时必须全清，
            否则会在已经销毁的 DOM 上继续改东西 */
         for (var sq = 0; sq < seqTs.length; sq++) clearTimeout(seqTs[sq]);
