@@ -15,17 +15,7 @@
   var $outList = document.getElementById('outList');
 
 
-  /* ---------------- 冷启动开屏 ----------------
-     冷启动（= 本次页面加载）才播放开屏动画，播完自动进下一页。
-     在应用内切回 #/welcome 不会重播。 */
-  var SPLASH_SESSION_KEY = 'kissne.splash.consumed';
-  var COLD = true;
-  try { COLD = sessionStorage.getItem(SPLASH_SESSION_KEY) !== '1'; } catch (e) {}
-  var splashTimer = null;
-  var SPLASH_MS = 9000;          /* 动画播放完成后的兜底计时 */
-  function splashNext() {
-    return '#/home';
-  }
+  /* ---------------- 会话索引 ---------------- */
   window.KissneSessionIndex = window.KissneSessionIndex || {
     sessions: [], raw: null, loaded: false, fetchedAt: 0, error: ''
   };
@@ -99,27 +89,9 @@
     return loadRemoteSessionsAtStartup(window.KissneTransport);
   };
 
-  function finishSplash() {
-    if (!COLD) return;
-    COLD = false;
-    try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
-    clearTimeout(splashTimer);
-
-    /* Startup must never wait for transport. The user enters Home immediately;
-       authentication, session discovery and recovery continue in the background. */
-    location.replace(splashNext());
-
-    var T = window.KissneTransport;
-    if (T && typeof T.sessions === 'function') {
-      loadRemoteSessionsAtStartup(T).catch(function () {});
-    } else if (T && typeof T.ensureToken === 'function') {
-      T.ensureToken(false).catch(function () {});
-    }
-  }
-
   /* ---------------- 路由解析 ---------------- */
   function parseHash() {
-    var raw = (location.hash || '').replace(/^#/, '') || '/welcome';
+    var raw = (location.hash || '').replace(/^#/, '') || '/home';
     var i = raw.indexOf('?');
     return {
       path: i < 0 ? raw : raw.slice(0, i),
@@ -136,19 +108,6 @@
 
   function nav(to) {
     if (!to) return;
-    if (!COLD && String(to).indexOf('#/welcome') === 0) {
-      to = '#/home';
-    }
-    if (COLD && String(to).indexOf('#/welcome') !== 0) {
-      COLD = false;
-      clearTimeout(splashTimer);
-    }
-    /* Once anything leaves the splash, cancel every pending splash timer/event
-       before changing hash. Connection/home/chat can never be pulled back. */
-    if (COLD && String(to).indexOf('#/welcome') !== 0) {
-      COLD = false;
-      clearTimeout(splashTimer);
-    }
     if (location.hash === to) { render(); return; }
     location.hash = to;
   }
@@ -161,13 +120,6 @@
     p.set('state', key);
     location.hash = '#' + cur.path + '?' + p.toString();
   }
-
-  /* 成品开屏自然结束后立即进入正确落点；9s timeout 只作解码失败兜底。 */
-  document.addEventListener('kissne:splash-end', function () {
-    var cur = parseHash();
-    if (!COLD || cur.path !== '/welcome' || cur.params.get('state') !== 'animate') return;
-    finishSplash();
-  });
 
   /* ---------------- 手机外壳 ---------------- */
   function statusbar() {
@@ -182,9 +134,8 @@
   function phone(screen, state, interactive, params) {
     /* params 透传给页面，供「下拉里选中的值」这类非 state 参数使用 */
     var ctx = { state: state, nav: nav, params: params || null };
-    /* 全局底栏：每个页面都显示，所以在外壳里统一挂载。
-       只有开屏页（启动画面）不挂 —— 全屏品牌动画上压一条导航条会把它弄脏。 */
-    var showTab = screen.id !== 'welcome';
+    /* 全局底栏由外壳统一挂载。 */
+    var showTab = true;
     /* 流体云（活动胶囊）：通话 / 屏幕共享在后台继续时，顶部留一条可点回来的提示。
        和底栏一样挂在**外壳层**，所以切任何页面都在。由页面层提供内容（K.activityPill）。 */
     var pill = (interactive !== false && K.activityPill) ? K.activityPill() : '';
@@ -258,15 +209,6 @@
   /* ---------------- 主渲染 ---------------- */
   function render() {
     var current = parseHash();
-    if (!COLD && current.path === '/welcome') {
-      location.replace('#/home');
-      return;
-    }
-    if (COLD && current.path !== '/welcome') {
-      COLD = false;
-      try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
-      clearTimeout(splashTimer);
-    }
     var isOverview = current.path === '/overview';
     var screen = findScreen(current.path);
 
@@ -293,11 +235,6 @@
       renderMeta(screen);
       runMount(screen, $stageBody.querySelector('.phone'), { state: state, params: current.params });
 
-      /* 冷启动：开屏动画播完自动进下一页；此后不再重播 */
-      clearTimeout(splashTimer);
-      if (screen.id === 'welcome' && state === 'animate' && COLD) {
-        splashTimer = setTimeout(finishSplash, SPLASH_MS);
-      }
     }
     renderRouteList(current);
   }
@@ -328,10 +265,7 @@
       nativeTap();
       var a = actEl.getAttribute('data-action');
       var cur = parseHash();
-      if (a === 'splash-skip') {
-        finishSplash();
-      }
-      else if (a === 'check-update') {
+      if (a === 'check-update') {
         try {
           if (window.KissneNativeTransport && typeof window.KissneNativeTransport.checkForUpdates === 'function') {
             window.KissneNativeTransport.checkForUpdates();
@@ -387,10 +321,19 @@
   if (new URLSearchParams(location.search).get('shot')) {
     document.body.classList.add('is-shot');
   }
-  /* 冷启动走开屏动画，其余情况直接落到开屏页的定格态 */
   if (!location.hash || location.hash === '#') {
-    location.hash = COLD ? '#/welcome?state=animate' : '#/welcome';
+    location.hash = '#/home';
   }
   render();
+
+  /* Authentication and session discovery are background concerns. */
+  (function startBackgroundServices() {
+    var T = window.KissneTransport;
+    if (T && typeof T.sessions === 'function') {
+      loadRemoteSessionsAtStartup(T).catch(function () {});
+    } else if (T && typeof T.ensureToken === 'function') {
+      T.ensureToken(false).catch(function () {});
+    }
+  })();
 
 })();
