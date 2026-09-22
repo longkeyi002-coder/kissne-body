@@ -60,6 +60,7 @@ import json
 import re
 import logging
 import secrets
+import shlex
 import sys
 import time
 from collections import deque
@@ -116,6 +117,8 @@ MESSAGES_PATH = "/messages"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
+MODEL_OPTIONS_PATH = "/model-options"
+SET_MODEL_PATH = "/set-model"
 
 #: How many history messages a fresh app launch may ask for (§0.3.16: bootstrap returns a BOUNDED tail).
 DEFAULT_HISTORY_CAP = 50
@@ -309,6 +312,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
+        app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
+        app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
         # is this platform's native client, so that is what handler factories receive.
@@ -1021,6 +1026,143 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "events": events,
             "next_cursor": next_cursor,
             "has_more": len(events) >= limit,
+        })
+
+    # -- model controls ---------------------------------------------------------------------------
+
+    def _live_model_selection(self, installation: str) -> Tuple[str, str]:
+        """Best-effort current (model, provider) for this joined Runtime Conversation."""
+        entry = self.bound_conversation(installation)
+        model = str(getattr(entry, "model", "") or "") if entry is not None else ""
+        provider = str(getattr(entry, "provider", "") or "") if entry is not None else ""
+
+        runner = getattr(self, "gateway_runner", None)
+        overrides = getattr(runner, "_session_model_overrides", {}) or {}
+        keys = [self.mobile_session_key(installation)]
+        identity = self._conversation_identity(installation)
+        canonical = str((identity or {}).get("session_key") or "")
+        if canonical and canonical not in keys:
+            keys.append(canonical)
+        for key in keys:
+            override = overrides.get(key)
+            if not isinstance(override, dict):
+                continue
+            model = str(override.get("model") or model or "")
+            provider = str(override.get("provider") or provider or "")
+            if model or provider:
+                break
+        return model, provider
+
+    async def _handle_model_options(self, request: web.Request) -> web.Response:
+        """Same provider/model inventory as the Hermes Dashboard picker, under the device's profile."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        if self.bound_conversation(installation) is None:
+            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+
+        source = self.source_for_installation(installation)
+        profile = str(getattr(source, "profile", "") or getattr(self, "_owner_profile", "") or "")
+        current_model, current_provider = self._live_model_selection(installation)
+
+        def _build() -> Dict[str, Any]:
+            from contextlib import nullcontext
+            from agent.reasoning_effort import EFFORT_LADDER
+            from hermes_cli.inventory import build_model_options_payload, load_picker_context
+
+            scope = nullcontext()
+            if profile:
+                try:
+                    from hermes_cli.web_server_profiles import _config_profile_scope
+                    scope = _config_profile_scope(profile)
+                except Exception:
+                    logger.debug("[kissne_mobile] profile scope unavailable for model options", exc_info=True)
+            with scope:
+                ctx = load_picker_context().with_overrides(
+                    current_model=current_model or None,
+                    current_provider=current_provider or None,
+                )
+                payload = build_model_options_payload(ctx)
+            payload["efforts"] = list(EFFORT_LADDER)
+            if current_model:
+                payload["model"] = current_model
+            if current_provider:
+                payload["provider"] = current_provider
+            return payload
+
+        try:
+            payload = await asyncio.to_thread(_build)
+        except Exception:
+            logger.exception("[kissne_mobile] failed to build Dashboard model options")
+            return _error_response("model_options_failed", 503)
+        return _json_response(payload)
+
+    async def _handle_set_model(self, request: web.Request) -> web.Response:
+        """Apply the picker choice through the Gateway's canonical /model and /reasoning handlers."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        if self.bound_conversation(installation) is None:
+            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        model = str(body.get("model") or "").strip()
+        provider = str(body.get("provider") or "").strip()
+        effort = str(body.get("effort") or "").strip()
+        if not model and not effort:
+            return _error_response("model_or_effort_required", 400)
+        if model and not provider:
+            return _error_response("provider_required_with_model", 400)
+
+        runner = getattr(self, "gateway_runner", None)
+        if runner is None:
+            return _error_response("runtime_control_unavailable", 503)
+        source = self.source_for_installation(installation)
+
+        try:
+            model_reply = ""
+            if model:
+                event = MessageEvent(
+                    text=f"/model {shlex.quote(model)} --provider {shlex.quote(provider)} --session",
+                    message_type=MessageType.TEXT,
+                    source=source,
+                    raw_message={"internal": "kissne_mobile_model_control"},
+                    message_id=f"kbm_control_{secrets.token_hex(8)}",
+                    user_id=installation,
+                )
+                model_reply = str(await runner._handle_model_command(event) or "")
+                if model_reply.startswith("❌"):
+                    return _json_response({"ok": False, "error": "model_switch_failed", "detail": model_reply}, 409)
+                if model_reply.startswith("⚠"):
+                    return _json_response({"ok": False, "error": "model_confirmation_required", "detail": model_reply}, 409)
+
+            reasoning_reply = ""
+            if effort:
+                event = MessageEvent(
+                    text=f"/reasoning {shlex.quote(effort)}",
+                    message_type=MessageType.TEXT,
+                    source=source,
+                    raw_message={"internal": "kissne_mobile_reasoning_control"},
+                    message_id=f"kbm_control_{secrets.token_hex(8)}",
+                    user_id=installation,
+                )
+                reasoning_reply = str(await runner._handle_reasoning_command(event) or "")
+                if reasoning_reply.startswith("❌"):
+                    return _json_response({"ok": False, "error": "reasoning_switch_failed", "detail": reasoning_reply}, 409)
+        except Exception:
+            logger.exception("[kissne_mobile] model control failed")
+            return _error_response("model_control_failed", 503)
+
+        current_model, current_provider = self._live_model_selection(installation)
+        return _json_response({
+            "ok": True,
+            "model": current_model or model,
+            "provider": current_provider or provider,
+            "effort": effort,
+            "model_reply": model_reply,
+            "reasoning_reply": reasoning_reply,
         })
 
     # -- bootstrap / cancel (the app's cold start, and its stop button) -----------------------------
