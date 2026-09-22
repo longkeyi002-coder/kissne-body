@@ -1,6 +1,6 @@
 /* =====================================================================
    Kissne 手机端 UI · screens-a.js
-   页面 01–06：欢迎 / 设备连接 / 连接成功 / 首页 / 聊天 / 小机星
+   页面 01–06：欢迎 / 首页 / 聊天 / 小机星 / 通话 / 表情包
    ===================================================================== */
 (function () {
   'use strict';
@@ -810,12 +810,10 @@
   K.registerScreen({
     no: '05', id: 'chat', name: '人人星', route: '#/chat', tab: 'chat',
     purpose: '核心页面：顶端横排「模型下拉 · 叶青栩 · 思考强度下拉」，两项都可点开下拉切换；下方为消息列表与一条长圆弧输入框。',
-    out: ['#/home', '#/device'],
+    out: ['#/home'],
     states: CHAT_STATES,
     render: function (ctx) {
       var s = ctx.state || 'empty';
-      var offline = s === 'device-offline';
-      var netlost = s === 'network-lost';
       /* 下拉展开态：底下照常显示一段对话，菜单浮在上面 */
       var menu = s === 'provider-menu' ? 'provider'
                : (s === 'model-menu' ? 'model'
@@ -824,8 +822,8 @@
       if (bs === 'empty' && CHAT_LOG.length) bs = 'normal';
       var typing = s === 'keyboard';  /* 打字态：悬浮的输入区整组抬起（不画键盘，那段高度全透明） */
 
-      /* 「我」这一侧的小羊头像换表情：离线/断网=睡着，上一条没发出去=委屈 */
-      MY_AVA = (offline || netlost) ? 'sleep' : (bs === 'failed' ? 'sad' : 'idle');
+      /* 上一条没发出去时用委屈状态；服务恢复由后台负责，不切换聊天页面。 */
+      MY_AVA = bs === 'failed' ? 'sad' : 'idle';
 
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
@@ -897,21 +895,10 @@
         : '';
 
       var topBanner = '';
-      if (offline) {
-        topBanner = '<div class="chatbanner">'
-          + ph('OFFLINE_ILLUSTRATION', { size: 78 })
-          + '<div class="chatbanner__main"><b>设备已离线</b><span>正在等待自动恢复连接。</span></div>'
-          + btn('立即重试', { small: true, kind: 'ghost', action: 'resend' })
-          + '</div>';
-      } else if (netlost) {
-        topBanner = banner({ kind: 'warn', icon: 'wifioff', title: '网络已断开',
-          body: '消息将在网络恢复后重试。', action: { label: '重试', action: 'resend' } });
-      }
 
       /* 底部：一条长圆弧输入框。
          顺序：加号在左；语音紧挨着发送、在发送左边；三者都嵌在框内且背景透明。
          「+」的浮层**挂在输入框内部**，以加号为锚点向上弹（.composer 要 position:relative）。 */
-      var dis = (offline || netlost) ? ' disabled' : '';
       /* 表情面板：**内嵌在聊天页里**（只占两排、横向可滚），不是整屏页面 ——
          点了「表情包」不跳页、不遮住消息。 */
       var panel = (q && q.get('panel')) || '';
@@ -928,25 +915,21 @@
         + '</div>';
       /* 输入栏上方的**磁吸快捷条**：表情包 / 语音通话 / 屏幕共享。
          表情包是**开关**：点开在输入栏上方长出面板，再点收起。 */
-      var quickbar = (offline || netlost) ? '' : '<div class="quickbar">'
+      var quickbar = '<div class="quickbar">'
         + '<button type="button" class="qbtn' + (panel === 'sticker' ? ' is-on' : '') + '"'
         + ' data-sticker-toggle aria-expanded="' + (panel === 'sticker' ? 'true' : 'false') + '">'
         + icon('smile', 13) + '<span>表情包</span></button>'
         + '<button class="qbtn" data-nav="#/call">' + icon('call', 13) + '<span>语音通话</span></button>'
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
         + '</div>';
-      var popLayer = (!offline && !netlost) ? plusPopLayer(origin) : '';
-      var composer = '<div class="composer' + ((offline || netlost) ? ' is-disabled' : '') + '">'
+      var popLayer = plusPopLayer(origin);
+      var composer = '<div class="composer">'
         + popLayer
-        + '<button class="composer__btn"' + dis + ' aria-label="添加"'
-        + ((offline || netlost) ? '' : ' data-plus-toggle')
-        + '>' + icon('plus', 19) + '</button>'
-        + '<input class="composer__input" type="text" aria-label="输入消息"'
-        + ((offline || netlost) ? ' disabled' : '')
-        + ' placeholder="' + (offline ? '设备离线，无法发送' : (netlost ? '网络已断开' : '说点什么…')) + '">'
-        + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入" data-voice-input aria-pressed="false">' + icon('mic', 19) + '</button>'
+        + '<button class="composer__btn" aria-label="添加" data-plus-toggle>' + icon('plus', 19) + '</button>'
+        + '<input class="composer__input" type="text" aria-label="输入消息" placeholder="说点什么…">'
+        + '<button class="composer__btn composer__btn--mic" aria-label="语音输入" data-voice-input aria-pressed="false">' + icon('mic', 19) + '</button>'
         + '<button class="cancelbtn" type="button" aria-label="停止当前回复" data-live-stop hidden>' + icon('close', 17) + '</button>'
-        + '<button class="sendbtn"' + dis + ' aria-label="发送">' + icon('send', 18) + '</button>'
+        + '<button class="sendbtn" aria-label="发送">' + icon('send', 18) + '</button>'
         + '</div>';
 
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
@@ -1291,7 +1274,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!live || !T || typeof T.setModel !== 'function') {
-          appendSystemNotice('请先连接 Kissne，再切换模型或思考强度。');
+          appendSystemNotice('服务正在自动恢复，暂时无法切换模型或思考强度。');
           return;
         }
         var kind = String(el.getAttribute('data-hermes-control') || '');
