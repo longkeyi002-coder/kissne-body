@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=overlays-content">
+<title>Kissne</title>
+<script>
+try {
+  if (new URLSearchParams(location.search).get('native') === '1') {
+    document.documentElement.classList.add('is-native-shell');
+  }
+} catch (e) {}
+</script>
+<!-- 资源带版本号：静态托管/CDN 会缓存裸路径，不发版号会拿到旧文件造成新旧混装。
+     每次改动后把 v= 的值换一个即可。 -->
+<link rel="stylesheet" href="styles.css?v=20260922a">
+</head>
+<body>
+
+<div class="workbench">
+
+  <!-- ============ 侧栏：路由表 / 状态切换 ============ -->
+  <aside class="panel">
+    <div class="panel__head">
+      <div class="panel__title">Kissne · 手机端</div>
+      <div class="panel__sub">浏览器调试面板</div>
+    </div>
+
+    <div class="panel__label">页面路由</div>
+    <nav id="routeList"></nav>
+
+    <div class="panel__label">状态切换</div>
+    <div id="stateList"></div>
+
+    <div class="panel__meta">
+      <div id="screenPurpose">—</div>
+      <div style="margin-top:8px" id="outList"></div>
+    </div>
+
+  </aside>
+
+  <!-- ============ 舞台 ============ -->
+  <main class="stage">
+    <div class="stage__bar">
+      <button class="ghost" data-nav="#/overview">全部页面总览</button>
+      <span class="stage__route" id="routeLabel">#/welcome</span>
+    </div>
+    <div class="stage__body" id="stageBody"></div>
+  </main>
+
+</div>
+
+<!-- 手机上替代侧栏：右边缘拉手 + 抽屉遮罩 -->
+<div class="drawer-scrim" id="drawerScrim"></div>
+<button class="drawer-btn" id="drawerBtn" aria-label="页面与状态">≡</button>
+
+<!-- 依赖缺失兜底：只传了 index.html 时给出明确提示，而不是白屏 -->
+<div id="loadFail" style="display:none;position:fixed;inset:0;z-index:99;background:#fff;
+     padding:32px 24px;font:14px/1.75 -apple-system,BlinkMacSystemFont,'PingFang SC',
+     'Microsoft YaHei',sans-serif;color:#1b1b1f;overflow:auto">
+  <div style="max-width:520px;margin:12vh auto 0">
+    <div style="font-size:18px;font-weight:700;margin-bottom:14px">页面没能完整加载</div>
+    <p style="margin:0 0 14px">这个页面不是单文件，它依赖同目录下的 5 个文件：</p>
+    <p style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px;
+       background:#f4f4f6;border-radius:10px;padding:12px 14px;margin:0 0 16px;line-height:2">
+      index.html<br>styles.css<br>core.js<br>screens-a.js<br>screens-b.js<br>app.js
+    </p>
+    <p style="margin:0 0 14px">
+      如果只把 <b>index.html</b> 单独传到手机（微信 / QQ 发送、文件管理器里只挑了一个），
+      CSS 和 JS 不会跟过去，页面就会变成没有样式的纯文字。
+    </p>
+    <p style="margin:0 0 8px"><b>正确做法：把整个 prototype 文件夹一起传过去，</b>
+      然后在文件管理器里打开里面的 index.html。</p>
+    <p style="margin:0;color:#6c6c75">更省事的办法：让 WorkBuddy 把它发布成一个网址，手机直接点链接就能看。</p>
+  </div>
+</div>
+
+<script>window.addEventListener('load', function () {
+  if (!window.KSN) { document.getElementById('loadFail').style.display = 'block'; }
+});</script>
+
+<script src="core.js?v=20260922a"></script>
+<script src="assets/_manifest.js?v=20260922a"></script>
+<script src="assets/icons/sprite-data.js?v=20260922a"></script>
+<script src="assets.js?v=20260922a"></script>
+<script src="transport.js?v=20260922a"></script>
+<script src="screens-a.js?v=20260922a"></script>
+<script src="screens-b.js?v=20260922a"></script>
+<script src="app.js?v=20260922a"></script>
+</body>
+</html>

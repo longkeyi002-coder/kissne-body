@@ -4,9 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TransportContractTest {
-    @Test fun event_types_are_closed() { assertEquals(setOf("pending", "delta", "completed", "cancelled", "error"), MobileEventType.values().map { it.wireName }.toSet()) }
-    @Test fun retry_keeps_client_message_id() { val first = OutboundMessage("msg-1", "hello"); assertEquals(first.messageId, first.copy().messageId) }
-    @Test fun nullable_wire_values_stay_null() { assertNull(JSONObjectProbe.nullable(null)) }
-}
+    @Test fun admin_routes_keep_mobile_proxy_prefix() {
+        val base = "https://yeqingxu.cyou/mobile/"
+        assertEquals(
+            "https://yeqingxu.cyou/mobile/admin/sessions",
+            resolveMobileRequestUrl(base, "/admin/sessions"),
+        )
+        assertEquals(
+            "https://yeqingxu.cyou/mobile/pair",
+            resolveMobileRequestUrl(base, "/pair"),
+        )
+    }
 
-private object JSONObjectProbe { fun nullable(value: String?): String? = value?.ifBlank { null } }
+    @Test fun interactive_send_is_not_blocked_by_background_reads() {
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("sendText"))
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("selectSession"))
+        assertEquals(BridgeLane.BACKGROUND, bridgeLane("bootstrap"))
+        assertEquals(BridgeLane.BACKGROUND, bridgeLane("poll"))
+        assertEquals(BridgeLane.BACKGROUND, bridgeLane("ack"))
+        assertEquals(BridgeLane.CONTROL, bridgeLane("sessions"))
+        assertEquals(BridgeLane.CONTROL, bridgeLane("modelOptions"))
+    }
+}

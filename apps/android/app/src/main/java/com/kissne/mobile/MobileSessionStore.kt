@@ -19,10 +19,23 @@ class MobileSessionStore(context: Context) {
     val deviceToken: String?
         get() = prefs.getString("device_token", null)
 
+    val cachedSessionId: String?
+        get() = prefs.getString("bootstrap_session_id", null)
+
+    val cachedSessionKey: String?
+        get() = prefs.getString("bootstrap_session_key", null)
+
     var cursor: Long
         get() = prefs.getLong("cursor", 0L)
         set(value) {
             prefs.edit().putLong("cursor", value).apply()
+        }
+
+    var apiBase: String
+        get() = prefs.getString("api_base", null).orEmpty()
+        set(value) {
+            val normalized = value.trim().trimEnd('/')
+            prefs.edit().putString("api_base", normalized).apply()
         }
 
     fun installationId(): String {
@@ -35,10 +48,47 @@ class MobileSessionStore(context: Context) {
     }
 
     fun saveToken(token: String) {
-        prefs.edit().putString("device_token", token).apply()
+        prefs.edit()
+            .putString("device_token", token)
+            .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
+            .apply()
+    }
+
+    fun invalidateToken() {
+        prefs.edit()
+            .remove("device_token")
+            .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
+            .apply()
+    }
+
+    fun saveBootstrapSession(sessionId: String?, sessionKey: String?) {
+        val editor = prefs.edit().putBoolean("connection_ready", true)
+        if (sessionId.isNullOrBlank()) editor.remove("bootstrap_session_id")
+        else editor.putString("bootstrap_session_id", sessionId)
+        if (sessionKey.isNullOrBlank()) editor.remove("bootstrap_session_key")
+        else editor.putString("bootstrap_session_key", sessionKey)
+        editor.apply()
+    }
+
+    fun clearBootstrapSession() {
+        prefs.edit()
+            .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
+            .apply()
     }
 
     fun clearToken() {
-        prefs.edit().remove("device_token").apply()
+        prefs.edit()
+            .remove("device_token")
+            .putBoolean("connection_ready", false)
+            .remove("bootstrap_session_id")
+            .remove("bootstrap_session_key")
+            .putLong("cursor", 0L)
+            .apply()
     }
 }

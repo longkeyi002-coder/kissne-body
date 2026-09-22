@@ -1,0 +1,23 @@
+{
+  "format": "kissne-image-budget-v1",
+  "before": {
+    "files": 94,
+    "bytes": 8676422
+  },
+  "after": {
+    "files": 86,
+    "bytes": 1661982
+  },
+  "converted": 86,
+  "unused_removed": 8,
+  "reference_files_rewritten": 3,
+  "bytes_saved": 7014440,
+  "percent_saved": 80.84,
+  "policies": {
+    "stickers": "WebP q90, <=256px",
+    "avatars": "WebP q90, <=256px",
+    "home_cards": "WebP q86, <=720px",
+    "splash": "WebP q88, dimensions preserved",
+    "fallback": "WebP q88, <=512px"
+  }
+}

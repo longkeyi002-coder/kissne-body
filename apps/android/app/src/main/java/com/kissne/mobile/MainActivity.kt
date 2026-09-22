@@ -1,164 +1,300 @@
 package com.kissne.mobile
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewAssetLoader
+import org.json.JSONObject
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
-    private val requestExecutor = Executors.newSingleThreadExecutor()
-    private val pollExecutor = Executors.newSingleThreadExecutor()
-    private lateinit var store: MobileSessionStore
-    private lateinit var client: MobileTransportClient
-    private lateinit var ui: ChatUi
-    private val polling = AtomicBoolean(false)
-    private val state = ChatState()
+    private lateinit var webView: WebView
+    private lateinit var bridge: PrototypeBridge
+    private lateinit var updateManager: UpdateManager
 
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingVoiceRequestId: String? = null
+
+    private val recordAudioPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val requestId = pendingVoiceRequestId ?: return@registerForActivityResult
+            if (granted) {
+                beginVoiceRecognition(requestId)
+            } else {
+                finishVoiceRequest(
+                    requestId,
+                    false,
+                    JSONObject().put("status", 0).put("error", "microphone_permission_denied"),
+                )
+            }
+        }
+
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = MobileSessionStore(this)
-        client = MobileTransportClient(
-            baseUrl = BuildConfig.MOBILE_BASE_URL,
-            tokenProvider = { store.deviceToken }
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
+
+        val store = MobileSessionStore(this).apply {
+            // Connection settings were removed. Do not keep a stale server URL
+            // from older builds in EncryptedSharedPreferences.
+            apiBase = BuildConfig.MOBILE_BASE_URL
+        }
+        updateManager = UpdateManager(this)
+        val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        webView = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = false
+            settings.textZoom = 100
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.setSupportMultipleWindows(false)
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
+                    assetLoader.shouldInterceptRequest(request.url)
+
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val url = request.url
+                    return url.scheme != "https" || url.host != "appassets.androidplatform.net"
+                }
+            }
+        }
+
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(253, 252, 248))
+            addView(
+                webView,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        setContentView(root)
+
+        /*
+         * Android 15/16 edge-to-edge: consume the system bars on the native root,
+         * not as WebView padding. This makes the WebView viewport itself equal to
+         * the usable screen area, so CSS 100%/100vh cannot render under the real
+         * status bar or gesture navigation region.
+         */
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            /*
+             * Keep the WebView below the real status bar and above the IME.
+             * maxOf() avoids double-counting the gesture/navigation inset when
+             * the keyboard is visible. The child WebView is laid out inside
+             * this padded root, so CSS 100%/flex automatically follows the
+             * visible Android viewport.
+             */
+            view.setPadding(
+                bars.left,
+                bars.top,
+                bars.right,
+                maxOf(bars.bottom, ime.bottom),
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
+
+        bridge = PrototypeBridge(
+            webView = webView,
+            store = store,
+            checkUpdates = { updateManager.checkForUpdates(force = true) },
+            startVoiceInput = { requestId -> startVoiceInput(requestId) },
         )
-        ui = ChatUi(this, ::pair, ::sendMessage, ::cancelTurn)
-        setContentView(ui.root)
+        webView.addJavascriptInterface(bridge, "KissneNativeTransport")
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        clearWebViewCacheAfterUpgrade()
+        webView.loadUrl(
+            "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}#/welcome?state=animate"
+        )
+        webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
 
-        if (store.deviceToken.isNullOrBlank()) {
-            ui.showPairing("需要设备配对")
+    private fun startVoiceInput(requestId: String) {
+        pendingVoiceRequestId?.takeIf { it != requestId }?.let { previous ->
+            finishVoiceRequest(
+                previous,
+                false,
+                JSONObject().put("status", 0).put("error", "voice_input_replaced"),
+            )
+        }
+        pendingVoiceRequestId = requestId
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            beginVoiceRecognition(requestId)
         } else {
-            bootstrap()
+            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    private fun pair() {
-        val code = ui.pairingCodeValue()
-        if (code.isEmpty()) return
+    private fun beginVoiceRecognition(requestId: String) {
+        if (pendingVoiceRequestId != requestId) return
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            finishVoiceRequest(
+                requestId,
+                false,
+                JSONObject().put("status", 0).put("error", "speech_recognition_unavailable"),
+            )
+            return
+        }
 
-        requestExecutor.execute {
-            try {
-                store.saveToken(client.pair(code, store.installationId()))
-                runOnUiThread { bootstrap() }
-            } catch (error: Exception) {
-                runOnUiThread {
-                    ui.showPairing("配对失败：${error.message ?: "未知错误"}")
+        speechRecognizer?.destroy()
+        val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer = recognizer
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onPartialResults(partialResults: Bundle?) = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+            override fun onError(error: Int) {
+                val code = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "speech_audio_error"
+                    SpeechRecognizer.ERROR_CLIENT -> "speech_client_error"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "microphone_permission_denied"
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "speech_network_error"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "speech_no_match"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "speech_recognizer_busy"
+                    SpeechRecognizer.ERROR_SERVER -> "speech_server_error"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "speech_timeout"
+                    else -> "speech_recognition_error"
                 }
+                finishVoiceRequest(
+                    requestId,
+                    false,
+                    JSONObject().put("status", 0).put("error", code),
+                )
             }
+
+            override fun onResults(results: Bundle?) {
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull { it.isNotBlank() }
+                    .orEmpty()
+                if (text.isBlank()) {
+                    finishVoiceRequest(
+                        requestId,
+                        false,
+                        JSONObject().put("status", 0).put("error", "speech_no_match"),
+                    )
+                    return
+                }
+                finishVoiceRequest(
+                    requestId,
+                    true,
+                    JSONObject().put("text", text),
+                )
+            }
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        try {
+            recognizer.startListening(intent)
+        } catch (error: Throwable) {
+            finishVoiceRequest(
+                requestId,
+                false,
+                JSONObject().put("status", 0)
+                    .put("error", error.message ?: "speech_recognition_error"),
+            )
         }
     }
 
-    private fun bootstrap() {
-        state.beginBootstrap()
-        ui.showChat()
-        ui.render(state)
+    private fun finishVoiceRequest(requestId: String, ok: Boolean, payload: JSONObject) {
+        if (pendingVoiceRequestId == requestId) pendingVoiceRequestId = null
+        val recognizer = speechRecognizer
+        speechRecognizer = null
+        recognizer?.destroy()
+        if (::bridge.isInitialized) bridge.resolveNative(requestId, ok, payload)
+    }
 
-        requestExecutor.execute {
-            try {
-                val result = client.bootstrap(store.cursor)
-                if (result.coveredEventSeqs.isNotEmpty()) {
-                    store.cursor = maxOf(store.cursor, result.coveredEventSeqs.max())
-                    client.ack(store.cursor)
-                }
-                state.bootstrapLoaded(result)
-                runOnUiThread {
-                    if (result.bound) {
-                        ui.showChat()
-                        ui.render(state)
-                        startPolling()
-                    } else {
-                        ui.showPairing("未绑定当前 Conversation，请重新配对或等待绑定")
-                        ui.render(state)
-                    }
-                }
-            } catch (error: Exception) {
-                state.failed()
-                runOnUiThread {
-                    ui.showPairing("未连接：${error.message ?: "未知错误"}")
-                    ui.render(state)
-                }
-            }
+    private fun clearWebViewCacheAfterUpgrade() {
+        val prefs = getSharedPreferences("kissne_webview", MODE_PRIVATE)
+        val key = "asset_version_code"
+        val previousVersionCode = prefs.getInt(key, 0)
+        val currentVersionCode = BuildConfig.VERSION_CODE
+
+        if (previousVersionCode != 0 && previousVersionCode != currentVersionCode) {
+            webView.clearCache(true)
+            webView.clearHistory()
+        }
+        if (previousVersionCode != currentVersionCode) {
+            prefs.edit().putInt(key, currentVersionCode).apply()
         }
     }
 
-    private fun sendMessage() {
-        val text = ui.consumeInput()
-        val retrying = state.status == ChatState.Status.ERROR && state.lastOutbound != null
-        if (text.isEmpty() && !retrying) return
-
-        val outbound = state.lastOutbound
-            ?: OutboundMessage("android-${System.currentTimeMillis()}", text)
-        if (!retrying) {
-            state.messages += HistoryMessage("user", outbound.text, outbound.messageId)
-            state.remember(outbound)
-        }
-        state.sent(SendReceipt(outbound.messageId, "", false))
-        ui.render(state)
-
-        requestExecutor.execute {
-            try {
-                state.sent(client.send(outbound.messageId, outbound.text))
-                runOnUiThread { ui.render(state) }
-            } catch (_: Exception) {
-                state.failed()
-                runOnUiThread { ui.render(state) }
-            }
-        }
+    override fun onResume() {
+        super.onResume()
+        if (::updateManager.isInitialized) updateManager.onResume()
     }
 
-    private fun startPolling() {
-        if (!polling.compareAndSet(false, true)) return
-
-        pollExecutor.execute {
-            while (polling.get() && !isFinishing) {
-                try {
-                    val events = client.poll(store.cursor)
-                    for (event in events) {
-                        when (event.type) {
-                            MobileEventType.PENDING -> state.pending(event.turnId)
-                            MobileEventType.DELTA -> state.delta(event.text)
-                            MobileEventType.COMPLETED -> state.completed(event.text)
-                            MobileEventType.CANCELLED -> state.cancelled()
-                            MobileEventType.ERROR -> state.failed()
-                        }
-                        store.cursor = maxOf(store.cursor, event.seq)
-                        runOnUiThread { ui.render(state) }
-                    }
-                    if (events.isNotEmpty()) client.ack(store.cursor)
-                    Thread.sleep(1200)
-                } catch (_: InterruptedException) {
-                    break
-                } catch (_: Exception) {
-                    state.failed()
-                    runOnUiThread { ui.render(state) }
-                    try {
-                        Thread.sleep(2500)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
-                }
-            }
-            polling.set(false)
-        }
-    }
-
-    private fun cancelTurn() {
-        val turnId = state.activeTurnId ?: return
-        requestExecutor.execute {
-            try {
-                client.cancel(turnId)
-                state.cancelled()
-                runOnUiThread { ui.render(state) }
-            } catch (_: Exception) {
-                state.failed()
-                runOnUiThread { ui.render(state) }
-            }
-        }
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     override fun onDestroy() {
-        polling.set(false)
-        requestExecutor.shutdownNow()
-        pollExecutor.shutdownNow()
+        pendingVoiceRequestId = null
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        if (::updateManager.isInitialized) updateManager.close()
+        if (::bridge.isInitialized) bridge.close()
+        if (::webView.isInitialized) {
+            webView.removeJavascriptInterface("KissneNativeTransport")
+            webView.stopLoading()
+            webView.destroy()
+        }
         super.onDestroy()
     }
 }
