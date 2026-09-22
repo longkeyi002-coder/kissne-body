@@ -59,7 +59,17 @@
         }
       });
     }
+    var nativeEventListeners = Object.create(null);
+    function emitNativeEvent(type, payload) {
+      var rows = (nativeEventListeners[String(type || '')] || []).slice();
+      rows.forEach(function (fn) { try { fn(payload || {}); } catch (ignore) {} });
+    }
     window.KissneNativeBridge = {
+      event: function (type, raw) {
+        var payload = {};
+        try { payload = raw ? JSON.parse(raw) : {}; } catch (e) { payload = { raw: raw }; }
+        emitNativeEvent(type, payload);
+      },
       resolve: function (id, ok, raw) {
         var waiter = nativePending[id];
         if (!waiter) return;
@@ -128,6 +138,16 @@
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
       pickAttachment: function (kind) {
         return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000);
+      },
+      onNativeEvent: function (type, fn) {
+        type = String(type || '');
+        if (!type || typeof fn !== 'function') return function () {};
+        (nativeEventListeners[type] || (nativeEventListeners[type] = [])).push(fn);
+        return function () {
+          var rows = nativeEventListeners[type] || [];
+          var i = rows.indexOf(fn);
+          if (i >= 0) rows.splice(i, 1);
+        };
       },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort, provider) {
