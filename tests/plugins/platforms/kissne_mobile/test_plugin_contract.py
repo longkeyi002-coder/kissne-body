@@ -99,3 +99,13 @@ def test_adapter_class_implements_the_base_platform_contract():
         f"adapter is still abstract: {sorted(adapter_cls.__abstractmethods__)}")
     assert callable(getattr(module, "create_adapter", None)) or callable(
         getattr(adapter_cls, "__init__", None)), "adapter must be constructible for registration"
+
+
+def test_mobile_chat_prefers_fifo_followups_without_busy_ack_bubbles():
+    """Rapid human-style messages stay distinct and never interrupt the answer already in progress."""
+    module, error = _adapter_module()
+    assert module is not None, f"kb1-mobile-adapter: {error}"
+    adapter_cls = module.KissneMobileAdapter
+    assert adapter_cls.preferred_busy_input_mode == "queue"
+    assert adapter_cls.preferred_busy_text_mode == "interrupt"
+    assert adapter_cls.busy_ack_enabled is False
