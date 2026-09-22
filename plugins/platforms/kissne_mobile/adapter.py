@@ -53,9 +53,11 @@ Out of scope for this ticket: the Android client itself (``KB1-ANDROID-CHAT``).
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import importlib.util
 import json
+import re
 import logging
 import secrets
 import sys
@@ -118,6 +120,8 @@ HEALTH_PATH = "/health"
 DEFAULT_HISTORY_CAP = 50
 #: How many events one poll may return; the device acks and polls again for the rest.
 DEFAULT_READ_LIMIT = 200
+_ACTIVITY_MARKER_PREFIX = "[[KISSNE_ACTIVITY:"
+_ACTIVITY_MARKER_SUFFIX = "]]"
 #: Pairing throttle. The exposure decision dropped IP allowlisting (mobile networks move), so ``/pair``
 #: is rate limited instead: this many attempts per client address per window, then 429 + Retry-After.
 PAIR_ATTEMPT_LIMIT = 10
@@ -166,6 +170,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Transport only, and only for the throttle: recent pairing attempts per client address. Queued
         # replies are NOT kept in memory — they are rows (see ``device_store``), so a restart loses none.
         self._pair_attempts: Dict[str, Deque[float]] = {}
+        self._draft_text_last: Dict[Tuple[str, int], str] = {}
+        self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -349,10 +355,145 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if store is not None:
             await asyncio.to_thread(store.close)
         self._pair_attempts.clear()
+        self._draft_text_last.clear()
+        self._draft_activity_seen.clear()
         self._mark_disconnected()
         logger.info("[kissne_mobile] disconnected")
 
     # -- outbound ----------------------------------------------------------------------------------
+
+    @staticmethod
+    def _activity_detail(text: str, limit: int = 900) -> str:
+        """Compact detail for the optional tap-to-expand view; redact obvious secrets."""
+        value = str(text or "").strip()
+        value = re.sub(
+            r"(?i)((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s'\"]+",
+            r"\1[hidden]", value)
+        value = re.sub(
+            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s'\"]+",
+            r"\1[hidden]", value)
+        return value if len(value) <= limit else value[: max(0, limit - 1)] + "…"
+
+    @staticmethod
+    def _tool_command(args: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(args, dict):
+            return ""
+        for key in ("command", "cmd", "script", "query", "path", "file_path"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @classmethod
+    def _semantic_activity_label(
+        cls, tool_name: str, args: Optional[Dict[str, Any]], preview: Optional[str],
+    ) -> str:
+        """Describe the user-facing action rather than exposing developer tool chrome."""
+        tool = str(tool_name or "").strip()
+        low_tool = tool.lower()
+        raw = cls._tool_command(args) or str(preview or "")
+        low = raw.lower()
+        if ("sticker" in low or "表情" in raw) and re.search(r"\b(grep|rg|find)\b", low):
+            return "查找表情包发送逻辑"
+        if ("adapter.py" in low or "kissne_mobile" in low) and re.search(
+                r"\b(grep|rg|sed|cat|read|reading)\b", low):
+            return "检查 Mobile Adapter"
+        if re.search(r"\bgit\s+log\b", low):
+            return "检查 Git 历史"
+        if re.search(r"\bgit\s+(status|diff|show)\b", low):
+            return "检查 Git 状态"
+        if re.search(r"\b(pytest|gradle|lint|test)\b", low):
+            return "运行相关检查"
+        file_match = re.search(r"([\w./-]+\.(?:py|js|ts|kt|css|html|md))", raw, re.I)
+        if re.search(r"\b(sed|cat|head|tail|read|reading|open)\b", low) and file_match:
+            return f"读取 {file_match.group(1).rsplit('/', 1)[-1]}"
+        if re.search(r"\b(grep|rg)\b", low):
+            pattern = re.search(
+                r"(?:grep|rg)\s+(?:-[^\s]+\s+)*(?:\"([^\"]+)\"|'([^']+)'|([^\s|]+))",
+                raw, re.I)
+            term = next((part for part in (pattern.groups() if pattern else ()) if part), "")
+            term = re.sub(r"[_*\\]+", "", term).strip()
+            if term and len(term) <= 18:
+                return f"查找「{term}」相关代码"
+            return "查找相关代码"
+        if re.search(r"\bfind\b", low):
+            return "查找相关文件"
+        if low_tool in {"read", "read_file", "fetch_file"} or "read" in low_tool:
+            return f"读取 {file_match.group(1).rsplit('/', 1)[-1]}" if file_match else "读取文件"
+        if any(word in low_tool for word in ("edit", "write", "patch", "update")):
+            return "修改文件"
+        if any(word in low_tool for word in ("search", "grep", "find")):
+            return "查找相关内容"
+        if any(word in low_tool for word in ("github", "git")):
+            return "检查 Git"
+        if low_tool in {"terminal", "shell", "bash"}:
+            return "运行命令"
+        return f"使用 {tool}" if tool else "使用工具"
+
+    @classmethod
+    def _encode_activity_marker(cls, payload: Dict[str, Any]) -> str:
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return f"{_ACTIVITY_MARKER_PREFIX}{encoded}{_ACTIVITY_MARKER_SUFFIX}"
+
+    @staticmethod
+    def _decode_activity_marker(line: str) -> Optional[Dict[str, Any]]:
+        text = str(line or "").strip()
+        if not (text.startswith(_ACTIVITY_MARKER_PREFIX) and text.endswith(_ACTIVITY_MARKER_SUFFIX)):
+            return None
+        token = text[len(_ACTIVITY_MARKER_PREFIX):-len(_ACTIVITY_MARKER_SUFFIX)]
+        try:
+            token += "=" * (-len(token) % 4)
+            value = json.loads(base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8"))
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def format_tool_event(
+        self, event: Any, *, mode: str = "all", preview_max_len: int = 40,
+    ) -> Optional[str]:
+        """Encode a semantic Activity record; send_draft separates it from assistant text."""
+        from gateway.stream_events import ToolCallChunk
+        if not isinstance(event, ToolCallChunk):
+            return None
+        command = self._tool_command(event.args)
+        if command:
+            detail = command
+        elif event.preview:
+            detail = str(event.preview)
+        elif event.args:
+            detail = json.dumps(event.args, ensure_ascii=False, default=str)
+        else:
+            detail = str(event.tool_name or "")
+        payload = {
+            "kind": "tool",
+            "label": self._semantic_activity_label(event.tool_name, event.args, event.preview),
+            "tool": str(event.tool_name or ""),
+            "detail": self._activity_detail(detail),
+            "index": int(event.index or 0),
+        }
+        return self._encode_activity_marker(payload)
+
+    def _split_draft_frame(self, content: str) -> Tuple[str, List[Dict[str, Any]]]:
+        """Separate internal Activity marker lines from the visible cumulative draft."""
+        activities: List[Dict[str, Any]] = []
+        visible: List[str] = []
+        for line in str(content or "").splitlines():
+            activity = self._decode_activity_marker(line)
+            if activity is not None:
+                activities.append(activity)
+            else:
+                visible.append(line)
+        text = "\n".join(visible)
+        if activities:
+            text = re.sub(r"\n*---\s*$", "", text).rstrip()
+        return text, activities
+
+    def _clear_draft_state(self, installation_id: str) -> None:
+        installation = str(installation_id or "")
+        for key in [key for key in self._draft_text_last if key[0] == installation]:
+            self._draft_text_last.pop(key, None)
+            self._draft_activity_seen.pop(key, None)
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
@@ -400,24 +541,55 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue the FINAL reply for the installation as a ``completed`` event."""
-        message_id = await self._queue_event(chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to)
+        """Queue final text; Gateway commentary remains an interim presentation event."""
+        if bool((metadata or {}).get("_interim_send")):
+            message_id = await self._queue_event(
+                chat_id, EVENT_DELTA, content=content, reply_to=reply_to,
+                extra={"presentation": "commentary", "interim": True})
+        else:
+            self._clear_draft_state(chat_id)
+            message_id = await self._queue_event(
+                chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                extra={"presentation": "assistant_text"})
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
 
     async def send_draft(self, chat_id: str, draft_id: int, content: str,
                          metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue one INCREMENTAL slice of a streaming answer as a ``delta`` event.
+        """Separate cumulative assistant text from semantic tool Activity before delivery."""
+        installation = str(chat_id or "").strip()
+        key = (installation, int(draft_id))
+        visible, activities = self._split_draft_frame(content)
+        seen = self._draft_activity_seen.setdefault(key, set())
+        last_message_id: Optional[str] = None
 
-        Deltas are their own event type, so the device renders them as they arrive and closes the turn
-        on the final ``send`` — it never has to guess whether a given text was the last one.
-        """
-        message_id = await self._queue_event(
-            chat_id, EVENT_DELTA, content=content, extra={"draft_id": int(draft_id)})
-        if message_id is None:
-            return SendResult(success=False, error="missing target installation")
-        return SendResult(success=True, message_id=message_id)
+        for activity in activities:
+            identity = (
+                f"{activity.get('index', '')}:"
+                f"{activity.get('tool', '')}:"
+                f"{activity.get('label', '')}"
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            last_message_id = await self._queue_event(
+                installation, EVENT_DELTA, content="",
+                extra={
+                    "draft_id": int(draft_id),
+                    "presentation": "tool_progress",
+                    "activity": activity,
+                })
+
+        if visible.strip() and self._draft_text_last.get(key) != visible:
+            self._draft_text_last[key] = visible
+            last_message_id = await self._queue_event(
+                installation, EVENT_DELTA, content=visible,
+                extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
+
+        if last_message_id is None:
+            return SendResult(success=True, message_id=None)
+        return SendResult(success=True, message_id=last_message_id)
 
     def supports_draft_streaming(self, chat_type: Optional[str] = None,
                                  metadata: Optional[Dict[str, Any]] = None,
@@ -909,6 +1081,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
         if not moved:
             return _error_response("turn_not_cancellable", 409)
+        self._clear_draft_state(installation)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_CANCELLED,
             {"turn_id": turn_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -1017,7 +1190,8 @@ def register(ctx) -> None:
             "polls this Runtime for your text. The app holds a device-scoped token only — it never "
             "sees an API key, a provider key or any Runtime management credential, so never ask it "
             "for one or send one over this channel. When a sticker fits naturally, you may send one "
-            "with the compact marker [表情包：关键词]; the app matches that keyword against the user's "
-            "Kissne sticker library and renders the real sticker. Do not invent a sticker if no match is likely."
+            "with [表情包：关键词]; useful keywords include 开心、哈哈、疑惑、好的、没问题、收到、"
+            "无语、惊讶、挥手、晚安、救命. You may place normal text before or after the marker. "
+            "The app resolves it to the user's real Kissne sticker; do not invent a sticker if no match is likely."
         ),
     )
