@@ -486,7 +486,14 @@
       || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
       || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
-      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text);
+      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text)
+      || /^\s*[🐍]?\s*Running code from\s+hermes_tools_import\b/i.test(text);
+  }
+
+  function looksLikeRuntimeControl(value) {
+    var text = cleanActivityText(value, '').trim();
+    return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
+      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
   }
 
   var CHAT_LOG = [];
@@ -1714,7 +1721,17 @@
              the current assistant turn so Activity -> commentary -> final answer remains
              one visual unit. Structured presentation wins over text-shape heuristics. */
           var commentaryText = String(event.text || '').trim();
-          if (!commentaryText) return;
+          if (!commentaryText || looksLikeRuntimeControl(commentaryText)) return;
+          if (looksLikeToolTranscript(commentaryText)) {
+            var commentaryToolEl = liveEnsure(turnId);
+            livePresence(commentaryToolEl, false);
+            addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
+            liveAvatar(commentaryToolEl, 'work');
+            liveCurrentTurn = turnId || liveCurrentTurn;
+            if (turnId) livePendingTurns[turnId] = true;
+            liveSetCancel(!!liveCurrentTurn);
+            return;
+          }
           var commentaryEl = liveEnsure(turnId);
           livePresence(commentaryEl, false);
           liveText(commentaryEl, commentaryText, true);
@@ -1758,6 +1775,7 @@
         var el = liveEnsure(turnId);
         if (type === 'delta') {
           var deltaText = String(event.text || '');
+          if (looksLikeRuntimeControl(deltaText)) return;
           if (looksLikeToolTranscript(deltaText)) {
             livePresence(el, false);
             addActivity(el, 'tool', turnId, deltaText);
@@ -1777,6 +1795,14 @@
           livePresence(el, false);
           setSessionStatus('');
           var finalText = String(event.text || '');
+          if (looksLikeRuntimeControl(finalText)) {
+            finishActivities(el, turnId);
+            liveText(el, '', false);
+            if (turnId) delete livePendingTurns[turnId];
+            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+            scheduleOutboxDrain();
+            return;
+          }
           if (looksLikeToolTranscript(finalText)) {
             addActivity(el, 'tool', turnId, finalText);
             finishActivities(el, turnId);
