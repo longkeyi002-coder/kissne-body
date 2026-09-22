@@ -37,7 +37,7 @@
       if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       return 'android-web-' + r;
     }
-    function nativeCall(action, payload) {
+    function nativeCall(action, payload, timeoutMs) {
       return new Promise(function (resolve, reject) {
         var id = 'n' + (++nativeSeq);
         var timer = setTimeout(function () {
@@ -45,7 +45,7 @@
           if (!waiter) return;
           delete nativePending[id];
           reject(new NativeApiError(0, { error: 'native_timeout' }, 'native_timeout'));
-        }, 15000);
+        }, Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000);
         nativePending[id] = {
           resolve: function (value) { clearTimeout(timer); resolve(value); },
           reject: function (error) { clearTimeout(timer); reject(error); }
@@ -125,6 +125,7 @@
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
+      voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort) {
         return nativeCall('setModel', {
