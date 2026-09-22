@@ -485,31 +485,62 @@
   }
 
   var CHAT_LOG = [];
-  var CHAT_LOG_STORAGE_KEY = 'kissne.chat.local_log.v1';
+  /* 本地聊天缓存按会话隔离：
+     - CHAT_LOG_SESSION = 内存里的 CHAT_LOG 属于哪个会话（session id，缺省回退 session key）
+     - 会话身份未落定时不读也不写 localStorage —— 宁可不恢复旧缓存，也绝不串会话
+     - 旧的全局 key kissne.chat.local_log.v1 已废弃：永不读取（迁移保护，不向任何会话灌入） */
+  var CHAT_LOG_SESSION = '';
+  function chatLogSessionId() {
+    return String(CURRENT_SESSION_ID || CURRENT_SESSION_KEY || '');
+  }
+  function chatLogStorageKeyFor(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return '';
+    return 'kissne.chat.local_log.v2:' + sid;
+  }
   function persistChatLog() {
     try {
+      var sid = String(CHAT_LOG_SESSION || '');
+      var key = chatLogStorageKeyFor(sid);
+      if (!key) return; /* 未绑定会话时不落盘，避免写进错误会话 */
       var safe = CHAT_LOG.slice(-240).map(function (m) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', messageRef: m.messageRef || '', turnId: m.turnId || '',
-          localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly
+          localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
+          sid: sid
         };
       });
-      localStorage.setItem(CHAT_LOG_STORAGE_KEY, JSON.stringify(safe));
+      localStorage.setItem(key, JSON.stringify(safe));
     } catch (e) {}
   }
-  function loadChatLog() {
+  function loadChatLogFor(sessionId) {
+    var sid = String(sessionId || '');
+    var rows = [];
     try {
-      var raw = localStorage.getItem(CHAT_LOG_STORAGE_KEY);
-      var rows = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(rows)) return;
-      rows.slice(-240).forEach(function (m) {
+      var key = chatLogStorageKeyFor(sid);
+      if (!key) return rows;
+      var raw = localStorage.getItem(key);
+      var parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return rows;
+      parsed.forEach(function (m) {
         if (!m || !/^(me|ai|sys)$/.test(String(m.who || ''))) return;
-        CHAT_LOG.push(m);
+        if (m.sid && String(m.sid) !== sid) return; /* 行必须属于该会话 */
+        rows.push(m);
       });
+      rows = rows.slice(-240);
     } catch (e) {}
+    return rows;
   }
-  loadChatLog();
+  /* 把内存日志绑定到某个会话：先解绑再装入目标会话的缓存。
+     绑定到同一会话是 no-op，不会冲掉刚写进内存的消息。 */
+  function bindChatLogSession(sessionId) {
+    var sid = String(sessionId || '');
+    if (sid === CHAT_LOG_SESSION) return;
+    CHAT_LOG_SESSION = sid;
+    CHAT_LOG.length = 0;
+    loadChatLogFor(sid).forEach(function (m) { CHAT_LOG.push(m); });
+  }
   /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
      are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
      answering stay buffered and become one follow-up turn when that reply finishes. */
@@ -792,6 +823,7 @@
     if (m && !m.day) m.day = chatDayKey(Date.now());
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
+    if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
     CHAT_LOG.push(m);
     persistChatLog();
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
@@ -1376,10 +1408,17 @@
            messages are valid, and stale bootstrap history can otherwise swallow the newest one.
            Local rows that have received a Hermes turn ref are matched by message_ref; rows still
            waiting for acceptance remain unbound and are kept until a later bootstrap can bind them. */
+        /* 只合并当前会话的 local rows：别的会话的 optimistic/unbound 行绝不拼进来 */
+        var boundSid = String(CHAT_LOG_SESSION || '');
+        function belongsToCurrent(m) {
+          return !m || !m.sid || !boundSid || String(m.sid) === boundSid;
+        }
         var previousLocal = CHAT_LOG.filter(function (m) {
-          return m && m.who !== 'sys' && m.localOwned;
+          return m && m.who !== 'sys' && m.localOwned && belongsToCurrent(m);
         });
-        var clientSystem = CHAT_LOG.filter(function (m) { return m && m.who === 'sys' && m.localOnly; });
+        var clientSystem = CHAT_LOG.filter(function (m) {
+          return m && m.who === 'sys' && m.localOnly && belongsToCurrent(m);
+        });
         var localByRef = Object.create(null);
         var unboundLocal = [];
         previousLocal.forEach(function (m) {
@@ -1763,6 +1802,8 @@
           var conversation = boot.conversation || {};
           CURRENT_SESSION_ID = String(conversation.session_id || conversation.id || CURRENT_SESSION_ID || '');
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
+          /* bootstrap 确认会话身份后，才把该会话的本地缓存装进内存（namespace 对齐） */
+          bindChatLogSession(chatLogSessionId());
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
             s.active = sessionIsCurrent(s);
@@ -2034,6 +2075,7 @@
           return;
         }
         var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
+        var sendSession = chatLogSessionId(); /* 以"发起发送时"的会话为准，防 bootstrap/切换时序写错会话 */
         btn.disabled = true;
         setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
         try {
@@ -2044,6 +2086,7 @@
           }
           var html = attachmentMsg(result, kind);
           var turn = String(result.turn_id || '');
+          bindChatLogSession(sendSession); /* 附件回执落回发送时所属的会话 */
           append(meMsg(html, '', clockNow()));
           pushLog({
             who: 'me',
@@ -2285,8 +2328,9 @@
           await T.selectSession(key, id);
           CURRENT_SESSION_ID = '';
           CURRENT_SESSION_KEY = '';
-          CHAT_LOG.length = 0;
-          persistChatLog();
+          /* 解绑旧会话：只清内存，绝不清空后回写旧 key（旧会话缓存必须原样保留）；
+             新会话的缓存等 bootstrap 确认身份后再装入 */
+          bindChatLogSession('');
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
           liveCovered = Object.create(null);
@@ -2299,6 +2343,7 @@
         } catch (err) {
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
+          bindChatLogSession(previousSessionId || previousSessionKey || '');
           paintSessionList();
           setSessionStatus('会话切换失败，请稍后重试。');
         }
