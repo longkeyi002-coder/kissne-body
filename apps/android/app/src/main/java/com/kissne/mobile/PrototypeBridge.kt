@@ -304,6 +304,24 @@ class PrototypeBridge(
         }
     }
 
+    fun notifyAttachmentSelected(
+        requestId: String,
+        kind: String,
+        fileName: String,
+        mimeType: String,
+        size: Long,
+    ) {
+        val payload = JSONObject()
+            .put("request_id", requestId)
+            .put("kind", kind)
+            .put("file_name", fileName)
+            .put("mime_type", mimeType)
+            .put("size", size)
+        val script = "window.KissneNativeBridge && window.KissneNativeBridge.event && window.KissneNativeBridge.event(" +
+            JSONObject.quote("attachment_selected") + "," + JSONObject.quote(payload.toString()) + ");"
+        webView.post { webView.evaluateJavascript(script, null) }
+    }
+
     fun uploadPickedAttachment(
         requestId: String,
         kind: String,
