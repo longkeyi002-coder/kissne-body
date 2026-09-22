@@ -101,6 +101,7 @@ PLATFORM_NAME = "kissne_mobile"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 0  # ephemeral by default: the Android side is told the port it must reach
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
+DEFAULT_MEDIA_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
 
 # This platform has NO external credential, so enablement needs an explicit per-profile opt-in:
@@ -299,7 +300,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return True
         # client_max_size makes aiohttp enforce the cap on every read path, including chunked
         # bodies with no Content-Length.
-        app = web.Application(client_max_size=self._max_body_bytes)
+        app = web.Application(
+            client_max_size=max(self._max_body_bytes, DEFAULT_MEDIA_MAX_BYTES + 1024 * 1024))
         app.router.add_post(PAIRING_PATH, self._handle_pair)
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
@@ -743,6 +745,152 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Digest of an inbound payload — the thing that separates a retry from a rewrite."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _safe_upload_name(name: str) -> str:
+        base = _Path(str(name or "upload.bin")).name
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+        return stem[:120] or "upload.bin"
+
+    async def _handle_media_inbound(self, request: web.Request, installation: str) -> web.Response:
+        """Multipart photo/document -> normal Hermes MessageEvent with a local media path."""
+        from aiohttp import web
+        from plugins.plugin_storage import plugin_data_dir
+
+        if self.bound_conversation(installation) is None:
+            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+        if (request.content_length or 0) > DEFAULT_MEDIA_MAX_BYTES + 1024 * 1024:
+            return _error_response("attachment_too_large", 413)
+
+        message_id = ""
+        kind = "file"
+        file_name = ""
+        mime_type = ""
+        file_bytes = bytearray()
+        try:
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                field = str(part.name or "")
+                if field == "file":
+                    if not file_name:
+                        file_name = str(part.filename or "")
+                    if not mime_type:
+                        mime_type = str(part.headers.get("Content-Type") or "")
+                    while True:
+                        chunk = await part.read_chunk(size=64 * 1024)
+                        if not chunk:
+                            break
+                        file_bytes.extend(chunk)
+                        if len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
+                            return _error_response("attachment_too_large", 413)
+                elif field in {"message_id", "kind", "file_name", "mime_type"}:
+                    value = (await part.text()).strip()
+                    if field == "message_id":
+                        message_id = value
+                    elif field == "kind":
+                        kind = "photo" if value == "photo" else "file"
+                    elif field == "file_name":
+                        file_name = value
+                    elif field == "mime_type":
+                        mime_type = value
+        except web.HTTPRequestEntityTooLarge:
+            return _error_response("attachment_too_large", 413)
+        except Exception:
+            logger.warning("[kissne_mobile] invalid multipart upload", exc_info=True)
+            return _error_response("invalid_attachment", 400)
+
+        if not file_bytes:
+            return _error_response("attachment_required", 400)
+        file_name = _Path(file_name or ("photo" if kind == "photo" else "file")).name
+        mime_type = (mime_type or "application/octet-stream").strip()
+        if mime_type.startswith("image/"):
+            kind = "photo"
+
+        store = self.device_store()
+        client_message_id = message_id.strip()
+        digest = hashlib.sha256()
+        for piece in (
+            kind.encode("utf-8"),
+            file_name.encode("utf-8", errors="replace"),
+            mime_type.encode("utf-8", errors="replace"),
+            bytes(file_bytes),
+        ):
+            digest.update(piece)
+            digest.update(b"\0")
+        fingerprint = digest.hexdigest()
+
+        if client_message_id:
+            existing = await asyncio.to_thread(
+                store.inbound_record, installation, client_message_id)
+            if existing is not None:
+                if str(existing.get("payload_hash") or "") == fingerprint:
+                    return self._duplicate_response(
+                        client_message_id, str(existing.get("turn_id") or ""))
+                return _error_response("message_id_conflict", 409)
+
+        message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
+        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        if client_message_id:
+            outcome = await asyncio.to_thread(
+                store.record_inbound, installation, client_message_id, fingerprint, turn_id)
+            if outcome == INBOUND_DUPLICATE:
+                record = await asyncio.to_thread(
+                    store.inbound_record, installation, client_message_id) or {}
+                return self._duplicate_response(
+                    client_message_id, str(record.get("turn_id") or ""))
+            if outcome == INBOUND_CONFLICT:
+                return _error_response("message_id_conflict", 409)
+
+        upload_dir = plugin_data_dir(PLATFORM_NAME) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = upload_dir / f"{turn_id}_{self._safe_upload_name(file_name)}"
+        try:
+            await asyncio.to_thread(disk_path.write_bytes, bytes(file_bytes))
+        except Exception:
+            logger.exception("[kissne_mobile] failed to persist inbound attachment")
+            return _error_response("attachment_store_failed", 503)
+
+        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        await asyncio.to_thread(
+            store.enqueue_event, installation, EVENT_PENDING,
+            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
+
+        is_photo = kind == "photo"
+        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        event = MessageEvent(
+            text=marker,
+            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            source=self.source_for_installation(installation),
+            raw_message={
+                "kind": kind,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "size": len(file_bytes),
+            },
+            message_id=turn_id,
+            user_id=installation,
+            media_urls=[str(disk_path)],
+            media_types=[mime_type],
+            media_text_inlined=[False],
+        )
+        try:
+            await self.handle_message(event)
+        except Exception:
+            logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
+            return _error_response("inbound_injection_failed", 503)
+
+        return _json_response({
+            "ok": True,
+            "message_id": message_id,
+            "turn_id": turn_id,
+            "kind": kind,
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "size": len(file_bytes),
+        }, status=202)
+
     async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
         """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
         ack = body.get("ack")
@@ -770,6 +918,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         installation = await self._authenticated_installation(request)
         if not installation:
             return _error_response("unauthorized", 401)
+        if str(getattr(request, "content_type", "") or "").lower().startswith("multipart/"):
+            return await self._handle_media_inbound(request, installation)
         payload, error = await self._payload(request)
         if error is not None:
             return error
