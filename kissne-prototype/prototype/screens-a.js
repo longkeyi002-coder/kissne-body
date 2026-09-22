@@ -550,8 +550,20 @@
   var CHAT_OUTBOX_UPDATED_AT = 0;
   var CHAT_USER_INPUT_AT = 0;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
-  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v3';
+  var TURN_ACTIVITY_STORAGE_BASE = 'kissne.chat.turn_activity.v4:';
+  var TURN_ACTIVITY_SESSION = '';
   var TURN_ACTIVITY = Object.create(null);
+  function turnActivityStorageKeyFor(sessionId) {
+    var sid = String(sessionId || '');
+    return sid ? TURN_ACTIVITY_STORAGE_BASE + sid : '';
+  }
+  function bindTurnActivitySession(sessionId) {
+    var sid = String(sessionId || '');
+    if (sid === TURN_ACTIVITY_SESSION) return;
+    TURN_ACTIVITY_SESSION = sid;
+    TURN_ACTIVITY = Object.create(null);
+    loadTurnActivity(sid);
+  }
 
   function toolCallKey(value, fallbackIndex) {
     var row = value && typeof value === 'object' ? value : {};
@@ -577,9 +589,11 @@
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
   }
-  function loadTurnActivity() {
+  function loadTurnActivity(sessionId) {
     try {
-      var raw = localStorage.getItem(TURN_ACTIVITY_STORAGE_KEY);
+      var keyName = turnActivityStorageKeyFor(sessionId || TURN_ACTIVITY_SESSION);
+      if (!keyName) return;
+      var raw = localStorage.getItem(keyName);
       var parsed = raw ? JSON.parse(raw) : {};
       if (!parsed || typeof parsed !== 'object') return;
       Object.keys(parsed).slice(-120).forEach(function (id) {
@@ -612,10 +626,10 @@
           - (Number(TURN_ACTIVITY[b] && TURN_ACTIVITY[b].updatedAt) || 0);
       });
       while (ids.length > 120) delete TURN_ACTIVITY[ids.shift()];
-      localStorage.setItem(TURN_ACTIVITY_STORAGE_KEY, JSON.stringify(TURN_ACTIVITY));
+      var keyName = turnActivityStorageKeyFor(TURN_ACTIVITY_SESSION);
+      if (keyName) localStorage.setItem(keyName, JSON.stringify(TURN_ACTIVITY));
     } catch (e) {}
   }
-  loadTurnActivity();
 
   function upsertToolActivity(turnId, value, phase) {
     var state = activityForTurn(turnId);
@@ -1437,8 +1451,45 @@
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
-          if (role === 'tool') return;
-          if (role === 'assistant' && (item.tool_calls || item.activity_only) && !rawText.trim()) return;
+          var historyTurnId = '';
+          var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
+          if (role === 'assistant' && historyCalls.length) {
+            historyTurnId = String(item.turn_id || '');
+            if (!historyTurnId) {
+              for (var bi = CHAT_LOG.length - 1; bi >= 0; bi--) {
+                if (CHAT_LOG[bi] && CHAT_LOG[bi].who === 'me' && CHAT_LOG[bi].turnId) {
+                  historyTurnId = CHAT_LOG[bi].turnId; break;
+                }
+              }
+            }
+            historyCalls.forEach(function (call, ci) {
+              var fn = call && call.function && typeof call.function === 'object' ? call.function : {};
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: call && (call.id || call.tool_call_id) || ('history-tool:' + ci),
+                tool_name: call && (call.name || call.tool_name) || fn.name || '',
+                arguments: call && call.arguments !== undefined ? call.arguments : fn.arguments || '',
+                status: 'completed'
+              }, 'call');
+            });
+            if (!rawText.trim()) return;
+          }
+          if (role === 'tool') {
+            historyTurnId = String(item.turn_id || '');
+            if (!historyTurnId) {
+              for (var ti = CHAT_LOG.length - 1; ti >= 0; ti--) {
+                if (CHAT_LOG[ti] && CHAT_LOG[ti].who === 'me' && CHAT_LOG[ti].turnId) {
+                  historyTurnId = CHAT_LOG[ti].turnId; break;
+                }
+              }
+            }
+            upsertToolActivity(historyTurnId || 'history', {
+              tool_call_id: item.tool_call_id || '',
+              tool_name: item.tool_name || '',
+              result: rawText,
+              status: 'completed'
+            }, 'result');
+            return;
+          }
           if (role === 'system') {
             CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
             return;
@@ -1804,6 +1855,7 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           /* bootstrap 确认会话身份后，才把该会话的本地缓存装进内存（namespace 对齐） */
           bindChatLogSession(chatLogSessionId());
+          bindTurnActivitySession(chatLogSessionId());
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
             s.active = sessionIsCurrent(s);
