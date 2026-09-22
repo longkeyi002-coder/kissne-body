@@ -1,25 +1,52 @@
 package com.kissne.mobile
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewAssetLoader
+import org.json.JSONObject
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var bridge: PrototypeBridge
     private lateinit var updateManager: UpdateManager
+
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingVoiceRequestId: String? = null
+
+    private val recordAudioPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val requestId = pendingVoiceRequestId ?: return@registerForActivityResult
+            if (granted) {
+                beginVoiceRecognition(requestId)
+            } else {
+                finishVoiceRequest(
+                    requestId,
+                    false,
+                    JSONObject().put("status", 0).put("error", "microphone_permission_denied"),
+                )
+            }
+        }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,9 +132,12 @@ class MainActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(root)
 
-        bridge = PrototypeBridge(webView, store) {
-            updateManager.checkForUpdates(force = true)
-        }
+        bridge = PrototypeBridge(
+            webView = webView,
+            store = store,
+            checkUpdates = { updateManager.checkForUpdates(force = true) },
+            startVoiceInput = { requestId -> startVoiceInput(requestId) },
+        )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         clearWebViewCacheAfterUpgrade()
@@ -115,6 +145,118 @@ class MainActivity : AppCompatActivity() {
             "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}#/welcome?state=animate"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
+
+    private fun startVoiceInput(requestId: String) {
+        pendingVoiceRequestId?.takeIf { it != requestId }?.let { previous ->
+            finishVoiceRequest(
+                previous,
+                false,
+                JSONObject().put("status", 0).put("error", "voice_input_replaced"),
+            )
+        }
+        pendingVoiceRequestId = requestId
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            beginVoiceRecognition(requestId)
+        } else {
+            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun beginVoiceRecognition(requestId: String) {
+        if (pendingVoiceRequestId != requestId) return
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            finishVoiceRequest(
+                requestId,
+                false,
+                JSONObject().put("status", 0).put("error", "speech_recognition_unavailable"),
+            )
+            return
+        }
+
+        speechRecognizer?.destroy()
+        val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer = recognizer
+        recognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onPartialResults(partialResults: Bundle?) = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+            override fun onError(error: Int) {
+                val code = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "speech_audio_error"
+                    SpeechRecognizer.ERROR_CLIENT -> "speech_client_error"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "microphone_permission_denied"
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "speech_network_error"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "speech_no_match"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "speech_recognizer_busy"
+                    SpeechRecognizer.ERROR_SERVER -> "speech_server_error"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "speech_timeout"
+                    else -> "speech_recognition_error"
+                }
+                finishVoiceRequest(
+                    requestId,
+                    false,
+                    JSONObject().put("status", 0).put("error", code),
+                )
+            }
+
+            override fun onResults(results: Bundle?) {
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull { it.isNotBlank() }
+                    .orEmpty()
+                if (text.isBlank()) {
+                    finishVoiceRequest(
+                        requestId,
+                        false,
+                        JSONObject().put("status", 0).put("error", "speech_no_match"),
+                    )
+                    return
+                }
+                finishVoiceRequest(
+                    requestId,
+                    true,
+                    JSONObject().put("text", text),
+                )
+            }
+        })
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+        try {
+            recognizer.startListening(intent)
+        } catch (error: Throwable) {
+            finishVoiceRequest(
+                requestId,
+                false,
+                JSONObject().put("status", 0)
+                    .put("error", error.message ?: "speech_recognition_error"),
+            )
+        }
+    }
+
+    private fun finishVoiceRequest(requestId: String, ok: Boolean, payload: JSONObject) {
+        if (pendingVoiceRequestId == requestId) pendingVoiceRequestId = null
+        val recognizer = speechRecognizer
+        speechRecognizer = null
+        recognizer?.destroy()
+        if (::bridge.isInitialized) bridge.resolveNative(requestId, ok, payload)
     }
 
     private fun clearWebViewCacheAfterUpgrade() {
@@ -143,6 +285,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        pendingVoiceRequestId = null
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         if (::updateManager.isInitialized) updateManager.close()
         if (::bridge.isInitialized) bridge.close()
         if (::webView.isInitialized) {
