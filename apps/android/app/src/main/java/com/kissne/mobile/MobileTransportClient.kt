@@ -173,10 +173,15 @@ class MobileTransportClient(
     fun modelOptionsPayload(): JSONObject =
         request("GET", "/model-options")
 
-    fun setModelPayload(model: String? = null, effort: String? = null): JSONObject {
+    fun setModelPayload(
+        model: String? = null,
+        effort: String? = null,
+        provider: String? = null,
+    ): JSONObject {
         val body = JSONObject()
         model?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("model", it) }
         effort?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("effort", it) }
+        provider?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("provider", it) }
         return request("POST", "/set-model", body)
     }
 
