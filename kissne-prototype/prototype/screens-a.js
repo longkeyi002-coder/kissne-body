@@ -1437,7 +1437,7 @@
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-          drainOutbox();
+          setTimeout(drainOutbox, 80);
         } else if (type === 'cancelled') {
           setSessionStatus('');
           finishActivities(el, turnId);
@@ -1445,7 +1445,7 @@
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
-          drainOutbox();
+          setTimeout(drainOutbox, 80);
         }
       }
       function scheduleLivePoll(ms) {
