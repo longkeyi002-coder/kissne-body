@@ -556,6 +556,22 @@
     if (/\b(terminal|shell|bash|sh|python|node|npm|pnpm|yarn)\b/.test(text)) return '运行命令';
     return '使用工具';
   }
+  function toolActivityIcon(label) {
+    if (label === '搜索文件') return 'search';
+    if (label === '读取代码' || label === '修改文件') return 'file';
+    if (label === '检查 Git') return 'link';
+    if (label === '访问网络') return 'server';
+    if (label === '运行检查' || label === '运行命令') return 'cpu';
+    return 'box';
+  }
+  function activityDetailText(value) {
+    var text = cleanActivityText(value, '');
+    text = text.replace(/```[a-z0-9_-]*\s*/gi, '').replace(/```/g, '').trim();
+    text = text.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s'"]+/gi, '$1[已隐藏]');
+    text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s'"]+/gi, '$1[已隐藏]');
+    if (text.length > 1200) text = text.slice(0, 1200) + '…';
+    return text;
+  }
 
   function looksLikeToolTranscript(value) {
     var text = String(value == null ? '' : value).trim();
@@ -595,6 +611,7 @@
           reasoning: Array.isArray(row.reasoning) && row.reasoning.length ? ['思考'] : [],
           tools: tools.slice(-12),
           counts: row.counts && typeof row.counts === 'object' ? row.counts : {},
+          details: row.details && typeof row.details === 'object' ? row.details : {},
           done: !!row.done,
           updatedAt: Number(row.updatedAt) || 0
         };
@@ -616,9 +633,10 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: [], tools: [], counts: {}, done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { reasoning: [], tools: [], counts: {}, details: {}, done: false, updatedAt: Date.now() };
     }
     if (!TURN_ACTIVITY[id].counts) TURN_ACTIVITY[id].counts = {};
+    if (!TURN_ACTIVITY[id].details) TURN_ACTIVITY[id].details = {};
     return TURN_ACTIVITY[id];
   }
   function appendActivity(turnId, kind, value) {
@@ -633,6 +651,8 @@
     if (!label) return false;
     var count = Number(state.counts[label] || 0) + 1;
     state.counts[label] = count;
+    var detail = activityDetailText(value);
+    if (detail) state.details[label] = detail;
     if (state.tools.indexOf(label) < 0) {
       state.tools.push(label);
       if (state.tools.length > 12) state.tools.splice(0, state.tools.length - 12);
@@ -644,22 +664,24 @@
   function activityRows(state, closed) {
     var rows = [];
     if (state.reasoning && state.reasoning.length) {
-      rows.push('<div class="activity-row activity-row--reasoning"><span class="activity-dot"></span>'
-        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span></div>');
+      var thoughtDetail = closed ? '已完成这一步处理。' : '正在分析并处理当前请求。';
+      rows.push('<div class="activity-item">'
+        + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
+        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
+        + icon('chevron', 12, 'activity-chevron') + '</button>'
+        + '<div class="activity-detail" hidden>' + esc(thoughtDetail) + '</div></div>');
     }
     (state.tools || []).forEach(function (label) {
       var count = Number(state.counts && state.counts[label] || 1);
-      rows.push('<div class="activity-row"><span class="activity-dot"></span>'
+      var detail = String(state.details && state.details[label] || label);
+      rows.push('<div class="activity-item">'
+        + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
+        + '<span class="activity-icon">' + icon(toolActivityIcon(label), 13) + '</span>'
         + '<span class="activity-label">' + esc(label) + '</span>'
-        + (count > 1 ? '<span class="activity-count">×' + count + '</span>' : '') + '</div>');
+        + (count > 1 ? '<span class="activity-count">×' + count + '</span>' : '')
+        + icon('chevron', 12, 'activity-chevron') + '</button>'
+        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
     });
-    var maxRows = 4;
-    if (rows.length > maxRows) {
-      var hidden = rows.length - maxRows + 1;
-      rows = rows.slice(rows.length - (maxRows - 1));
-      rows.unshift('<div class="activity-row activity-row--more"><span class="activity-dot"></span>'
-        + '<span class="activity-label">另外 ' + hidden + ' 个步骤</span></div>');
-    }
     return rows.join('');
   }
   function activityMarkupForTurn(turnId, done) {
@@ -1996,20 +2018,20 @@
       }
       if (upill) upill.addEventListener('click', onPill);
       list.addEventListener('scroll', onScroll);
-      /* 思考过程 / 工具调用：点标题行展开或收起。
-         用**事件委托**挂在列表上 —— 消息是随时新长出来的，逐个绑会漏。 */
-      function onTlogTap(e) {
-        var t = e.target;
-        while (t && t !== list && !(t.classList && t.classList.contains('tlog__row'))) t = t.parentNode;
-        if (!t || t === list) return;
-        var blk = t.parentNode;
-        if (blk && blk.classList) {
-          var open = blk.classList.toggle('is-open');
-          t.setAttribute('aria-expanded', open ? 'true' : 'false');
-          var st = blk.querySelector('[data-tlog-state]');
-          if (st) st.textContent = open ? '展开' : '已折叠';
-        }
+      /* GPT 风格 Activity：默认只是浅灰动作行；点某一行，只展开这一项的详情。 */
+      function onActivityTap(e) {
+        var row = e.target && e.target.closest ? e.target.closest('[data-activity-toggle]') : null;
+        if (!row || !list.contains(row)) return;
+        e.preventDefault();
+        var item = row.closest('.activity-item');
+        var detail = item && item.querySelector('.activity-detail');
+        if (!detail) return;
+        var open = detail.hidden;
+        detail.hidden = !open;
+        row.setAttribute('aria-expanded', open ? 'true' : 'false');
+        item.classList.toggle('is-open', open);
       }
+      list.addEventListener('click', onActivityTap);
       async function onApprovalTap(e) {
         var control = e.target.closest && e.target.closest('[data-approval-decision]');
         if (!control || !list.contains(control)) return;
@@ -2184,6 +2206,7 @@
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
         list.removeEventListener('click', onApprovalTap);
+        list.removeEventListener('click', onActivityTap);
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
