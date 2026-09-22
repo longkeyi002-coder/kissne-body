@@ -991,30 +991,32 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   display:flex;align-items:center;justify-content:center;
   -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
 }
-/* —— 「+」点开的浮层：**紧贴加号上方**的小框（挂在 .composer 内，以它为锚点向上弹）——
-   不再是从屏幕底端滑上来的整条面板。小箭头指向加号。 */
+/* —— 「+」点开的浮层：沿用 Kissne 的轻量悬浮卡片语言，不使用系统菜单外观。 —— */
 .pop{
-  position:absolute;left:0;bottom:calc(100% + 10px);z-index:40;width:238px;
-  background:#fff;border:1px solid var(--line);border-radius:14px;
-  box-shadow:0 10px 28px rgba(20,20,25,.18);overflow:visible;
+  position:absolute;left:0;bottom:calc(100% + 9px);z-index:40;width:208px;
+  padding:6px;background:rgba(255,255,255,.98);border:1px solid var(--line);
+  border-radius:18px;box-shadow:0 8px 24px rgba(20,20,25,.12);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);overflow:visible;
 }
-/* 小箭头：指向加号（加号按钮中心约在容器 x=23px 处） */
 .pop::after{
-  content:'';position:absolute;left:19px;bottom:-5.5px;width:9px;height:9px;
+  content:'';position:absolute;left:18px;bottom:-5px;width:9px;height:9px;
   background:#fff;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
   transform:rotate(45deg);
 }
-.pop__item{display:flex;align-items:center;gap:10px;padding:10px 12px;color:var(--ink)}
-.pop__item + .pop__item{border-top:1px solid var(--line)}
-.pop__item:hover{background:var(--g1)}
-.pop__item:active{background:var(--g2)}
-.pop__ic{width:30px;height:30px;flex:none;border-radius:9px;background:var(--g2);
-  display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
-.pop__main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.pop__t{font-size:12.5px;font-weight:600}
-.pop__d{font-size:10px;color:var(--ink-3)}
-.pop__foot{padding:7px 12px;font-size:10px;color:var(--ink-3);background:var(--g1);
-  border-top:1px solid var(--line);border-radius:0 0 14px 14px}
+.pop__item{
+  width:100%;display:flex;align-items:center;gap:10px;padding:9px 10px;border:0;
+  border-radius:13px;background:transparent;color:var(--ink);font:inherit;text-align:left;
+  -webkit-appearance:none;appearance:none;
+}
+.pop__item + .pop__item{margin-top:2px}
+.pop__item:active{background:var(--g2);transform:scale(.985)}
+.pop__ic{
+  width:32px;height:32px;flex:none;border-radius:11px;background:var(--g2);
+  display:flex;align-items:center;justify-content:center;color:var(--ink-2)
+}
+.pop__txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.pop__txt b{font-size:12px;line-height:1.25;font-weight:650;color:var(--ink)}
+.pop__txt small{font-size:9.5px;line-height:1.35;color:var(--ink-3);white-space:normal}
 
 /* ===================== 05b 实时语音通话页 ===================== */
 .screen--call{background:var(--g1)}
