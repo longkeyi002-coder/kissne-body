@@ -189,6 +189,7 @@ class PrototypeBridge(
             "setModel" -> client().setModelPayload(
                 model = body.optString("model").takeIf { it.isNotBlank() },
                 effort = body.optString("effort").takeIf { it.isNotBlank() },
+                provider = body.optString("provider").takeIf { it.isNotBlank() },
             )
             "approval" -> client().approvalPayload(
                 approvalId = body.optString("approval_id"),
