@@ -14,6 +14,7 @@ val hasReleaseSigning = listOf(
     releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
 ).all { !it.isNullOrBlank() }
 
+// apk build checkpoint: historical/activity fixes validated before attachment/usage work
 android {
     namespace = "com.kissne.mobile"
     compileSdk = 35
