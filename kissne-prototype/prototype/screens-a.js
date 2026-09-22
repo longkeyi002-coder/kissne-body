@@ -1432,8 +1432,16 @@
         }
 
         if (type === 'pending') {
-          /* A queued user turn is transport state only. Send stays available; no fake AI bubble. */
-          if (turnId) livePendingTurns[turnId] = true;
+          /* Pending is a real transport state, not fake reasoning. Keep Send available, but show
+             that Ye Qingxu has received the batch instead of leaving a dead/empty avatar. */
+          if (turnId) {
+            livePendingTurns[turnId] = true;
+            liveCurrentTurn = turnId;
+            var pendingEl = liveEnsure(turnId);
+            livePresence(pendingEl, true, '正在看你刚才说的话');
+            liveAvatar(pendingEl, 'read');
+            liveSetCancel(true);
+          }
           return;
         }
 
@@ -1623,8 +1631,8 @@
         }
       }
 
-      var OUTBOX_BATCH_DELAY_MS = 900;
-      var USER_TYPING_IDLE_MS = 1400;
+      var OUTBOX_BATCH_DELAY_MS = 650;
+      var USER_TYPING_IDLE_MS = 1800;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -1715,6 +1723,8 @@
         }
         setSessionStatus('');
         input.value = '';
+        /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
+        CHAT_USER_INPUT_AT = 0;
         append(meMsg(esc(v), '', clockNow()));
         pushLog({ who: 'me', html: esc(v), time: clockNow() });
         queueOutboundText(v);
