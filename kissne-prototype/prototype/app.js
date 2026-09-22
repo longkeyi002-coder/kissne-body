@@ -104,23 +104,16 @@
     COLD = false;
     try { sessionStorage.setItem(SPLASH_SESSION_KEY, '1'); } catch (e) {}
     clearTimeout(splashTimer);
+
+    /* Startup must never wait for transport. The user enters Home immediately;
+       authentication, session discovery and recovery continue in the background. */
+    location.replace(splashNext());
+
     var T = window.KissneTransport;
-    var enterHome = function () { location.replace(splashNext()); };
     if (T && typeof T.sessions === 'function') {
-      var settled = false;
-      var finish = function () {
-        if (settled) return;
-        settled = true;
-        enterHome();
-      };
-      /* Session list is server-owned. Wait briefly for it before showing Home,
-         but never trap app startup indefinitely during an outage. */
-      loadRemoteSessionsAtStartup(T).then(finish).catch(finish);
-      setTimeout(finish, 8000);
+      loadRemoteSessionsAtStartup(T).catch(function () {});
     } else if (T && typeof T.ensureToken === 'function') {
-      T.ensureToken(false).then(enterHome).catch(enterHome);
-    } else {
-      enterHome();
+      T.ensureToken(false).catch(function () {});
     }
   }
 
@@ -344,21 +337,6 @@
             window.KissneNativeTransport.checkForUpdates();
           }
         } catch (e) {}
-      }
-      else if (a === 'disconnect') {
-        var T = window.KissneTransport;
-        if (!T || typeof T.revoke !== 'function') {
-          if (T && typeof T.clearToken === 'function') T.clearToken();
-          nav('#/home?state=offline');
-        } else {
-          T.revoke().then(function () {
-            nav('#/home?state=offline');
-          }).catch(function () {
-            /* Do not pretend the server revoked the token. Keep the device
-               page open so the user can retry instead of creating split state. */
-            nav('#/device?state=disconnect-confirm');
-          });
-        }
       }
       else if (a === 'sync') nav('#/memory?state=syncing');
       else if (a === 'resend') nav('#/chat?state=replying');
