@@ -1106,7 +1106,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     current_model=current_model or None,
                     current_provider=current_provider or None,
                 )
-                payload = build_model_options_payload(ctx)
+                payload = build_model_options_payload(ctx, include_unconfigured=True)
             payload["efforts"] = list(EFFORT_LADDER)
             if current_model:
                 payload["model"] = current_model
