@@ -1686,28 +1686,25 @@
           return;
         }
         if (presentation === 'commentary') {
+          /* Commentary is assistant process text, never a system notice. Keep it inside
+             the current assistant turn so Activity -> commentary -> final answer remains
+             one visual unit. Structured presentation wins over text-shape heuristics. */
           var commentaryText = String(event.text || '').trim();
           if (!commentaryText) return;
-          if (looksLikeToolTranscript(commentaryText)) {
-            var commentaryToolEl = liveEnsure(turnId);
-            livePresence(commentaryToolEl, false);
-            addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
-            liveAvatar(commentaryToolEl, 'work');
-          } else {
-            append(aiMsg(chatHtmlFromWire(commentaryText), '', clockNow(), '', 'talk', ''));
-            pushLog({ who: 'ai', html: chatHtmlFromWire(commentaryText), time: clockNow(), day: chatDayKey(Date.now()) });
-          }
+          var commentaryEl = liveEnsure(turnId);
+          livePresence(commentaryEl, false);
+          liveText(commentaryEl, commentaryText, true);
+          liveAvatar(commentaryEl, 'talk');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          if (turnId) livePendingTurns[turnId] = true;
+          liveSetCancel(!!liveCurrentTurn);
           return;
         }
         if (type === 'notice') {
+          /* Only an actual notice may use the centered system lane. Legacy raw tool
+             transcripts are suppressed rather than duplicated beside structured Activity. */
           var noticeText = String(event.text || '');
-          if (looksLikeToolTranscript(noticeText)) {
-            var noticeToolEl = liveEnsure(turnId);
-            livePresence(noticeToolEl, false);
-            addActivity(noticeToolEl, 'tool', turnId, noticeText);
-            liveAvatar(noticeToolEl, 'work');
-            return;
-          }
+          if (looksLikeToolTranscript(noticeText)) return;
           appendSystemNotice(noticeText || '系统通知');
           return;
         }
