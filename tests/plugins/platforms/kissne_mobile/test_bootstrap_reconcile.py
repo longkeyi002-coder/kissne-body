@@ -255,3 +255,76 @@ def test_client_message_id_is_retry_key_but_runtime_identity_is_server_turn_id(t
         "Runtime-facing MessageEvent.message_id must be the server turn_id so transcript "
         "platform_message_id can reconcile against outbound turn identity"
     )
+
+
+def test_bootstrap_preserves_tool_chain_and_final_turn_identity(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            turn_id = "kbm_turn_tools"
+            sessions.append_to_transcript(
+                conversation.session_id,
+                {"role": "user", "content": "inspect", "platform_message_id": turn_id},
+            )
+            sessions.append_to_transcript(conversation.session_id, {
+                "role": "assistant", "content": "", "reasoning": "must stay private",
+                "tool_calls": [{"id": "call-1", "type": "function",
+                                "function": {"name": "terminal", "arguments": "{\"cmd\":\"pwd\"}"}}],
+            })
+            sessions.append_to_transcript(conversation.session_id, {
+                "role": "tool", "content": "x" * 5000,
+                "tool_call_id": "call-1", "tool_name": "terminal",
+            })
+            sessions.append_to_transcript(
+                conversation.session_id, {"role": "assistant", "content": "done"})
+            adapter.set_session_store(sessions)
+            history, truncated, represented = adapter._bootstrap_history_snapshot(
+                conversation.session_id)
+            return history, truncated, represented
+
+    history, truncated, represented = run(scenario())
+    assert [row["role"] for row in history] == ["user", "assistant", "tool", "assistant"]
+    assert history[0]["message_ref"] == "turn:kbm_turn_tools:user"
+    assert history[-1]["message_ref"] == "turn:kbm_turn_tools:assistant"
+    assert represented == {"kbm_turn_tools"}
+    assert history[1]["tool_calls"][0]["id"] == "call-1"
+    assert history[2]["tool_call_id"] == "call-1"
+    assert history[2]["text"].endswith("…[truncated]")
+    assert len(history[2]["text"]) < 4200
+    assert all("reasoning" not in row and "reasoning_content" not in row for row in history)
+    assert truncated is False
+
+
+def test_bootstrap_cap_keeps_whole_tool_turns_within_message_ceiling(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter._history_cap = 5
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            _persisted_turn(sessions, conversation.session_id, "old", question="old-q", answer="old-a")
+            sessions.append_to_transcript(
+                conversation.session_id,
+                {"role": "user", "content": "new-q", "platform_message_id": "new"},
+            )
+            sessions.append_to_transcript(conversation.session_id, {
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "c", "function": {"name": "terminal", "arguments": "{}"}}],
+            })
+            sessions.append_to_transcript(conversation.session_id, {
+                "role": "tool", "content": "ok", "tool_call_id": "c", "tool_name": "terminal",
+            })
+            sessions.append_to_transcript(
+                conversation.session_id, {"role": "assistant", "content": "new-a"})
+            adapter.set_session_store(sessions)
+            return adapter._bootstrap_history_snapshot(conversation.session_id)
+
+    history, truncated, represented = run(scenario())
+    assert len(history) <= 5
+    assert [row["role"] for row in history] == ["user", "assistant", "tool", "assistant"]
+    assert history[0]["text"] == "new-q"
+    assert history[-1]["text"] == "new-a"
+    assert truncated is True
+    assert represented == {"new"}
