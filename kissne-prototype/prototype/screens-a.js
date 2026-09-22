@@ -514,6 +514,10 @@
   }
 
   var CHAT_LOG = [];
+  /* Human-style composer: taps create visible user bubbles immediately; transport dispatch stays
+     turn-ordered so an older server configured for busy=interrupt cannot cut off the answer above it. */
+  var CHAT_OUTBOX = [];
+  var CHAT_OUTBOX_BUSY = false;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
   var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v1';
   var TURN_ACTIVITY = Object.create(null);
@@ -981,8 +985,6 @@
       var livePendingTurns = Object.create(null);
       var liveSendInFlight = 0;
       var liveBootstrapTimer = null;
-      var retryMessageId = '';
-      var retryMessageText = '';
       var liveApprovals = Object.create(null);
       var bootstrapStatusEl = null;
       var sessionStatus = root.querySelector('[data-session-status]');
@@ -1435,6 +1437,7 @@
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          drainOutbox();
         } else if (type === 'cancelled') {
           setSessionStatus('');
           finishActivities(el, turnId);
@@ -1442,6 +1445,7 @@
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          drainOutbox();
         }
       }
       function scheduleLivePoll(ms) {
@@ -1524,6 +1528,7 @@
               paintActivity(pendingEl, restoredPendingTurn, false);
             }
           }
+          drainOutbox();
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) {
@@ -1592,6 +1597,48 @@
         }
       }
 
+      function nextMessageId() {
+        var r = '';
+        try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
+        if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        return 'android-web-' + r;
+      }
+      function queueOutboundText(text, messageId) {
+        var value = String(text || '').trim();
+        if (!value) return;
+        CHAT_OUTBOX.push({ text: value, messageId: messageId || nextMessageId() });
+        drainOutbox();
+      }
+      async function drainOutbox() {
+        if (CHAT_OUTBOX_BUSY || !CHAT_OUTBOX.length || !live || liveStopped) return;
+        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) return;
+        var item = CHAT_OUTBOX[0];
+        CHAT_OUTBOX_BUSY = true;
+        liveSendInFlight += 1;
+        try {
+          var accepted = await T.sendText(item.text, item.messageId);
+          CHAT_OUTBOX.shift();
+          var acceptedTurn = String((accepted && accepted.turn_id) || '');
+          if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
+          scheduleLivePoll(0);
+        } catch (err) {
+          setSessionStatus('消息暂未送达，连接恢复后会继续发送。');
+          if (err && err.status === 401) {
+            live = false;
+            if (await recoverLiveAuth()) {
+              setSessionStatus('');
+            }
+          }
+        } finally {
+          liveSendInFlight = Math.max(0, liveSendInFlight - 1);
+          CHAT_OUTBOX_BUSY = false;
+        }
+        /* Only recurse when the server accepted no active turn (defensive for legacy responses).
+           Normally acceptedTurn blocks here until its completed/cancelled event calls drainOutbox(). */
+        if (live && !liveCurrentTurn && !Object.keys(livePendingTurns).length && CHAT_OUTBOX.length) {
+          setTimeout(drainOutbox, 0);
+        }
+      }
       async function push() {
         var v = (input.value || '').trim();
         if (!v) return;
@@ -1600,46 +1647,10 @@
           return;
         }
         setSessionStatus('');
-        var retrying = retryMessageText === v && !!retryMessageId;
-        var messageId = retrying ? retryMessageId : '';
-        if (!messageId) {
-          var r = '';
-          try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
-          if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-          messageId = 'android-web-' + r;
-        }
         input.value = '';
-        if (!retrying) {
-          append(meMsg(esc(v), '', clockNow()));
-          pushLog({ who: 'me', html: esc(v), time: clockNow() });
-        }
-
-        if (live) {
-          liveSendInFlight += 1;
-          try {
-            var accepted = await T.sendText(v, messageId);
-            retryMessageId = '';
-            retryMessageText = '';
-            var acceptedTurn = String((accepted && accepted.turn_id) || '');
-            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
-            scheduleLivePoll(0);
-          } catch (err) {
-            retryMessageId = messageId;
-            retryMessageText = v;
-            input.value = v;
-            append(aiMsg(icon('alert', 15) + '<span>消息发送失败，点击发送可安全重试。</span>',
-              'is-failed', clockNow(), '没连上', 'sad'));
-            if (err && err.status === 401) {
-              live = false;
-              if (await recoverLiveAuth()) {
-                setSessionStatus('认证已恢复，请再次点击发送。');
-              }
-            }
-          } finally {
-            liveSendInFlight = Math.max(0, liveSendInFlight - 1);
-          }
-          return;
-        }
+        append(meMsg(esc(v), '', clockNow()));
+        pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        queueOutboundText(v);
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
@@ -1674,16 +1685,7 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
         /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
            先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) {
-          liveSendInFlight += 1;
-          T.sendText('[表情包：' + s2.label + ']').then(function (accepted) {
-            var acceptedTurn = String((accepted && accepted.turn_id) || '');
-            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
-            scheduleLivePoll(0);
-          }).catch(function () {}).then(function () {
-            liveSendInFlight = Math.max(0, liveSendInFlight - 1);
-          });
-        }
+        if (live) queueOutboundText('[表情包：' + s2.label + ']');
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         var panelEl = root.querySelector('.stkpanel');
@@ -1821,13 +1823,7 @@
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         pushLog({ who: 'me', html: html, time: clockNow() });
-        if (live) {
-          T.sendText('[表情包：' + sk.label + ']').then(function (accepted) {
-            var acceptedTurn = String((accepted && accepted.turn_id) || '');
-            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
-            scheduleLivePoll(0);
-          }).catch(function () {});
-        }
+        if (live) queueOutboundText('[表情包：' + sk.label + ']');
       }
 
       async function onSessionDrawerClick(e) {
@@ -1855,7 +1851,7 @@
           setSessionDrawer(false);
           return;
         }
-        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) {
+        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length || CHAT_OUTBOX.length) {
           setSessionStatus('当前消息或回复尚未结束，请先完成或停止后再切换会话。');
           setSessionDrawer(false);
           return;
