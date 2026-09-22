@@ -2383,6 +2383,7 @@
           /* 解绑旧会话：只清内存，绝不清空后回写旧 key（旧会话缓存必须原样保留）；
              新会话的缓存等 bootstrap 确认身份后再装入 */
           bindChatLogSession('');
+          bindTurnActivitySession('');
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
           liveCovered = Object.create(null);
@@ -2396,6 +2397,7 @@
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
           bindChatLogSession(previousSessionId || previousSessionKey || '');
+          bindTurnActivitySession(previousSessionId || previousSessionKey || '');
           paintSessionList();
           setSessionStatus('会话切换失败，请稍后重试。');
         }
