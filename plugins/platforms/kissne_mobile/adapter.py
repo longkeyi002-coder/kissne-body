@@ -170,6 +170,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     supports_code_blocks = True
     typed_command_prefix = "/"
+    # Mobile chat behaves like a human messenger: follow-up texts while the agent is
+    # answering become distinct FIFO turns instead of interrupting the active reply.
+    preferred_busy_input_mode = "queue"
+    preferred_busy_text_mode = "interrupt"
+    busy_ack_enabled = False
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -813,9 +818,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"value": value, "label": labels.get(value, value.title())}
             for value in ("none", *VALID_REASONING_EFFORTS)
         ]
+        provider_options = [
+            {
+                "value": str(provider.get("slug") or ""),
+                "label": str(provider.get("name") or provider.get("slug") or ""),
+            }
+            for provider in providers
+            if str(provider.get("slug") or "")
+        ]
         return _json_response({
+            "providers": provider_options,
             "models": models,
             "efforts": efforts,
+            "current_provider": current_provider,
             "current_model": (
                 f"{current_provider}/{current_model}" if current_provider else current_model
             ),
