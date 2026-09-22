@@ -68,6 +68,11 @@ def test_completed_turn_represented_by_bootstrap_covers_exact_unacked_frames_wit
     status, payload, seqs, before, after = run(scenario())
     assert status == 200, payload
     assert payload.get("covered_event_seqs") == seqs, payload
+    history = payload.get("history") or []
+    assert [row.get("message_ref") for row in history] == [
+        "turn:kbm_turn_done:user",
+        "turn:kbm_turn_done:assistant",
+    ], history
     assert before == after, "bootstrap must be non-destructive; only ACK may retire outbound rows"
 
 
