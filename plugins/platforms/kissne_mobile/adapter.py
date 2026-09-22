@@ -1237,8 +1237,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Return bounded complete turns, including safe tool activity metadata.
 
         Mobile receives enough structure to rebuild Hermes tool activity, but never raw reasoning.
-        The cap counts conversation turns (user-led groups), not physical transcript rows, so tool
-        chatter cannot shrink the useful history window or leave a tool chain cut in half.
+        The cap remains a physical message-row ceiling. Selection happens only at complete user-led
+        turn boundaries, so tool chatter cannot leave an orphaned half-turn in the returned tail.
         """
         store = getattr(self, "_session_store", None)
         if store is None or not session_id:
@@ -1378,6 +1378,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             for item in group_items:
                 if item.get("role") == "assistant" and str(item.get("text") or "").strip():
                     final_assistant = item
+            if turn_id:
+                for item in group_items:
+                    item["turn_id"] = turn_id
             if turn_id and final_assistant is not None:
                 final_assistant["message_ref"] = f"turn:{turn_id}:assistant"
                 represented_turn_ids.add(turn_id)
