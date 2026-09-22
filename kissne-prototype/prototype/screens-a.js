@@ -820,17 +820,21 @@
 
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
          模型 / 思考强度的下拉面板仍从这里渲染（它们锚在顶栏下方）。 */
+      var renderModels = modelsForProvider(PROVIDER_CURRENT);
       var menuLayer = menu === 'plus'
         ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
         : menu
         ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
-          + (menu === 'model' ? dropdown('模型', MODELS, curModel.k, 'model', origin)
-             : dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin))
+          + (menu === 'provider'
+              ? dropdown('供应商', PROVIDERS, curProvider.k, 'provider', origin)
+              : (menu === 'model'
+                  ? dropdown('模型', renderModels, curModel.k, 'model', origin)
+                  : dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin)))
         : '';
 
       return `
       <div class="screen screen--chat${typing ? ' is-typing' : ''}">
-        <!-- 顶端：左=叶青栩，中=模型 / 思考强度（都可点开下拉，列表由 Hermes 提供）。
+        <!-- 顶端：左=叶青栩，中=供应商 / 模型 / 思考强度（列表由 Hermes 提供）。
              不放头像与右上角表情。字号刻意压小，不要抢消息区的视觉。 -->
         <header class="chathead">
           <button class="iconbtn chathead__back" data-session-drawer-open aria-label="会话列表">${icon('chat')}</button>
