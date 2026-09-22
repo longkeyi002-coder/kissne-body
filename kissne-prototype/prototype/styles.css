@@ -1133,8 +1133,10 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .stk.is-on .stk__art{border-color:var(--ink-2);box-shadow:0 0 0 2px var(--g3);background:var(--g1)}
 .stk.is-on .stk__size{color:var(--ink-2)}
 .stkpick{margin-top:10px;font-size:10.5px;line-height:1.5;color:var(--ink-3);text-align:center}
-/* 只装表情的消息：去掉气泡底板，直接把贴图发出去 */
+/* 只装表情的消息去掉底板；表情 + 文字则保留正常气泡。 */
 .bubble:has(.stkmsg){background:transparent;padding:0}
+.bubble:has(.stkmix){background:var(--g2);padding:8px 12px}
+.stkmix{display:flex;flex-direction:column;align-items:flex-start;gap:6px;white-space:pre-wrap}
 /* 发出去的表情消息：按微信表情的观感，不大不小 */
 .stkmsg{
   display:inline-flex;align-items:center;justify-content:center;

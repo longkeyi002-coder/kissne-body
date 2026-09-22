@@ -545,15 +545,28 @@
   }
 
   function toolActivityLabel(value) {
-    var text = cleanActivityText(value, '').toLowerCase();
-    if (!text) return '使用工具';
-    if (/\b(git|github|commit|branch|pull request|pr\b)/.test(text)) return '检查 Git';
-    if (/\b(find|grep|rg|ripgrep|search|locate)\b/.test(text)) return '搜索文件';
-    if (/\b(cat|head|tail|sed|read|open|fetch_file)\b/.test(text)) return '读取代码';
-    if (/\b(pytest|test|tests|gradle|lint|check)\b/.test(text)) return '运行检查';
-    if (/\b(write|edit|patch|update_file|create_file|replace)\b/.test(text)) return '修改文件';
-    if (/\b(web|browser|curl|http|https|fetch)\b/.test(text)) return '访问网络';
-    if (/\b(terminal|shell|bash|sh|python|node|npm|pnpm|yarn)\b/.test(text)) return '运行命令';
+    var text = cleanActivityText(value, '');
+    var low = text.toLowerCase();
+    if (!low) return '使用工具';
+    if (/sticker|表情包/.test(low) && /grep|rg|find|search|terminal/.test(low)) return '查找表情包发送逻辑';
+    if (/adapter\.py|mobile adapter|kissne_mobile/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查 Mobile Adapter';
+    if (/screens-a\.js|chat|bubble|message/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查聊天界面逻辑';
+    if (/\bgit\s+log\b|commit history|history/.test(low)) return '检查 Git 历史';
+    if (/\bgit\s+(status|diff|show)\b/.test(low)) return '检查 Git 状态';
+    if (/pytest|gradle|lint|\btests?\b/.test(low)) return '运行相关检查';
+    var file = text.match(/(?:Reading|read|cat|sed[^\n]*|open)\s+([^\s"']+\.(?:py|js|ts|kt|css|html|md))/i);
+    if (file && file[1]) return '读取 ' + file[1].split('/').pop();
+    var pattern = text.match(/(?:grep|rg)\s+(?:-[^\s]+\s+)*(?:"([^"]+)"|'([^']+)'|([^\s|]+))/i);
+    if (pattern) {
+      var term = String(pattern[1] || pattern[2] || pattern[3] || '').replace(/[_*\\]/g, '').trim();
+      if (term && term.length <= 18) return '查找「' + term + '」相关代码';
+    }
+    if (/\b(find|grep|rg|ripgrep|search|locate)\b/.test(low)) return '查找相关文件';
+    if (/\b(cat|head|tail|sed|read|reading|open|fetch_file)\b/.test(low)) return '读取代码';
+    if (/\b(git|github|commit|branch|pull request|pr\b)/.test(low)) return '检查 Git';
+    if (/\b(write|edit|patch|update_file|create_file|replace)\b/.test(low)) return '修改文件';
+    if (/\b(web|browser|curl|http|https|fetch)\b/.test(low)) return '访问网络';
+    if (/\b(terminal|shell|bash|sh|python|node|npm|pnpm|yarn)\b/.test(low)) return '运行命令';
     return '使用工具';
   }
   function toolActivityIcon(label) {
@@ -574,11 +587,13 @@
   }
 
   function looksLikeToolTranscript(value) {
-    var text = String(value == null ? '' : value).trim();
+    var text = cleanActivityText(value, '').trim();
     return /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
-      || /^(terminal|tool)\s*[:：]/i.test(text)
+      || /^(terminal|tool)\s*[:：]?/i.test(text)
+      || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
-      || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text);
+      || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
+      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text);
   }
 
   var CHAT_LOG = [];
@@ -647,11 +662,14 @@
       persistTurnActivity();
       return true;
     }
-    var label = toolActivityLabel(value);
+    var structured = value && typeof value === 'object' ? value : null;
+    var label = cleanActivityText(structured && structured.label || '', '') || toolActivityLabel(value);
     if (!label) return false;
     var count = Number(state.counts[label] || 0) + 1;
     state.counts[label] = count;
-    var detail = activityDetailText(value);
+    var detail = structured
+      ? activityDetailText(structured.detail || structured.preview || structured.tool || label)
+      : activityDetailText(value);
     if (detail) state.details[label] = detail;
     if (state.tools.indexOf(label) < 0) {
       state.tools.push(label);
@@ -713,6 +731,21 @@
       if (STICKERS[i].label === q || STICKERS[i].k === q) return STICKERS[i];
     }
     var compact = q.replace(/\s+/g, '').toLowerCase();
+    var aliases = {
+      '开心': 'fox-cheer', '高兴': 'fox-cheer', '欢呼': 'fox-cheer', '耶': 'fox-cheer',
+      '笑': 'cap-laugh', '哈哈': 'cap-laugh', '大笑': 'cap-laugh',
+      '疑惑': 'fox-confused', '困惑': 'fox-confused', '不懂': 'fox-confused',
+      '好的': 'cap-okay', '好': 'cap-okay', '没问题': 'fox-ok', 'ok': 'fox-ok',
+      '收到': 'cap-received', '明白': 'cap-received',
+      '无语': 'fox-speechless', '惊讶': 'fox-surprised', '震惊': 'fox-surprised',
+      '挥手': 'fox-wave', '你好': 'fox-wave', '晚安': 'cap-goodnight', '救命': 'cap-help'
+    };
+    var aliasKey = aliases[compact];
+    if (aliasKey) {
+      for (var ai = 0; ai < STICKERS.length; ai++) {
+        if (STICKERS[ai].k === aliasKey) return STICKERS[ai];
+      }
+    }
     for (var j = 0; j < STICKERS.length; j++) {
       var label = String(STICKERS[j].label || '').replace(/\s+/g, '').toLowerCase();
       var key = String(STICKERS[j].k || '').toLowerCase();
@@ -753,7 +786,7 @@
     }
     if (!matched) return esc(raw);
     out += esc(raw.slice(last));
-    return out;
+    return '<span class="stkmix">' + out + '</span>';
   }
   function clockNow() {
     var d = new Date();
@@ -1142,6 +1175,7 @@
       var liveCovered = Object.create(null);
       var liveCurrentTurn = '';
       var livePendingTurns = Object.create(null);
+      var liveSteeredTurns = Object.create(null);
       var liveSendInFlight = 0;
       var liveBootstrapTimer = null;
       var liveOutboxTimer = null;
@@ -1562,19 +1596,42 @@
           return;
         }
         if (presentation === 'tool_progress') {
-          var toolText = cleanActivityText(event.text || '', '');
-          if (!toolText) return;
+          var toolActivity = event.activity && typeof event.activity === 'object'
+            ? event.activity
+            : { label: event.activity_label || '', detail: event.activity_detail || event.text || '', tool: event.tool_name || '' };
           var progressEl = liveEnsure(turnId);
           livePresence(progressEl, false);
-          addActivity(progressEl, 'tool', turnId, toolText);
+          addActivity(progressEl, 'tool', turnId, toolActivity);
           liveAvatar(progressEl, 'work');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
+        if (presentation === 'commentary') {
+          var commentaryText = String(event.text || '').trim();
+          if (!commentaryText) return;
+          if (looksLikeToolTranscript(commentaryText)) {
+            var commentaryToolEl = liveEnsure(turnId);
+            livePresence(commentaryToolEl, false);
+            addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
+            liveAvatar(commentaryToolEl, 'work');
+          } else {
+            append(aiMsg(chatHtmlFromWire(commentaryText), '', clockNow(), '', 'talk', ''));
+            pushLog({ who: 'ai', html: chatHtmlFromWire(commentaryText), time: clockNow(), day: chatDayKey(Date.now()) });
+          }
+          return;
+        }
         if (type === 'notice') {
-          appendSystemNotice(event.text || '系统通知');
+          var noticeText = String(event.text || '');
+          if (looksLikeToolTranscript(noticeText)) {
+            var noticeToolEl = liveEnsure(turnId);
+            livePresence(noticeToolEl, false);
+            addActivity(noticeToolEl, 'tool', turnId, noticeText);
+            liveAvatar(noticeToolEl, 'work');
+            return;
+          }
+          appendSystemNotice(noticeText || '系统通知');
           return;
         }
         if (type === 'approval_required') {
@@ -1621,14 +1678,21 @@
         } else if (type === 'completed') {
           livePresence(el, false);
           setSessionStatus('');
-          finishActivities(el, turnId);
           var finalText = String(event.text || '');
-          var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
-          liveText(el, finalText, false);
-          liveAvatar(el, 'happy');
-          if (turnId && !liveCompleted[turnId]) {
-            liveCompleted[turnId] = true;
-            CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow(), day: chatDayKey(Date.now()) });
+          if (looksLikeToolTranscript(finalText)) {
+            addActivity(el, 'tool', turnId, finalText);
+            finishActivities(el, turnId);
+            liveText(el, '', false);
+            liveAvatar(el, 'work');
+          } else {
+            finishActivities(el, turnId);
+            var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
+            liveText(el, finalText, false);
+            liveAvatar(el, 'happy');
+            if (turnId && !liveCompleted[turnId]) {
+              liveCompleted[turnId] = true;
+              CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow(), day: chatDayKey(Date.now()) });
+            }
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -1637,7 +1701,12 @@
           livePresence(el, false);
           setSessionStatus('');
           finishActivities(el, turnId);
-          liveText(el, '已停止回复', false);
+          if (liveSteeredTurns[turnId]) {
+            liveText(el, '', false);
+            delete liveSteeredTurns[turnId];
+          } else {
+            liveText(el, '已停止回复', false);
+          }
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -1824,10 +1893,35 @@
         CHAT_OUTBOX_UPDATED_AT = Date.now();
         scheduleOutboxDrain();
       }
+      async function interruptForSteer() {
+        var ids = Object.keys(livePendingTurns);
+        if (liveCurrentTurn && ids.indexOf(liveCurrentTurn) < 0) ids.unshift(liveCurrentTurn);
+        if (!ids.length) return true;
+        for (var ii = 0; ii < ids.length; ii++) {
+          var id = String(ids[ii] || '');
+          if (!id) continue;
+          try {
+            liveSteeredTurns[id] = true;
+            await T.cancel(id);
+            applyLiveEvent({ type: 'cancelled', turn_id: id, reason: 'steer' });
+          } catch (err) {
+            if (err && (err.status === 404 || err.status === 409)) {
+              delete livePendingTurns[id];
+              if (liveCurrentTurn === id) liveCurrentTurn = '';
+              delete liveSteeredTurns[id];
+              continue;
+            }
+            delete liveSteeredTurns[id];
+            throw err;
+          }
+        }
+        liveSetCancel(false);
+        return true;
+      }
       async function drainOutbox() {
         clearTimeout(liveOutboxTimer);
         if (CHAT_OUTBOX_BUSY || (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) || !live || liveStopped) return;
-        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) return;
+        if (liveSendInFlight) return;
 
         if (!CHAT_OUTBOX_RETRY) {
           if (outboxWaitMs() > 0) {
@@ -1846,6 +1940,9 @@
         CHAT_OUTBOX_BUSY = true;
         liveSendInFlight += 1;
         try {
+          if (liveCurrentTurn || Object.keys(livePendingTurns).length) {
+            await interruptForSteer();
+          }
           var accepted = await T.sendText(batch.text, batch.messageId);
           CHAT_OUTBOX.splice(0, batch.count);
           CHAT_OUTBOX_RETRY = null;
@@ -1872,8 +1969,7 @@
 
         /* New bubbles typed after this batch started remain in CHAT_OUTBOX and are grouped separately.
            On failure CHAT_OUTBOX_RETRY preserves the exact same payload + id for idempotent retry. */
-        if (live && !liveCurrentTurn && !Object.keys(livePendingTurns).length
-            && (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY)) {
+        if (live && (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY)) {
           scheduleOutboxDrain();
         }
       }
