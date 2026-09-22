@@ -1434,7 +1434,6 @@
             CHAT_LOG.push({ who: 'ai', html: esc(finalText), activity: finalActivity, time: clockNow() });
           }
           if (turnId) delete livePendingTurns[turnId];
-          if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
           setSessionStatus('');
