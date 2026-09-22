@@ -292,8 +292,25 @@ class GatewayConfigLoadersMixin:
         return name or None
 
     def _effective_busy_mode(self, source: SessionSource, attr: str) -> str:
-        """Busy mode from the routed profile snapshot (``attr``: ``_busy_input_mode`` / ``_busy_text_mode``)."""
+        """Busy mode from an adapter preference, then routed-profile/global defaults.
+
+        Port-bound clients such as Kissne Mobile can declare messenger-style FIFO input without
+        changing the operator's global busy policy for Telegram/Discord/etc.
+        """
         fallback = getattr(self, attr, "interrupt")
+        adapter = None
+        try:
+            adapter = self._adapter_for_source(source)
+        except Exception:
+            adapter = None
+        preference_attr = (
+            "preferred_busy_input_mode" if attr == "_busy_input_mode"
+            else "preferred_busy_text_mode"
+        )
+        preferred = str(getattr(adapter, preference_attr, "") or "").strip().lower()
+        allowed = {"interrupt", "queue", "steer"} if attr == "_busy_input_mode" else {"interrupt", "queue"}
+        if preferred in allowed:
+            return preferred
         profile_name = self._busy_profile_name_for_source(source)
         if not profile_name:
             return fallback
