@@ -855,6 +855,7 @@
   function pushLog(m) {
     if (m && !m.day) m.day = chatDayKey(Date.now());
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
+    if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     CHAT_LOG.push(m);
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
@@ -1450,10 +1451,26 @@
         return match ? match[1] : '';
       }
       function hydrateHistory(history) {
-        var optimistic = CHAT_LOG.filter(function (m) {
-          return m && m.who !== 'sys' && m.optimistic;
+        /* Never use role+text equality to reconcile fresh local messages. Repeated identical
+           messages are valid, and stale bootstrap history can otherwise swallow the newest one.
+           Local rows that have received a Hermes turn ref are matched by message_ref; rows still
+           waiting for acceptance remain unbound and are kept until a later bootstrap can bind them. */
+        var previousLocal = CHAT_LOG.filter(function (m) {
+          return m && m.who !== 'sys' && m.localOwned;
         });
         var clientSystem = CHAT_LOG.filter(function (m) { return m && m.who === 'sys' && m.localOnly; });
+        var localByRef = Object.create(null);
+        var unboundLocal = [];
+        previousLocal.forEach(function (m) {
+          var ref = String(m.messageRef || '');
+          if (!ref) {
+            unboundLocal.push(m);
+            return;
+          }
+          if (!localByRef[ref]) localByRef[ref] = [];
+          localByRef[ref].push(m);
+        });
+
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
         (history || []).forEach(function (item) {
@@ -1461,11 +1478,23 @@
           var role = String(item.role || '');
           var rawText = String(item.text);
           if (role === 'system') {
-            CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at) });
+            CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
             return;
           }
           if (role !== 'user' && role !== 'assistant') return;
-          var turnId = turnIdFromMessageRef(item.message_ref);
+
+          var messageRef = String(item.message_ref || '');
+          var localRows = messageRef && localByRef[messageRef];
+          if (localRows && localRows.length) {
+            localRows.forEach(function (m) {
+              m.optimistic = false;
+              CHAT_LOG.push(m);
+            });
+            delete localByRef[messageRef];
+            return;
+          }
+
+          var turnId = turnIdFromMessageRef(messageRef);
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
@@ -1481,27 +1510,17 @@
             activity: activity,
             time: historyClock(item.created_at),
             day: chatDayKey(item.created_at),
+            messageRef: messageRef,
+            turnId: turnId,
+            localOwned: false,
             optimistic: false
           });
         });
 
-        /* A route/button remount can happen before the Runtime transcript catches up. Keep local rows
-           until the same role+content is observed server-side; use counts so repeated identical messages
-           reconcile one-for-one instead of vanishing or duplicating. */
-        var serverCounts = Object.create(null);
-        CHAT_LOG.forEach(function (m) {
-          if (!m || m.who === 'sys') return;
-          var key = m.who + '\u0000' + String(m.html || '');
-          serverCounts[key] = Number(serverCounts[key] || 0) + 1;
+        Object.keys(localByRef).forEach(function (ref) {
+          localByRef[ref].forEach(function (m) { CHAT_LOG.push(m); });
         });
-        optimistic.forEach(function (m) {
-          var key = m.who + '\u0000' + String(m.html || '');
-          if (serverCounts[key] > 0) {
-            serverCounts[key] -= 1;
-            return;
-          }
-          CHAT_LOG.push(m);
-        });
+        unboundLocal.forEach(function (m) { CHAT_LOG.push(m); });
         clientSystem.forEach(function (m) {
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
@@ -1725,7 +1744,17 @@
             liveAvatar(el, 'happy');
             if (turnId && !liveCompleted[turnId]) {
               liveCompleted[turnId] = true;
-              CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow(), day: chatDayKey(Date.now()) });
+              CHAT_LOG.push({
+                who: 'ai',
+                html: chatHtmlFromWire(finalText),
+                activity: finalActivity,
+                time: clockNow(),
+                day: chatDayKey(Date.now()),
+                messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
+                turnId: turnId,
+                localOwned: true,
+                optimistic: true
+              });
             }
           }
           if (turnId) delete livePendingTurns[turnId];
@@ -1920,10 +1949,10 @@
         if (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) return;
         liveOutboxTimer = setTimeout(drainOutbox, outboxWaitMs());
       }
-      function queueOutboundText(text) {
+      function queueOutboundText(text, logEntry) {
         var value = String(text || '').trim();
         if (!value) return;
-        CHAT_OUTBOX.push({ text: value });
+        CHAT_OUTBOX.push({ text: value, log: logEntry || null });
         CHAT_OUTBOX_UPDATED_AT = Date.now();
         scheduleOutboxDrain();
       }
@@ -1963,10 +1992,12 @@
             return;
           }
           var count = CHAT_OUTBOX.length;
+          var pendingItems = CHAT_OUTBOX.slice(0, count);
           CHAT_OUTBOX_RETRY = {
             count: count,
-            text: CHAT_OUTBOX.slice(0, count).map(function (item) { return item.text; }).join('\n'),
-            messageId: nextMessageId()
+            text: pendingItems.map(function (item) { return item.text; }).join('\n'),
+            messageId: nextMessageId(),
+            logs: pendingItems.map(function (item) { return item.log; }).filter(Boolean)
           };
         }
 
@@ -1982,6 +2013,11 @@
           CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
           if (acceptedTurn) {
+            (batch.logs || []).forEach(function (logEntry) {
+              if (!logEntry) return;
+              logEntry.messageRef = 'turn:' + acceptedTurn + ':user';
+              logEntry.turnId = acceptedTurn;
+            });
             livePendingTurns[acceptedTurn] = true;
             liveCurrentTurn = acceptedTurn;
             liveSetCancel(true);
@@ -2019,8 +2055,8 @@
         /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
         CHAT_USER_INPUT_AT = 0;
         append(meMsg(esc(v), '', clockNow()));
-        pushLog({ who: 'me', html: esc(v), time: clockNow() });
-        queueOutboundText(v);
+        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        queueOutboundText(v, localLog);
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
@@ -2075,11 +2111,17 @@
             return;
           }
           var html = attachmentMsg(result, kind);
+          var turn = String(result.turn_id || '');
           append(meMsg(html, '', clockNow()));
-          pushLog({ who: 'me', html: html, time: clockNow() });
+          pushLog({
+            who: 'me',
+            html: html,
+            time: clockNow(),
+            messageRef: turn ? 'turn:' + turn + ':user' : '',
+            turnId: turn
+          });
           setPlusPanel(false);
           setSessionStatus('');
-          var turn = String(result.turn_id || '');
           if (turn) {
             livePendingTurns[turn] = true;
             liveCurrentTurn = turn;
@@ -2123,10 +2165,10 @@
         var s2 = pick(STICKERS, e.currentTarget.getAttribute('data-stk'), STICKERS[0].k);
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
-        pushLog({ who: 'me', html: html, time: clockNow() });
+        var stickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
         /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
            先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) queueOutboundText('[表情包：' + s2.label + ']');
+        if (live) queueOutboundText('[表情包：' + s2.label + ']', stickerLog);
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         setStickerPanel(false);
@@ -2260,8 +2302,8 @@
         var sk = pick(STICKERS, skKey, STICKERS[0].k);
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
-        pushLog({ who: 'me', html: html, time: clockNow() });
-        if (live) queueOutboundText('[表情包：' + sk.label + ']');
+        var routedStickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
+        if (live) queueOutboundText('[表情包：' + sk.label + ']', routedStickerLog);
       }
 
       async function onSessionDrawerClick(e) {
