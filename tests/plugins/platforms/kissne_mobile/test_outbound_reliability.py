@@ -212,3 +212,85 @@ def test_unacked_replies_survive_a_runtime_restart_and_acked_ones_do_not(tmp_pat
     assert "unacked reply" not in texts, (
         "an acked reply came back after the restart — the ack cursor is not durable: "
         f"{after.get('events')}")
+
+
+def test_interim_commentary_does_not_close_the_turn(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="inspect this", message_id="m-commentary")
+                await adapter.send(
+                    INSTALLATION, "I will inspect the files.", metadata={"_interim_send": True})
+                before_final = await _drain(port, token, 0)
+                pending_before_final = adapter.device_store().pending_turn_id(INSTALLATION)
+                await adapter.send(INSTALLATION, "Done.")
+                after_final = await _drain(port, token, 0)
+            finally:
+                await stop(adapter)
+        return turn, before_final, pending_before_final, after_final
+
+    turn, before_final, pending_before_final, after_final = run(scenario())
+    events = before_final.get("events") or []
+    commentary = [
+        event for event in events
+        if event.get("presentation") == "commentary"
+        and event.get("text") == "I will inspect the files."
+    ]
+    assert commentary, f"interim commentary must be typed separately: {events}"
+    assert not [event for event in events if event.get("type") == "completed"], (
+        f"commentary must not close the turn: {events}")
+    assert pending_before_final == turn["turn_id"], "commentary closed the pending turn"
+    completed = [
+        event for event in (after_final.get("events") or [])
+        if event.get("type") == "completed"
+    ]
+    assert completed and completed[-1].get("text") == "Done."
+
+
+def test_tool_progress_is_separate_from_visible_draft_text(tmp_path):
+    async def scenario():
+        from gateway.stream_events import ToolCallChunk
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(
+                    port, token, text="check stickers", message_id="m-tool-activity")
+                marker = adapter.format_tool_event(ToolCallChunk(
+                    tool_name="terminal",
+                    args={"command": 'grep -n "sticker" plugins/platforms/kissne_mobile/adapter.py'},
+                    preview="grep sticker adapter.py",
+                    index=3,
+                ))
+                frame = "I will check the implementation.\n\n---\n" + str(marker)
+                await adapter.send_draft(INSTALLATION, 77, frame)
+                await adapter.send_draft(INSTALLATION, 77, frame)
+                payload = await _drain(port, token, 0)
+            finally:
+                await stop(adapter)
+        return turn, payload
+
+    turn, payload = run(scenario())
+    events = payload.get("events") or []
+    activity = [event for event in events if event.get("presentation") == "tool_progress"]
+    visible = [
+        event for event in events
+        if event.get("type") == "delta" and event.get("presentation") == "assistant_text"
+    ]
+    assert len(activity) == 1, f"repeated cumulative frames duplicated Activity: {events}"
+    assert activity[-1].get("activity", {}).get("label") == "查找表情包发送逻辑"
+    assert activity[-1].get("turn_id") == turn["turn_id"]
+    assert len(visible) == 1 and visible[-1].get("text") == "I will check the implementation."
+    assert all("grep -n" not in str(event.get("text") or "") for event in visible), (
+        f"raw terminal command leaked into assistant text: {visible}")

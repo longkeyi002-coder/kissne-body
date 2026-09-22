@@ -491,7 +491,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     def _clear_draft_state(self, installation_id: str) -> None:
         installation = str(installation_id or "")
-        for key in [key for key in self._draft_text_last if key[0] == installation]:
+        keys = set(self._draft_text_last) | set(self._draft_activity_seen)
+        for key in [key for key in keys if key[0] == installation]:
             self._draft_text_last.pop(key, None)
             self._draft_activity_seen.pop(key, None)
 
