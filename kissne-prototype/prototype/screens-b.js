@@ -1,6 +1,6 @@
 /* =====================================================================
    Kissne 手机端 UI · screens-b.js
-   页面 07–10：记忆库 / 设备管理 / 设置 / 通知与弹窗
+   页面 07–14：记忆库 / 设备管理 / 设置 / 通知 / Skills / MCP / 运维
    ===================================================================== */
 (function () {
   'use strict';
@@ -789,5 +789,52 @@
     }
   });
 
+
+
+  /* =====================================================================
+     13 Skills
+     ===================================================================== */
+  K.registerScreen({
+    no: '13', id: 'skills', name: 'Skills', route: '#/skills', tab: null,
+    purpose: 'Kissne 的 Skills 管理入口。只展示真实 Runtime 数据；Mobile Adapter 尚未暴露管理接口时明确显示未接入。',
+    out: ['#/home', '#/settings'],
+    states: [{ key: 'default', label: '默认' }],
+    render: function () {
+      return '<div class="screen">'
+        + appbar({ title: 'Skills', sub: '给叶青栩扩展可复用能力', back: '#/home' })
+        + '<div class="screen__body">'
+        + sectionTitle('技能管理')
+        + card(
+            listRow({ title: '已安装 Skills', sub: '仅显示 Hermes Runtime 的真实安装状态', icon: 'box' })
+            + listRow({ title: '安装 / 更新', sub: '后续从 Skills 管理接口直接操作', icon: 'plus' }),
+            { tight: true }
+          )
+        + note('当前 Mobile Adapter 还没有暴露 Skills 列表与安装接口，因此这里不会伪造“已安装”条目。接入后本页直接读取真实 Runtime。')
+        + '</div></div>';
+    }
+  });
+
+  /* =====================================================================
+     14 MCP
+     ===================================================================== */
+  K.registerScreen({
+    no: '14', id: 'mcp', name: 'MCP', route: '#/mcp', tab: null,
+    purpose: 'Kissne 的 MCP Server 管理入口。只展示真实连接状态；未接入控制接口时不生成演示服务器。',
+    out: ['#/home', '#/settings'],
+    states: [{ key: 'default', label: '默认' }],
+    render: function () {
+      return '<div class="screen">'
+        + appbar({ title: 'MCP', sub: '连接外部工具与数据源', back: '#/home' })
+        + '<div class="screen__body">'
+        + sectionTitle('MCP Servers')
+        + card(
+            listRow({ title: '服务器列表', sub: '接入后显示真实 MCP Server 与连接状态', icon: 'server' })
+            + listRow({ title: '添加 MCP', sub: '后续支持地址、认证与启停配置', icon: 'plus' }),
+            { tight: true }
+          )
+        + note('当前 Mobile Adapter 尚未暴露 MCP 管理接口，所以本页不会显示假的服务器。后续接线后再开放新增、启停和配置。')
+        + '</div></div>';
+    }
+  });
 
 })();

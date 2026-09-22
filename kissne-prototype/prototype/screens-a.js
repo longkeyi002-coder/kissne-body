@@ -107,7 +107,7 @@
   K.registerScreen({
     no: '04', id: 'home', name: '首页 / 控制台', route: '#/home', tab: 'entry',
     purpose: 'Kissne 入口页。优先读取客户端 bootstrap 缓存；仅冷启动、手动刷新或认证失效时重新探测。',
-    out: ['#/chat', '#/universe', '#/memory', '#/device', '#/settings', '#/notifications'],
+    out: ['#/chat', '#/universe', '#/memory', '#/skills', '#/mcp', '#/device', '#/settings', '#/notifications'],
     states: HOME_STATES,
     render: function (ctx) {
       var part = dayPart(ctx);
@@ -154,13 +154,15 @@
         { t: '返回常用', ic: 'home',    to: '#/home' }
       ] : [
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
+        { t: 'Skills',   ic: 'box',    to: '#/skills' },
+        { t: 'MCP',      ic: 'link',   to: '#/mcp' },
         { t: '设备管理', ic: 'plug',   to: '#/device' },
         { t: '会话列表', ic: 'chat',   to: '#/sessions' },
         { t: '通知',     ic: 'bell',   to: '#/notifications' },
         { t: '运维',     ic: 'server', to: '#/admin' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
         { t: '表情包',   ic: 'smile',  to: '#/stickers' },
-        { t: '更多',     ic: 'box',    to: '#/home?state=more' }
+        { t: '更多',     ic: 'home',   to: '#/home?state=more' }
       ];
       var appgrid = '<div class="appgrid">' + APPS.map(function (a) {
         return '<a class="appgrid__item" data-nav="' + a.to + '">'
@@ -651,21 +653,54 @@
     return html;
   }
 
-  function stickerFromWire(text) {
-    var raw = String(text == null ? '' : text).trim();
-    var m = /^\[表情包：(.+)\]$/.exec(raw);
-    if (!m || !STICKERS || !STICKERS.length) return '';
-    var label = m[1];
+  function stickerMatch(query) {
+    var q = String(query == null ? '' : query).trim();
+    if (!q || !STICKERS || !STICKERS.length) return null;
     for (var i = 0; i < STICKERS.length; i++) {
-      if (STICKERS[i].label === label || STICKERS[i].k === label) {
-        return '<span class="stkmsg">' + K.sticker(STICKERS[i].k, { alt: STICKERS[i].label }) + '</span>';
+      if (STICKERS[i].label === q || STICKERS[i].k === q) return STICKERS[i];
+    }
+    var compact = q.replace(/\s+/g, '').toLowerCase();
+    for (var j = 0; j < STICKERS.length; j++) {
+      var label = String(STICKERS[j].label || '').replace(/\s+/g, '').toLowerCase();
+      var key = String(STICKERS[j].k || '').toLowerCase();
+      var tail = label.indexOf('·') >= 0 ? label.slice(label.indexOf('·') + 1) : label;
+      if (compact && (label.indexOf(compact) >= 0 || compact.indexOf(tail) >= 0 || key.indexOf(compact) >= 0)) {
+        return STICKERS[j];
       }
     }
-    return '';
+    return null;
+  }
+  function stickerFromWire(text) {
+    var raw = String(text == null ? '' : text).trim();
+    var m = /^\[表情包\s*[:：]\s*([^\]]+)\]$/.exec(raw);
+    var sticker = m ? stickerMatch(m[1]) : null;
+    return sticker
+      ? '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>'
+      : '';
   }
   function chatHtmlFromWire(text) {
-    var sticker = stickerFromWire(text);
-    return sticker || esc(String(text == null ? '' : text));
+    var raw = String(text == null ? '' : text);
+    var exact = stickerFromWire(raw);
+    if (exact) return exact;
+    var re = /\[表情包\s*[:：]\s*([^\]]+)\]/g;
+    var out = '';
+    var last = 0;
+    var matched = false;
+    var m;
+    while ((m = re.exec(raw))) {
+      out += esc(raw.slice(last, m.index));
+      var sticker = stickerMatch(m[1]);
+      if (sticker) {
+        out += '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
+        matched = true;
+      } else {
+        out += esc(m[0]);
+      }
+      last = m.index + m[0].length;
+    }
+    if (!matched) return esc(raw);
+    out += esc(raw.slice(last));
+    return out;
   }
   function clockNow() {
     var d = new Date();
@@ -1369,7 +1404,8 @@
         var value = String(text || '');
         box.hidden = !value;
         box.classList.toggle('is-pending', !!pending && !!value);
-        box.textContent = value;
+        if (pending) box.textContent = value;
+        else box.innerHTML = chatHtmlFromWire(value);
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1490,7 +1526,7 @@
           liveAvatar(el, 'happy');
           if (turnId && !liveCompleted[turnId]) {
             liveCompleted[turnId] = true;
-            CHAT_LOG.push({ who: 'ai', html: esc(finalText), activity: finalActivity, time: clockNow() });
+            CHAT_LOG.push({ who: 'ai', html: chatHtmlFromWire(finalText), activity: finalActivity, time: clockNow() });
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }

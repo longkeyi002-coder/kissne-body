@@ -1016,6 +1016,8 @@ def register(ctx) -> None:
             "You are also reachable from the Kissne Mobile Android app. Reply normally: the app "
             "polls this Runtime for your text. The app holds a device-scoped token only — it never "
             "sees an API key, a provider key or any Runtime management credential, so never ask it "
-            "for one or send one over this channel."
+            "for one or send one over this channel. When a sticker fits naturally, you may send one "
+            "with the compact marker [表情包：关键词]; the app matches that keyword against the user's "
+            "Kissne sticker library and renders the real sticker. Do not invent a sticker if no match is likely."
         ),
     )
