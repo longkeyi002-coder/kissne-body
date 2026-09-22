@@ -716,8 +716,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         body = payload or {}
         code = str(body.get("pairing_code") or "").strip()
         installation = str(body.get("installation_id") or "").strip()
-        if not installation:
-            return _error_response("installation_id_required", 400)
+        if not code or not installation:
+            return _error_response("pairing_code_and_installation_id_required", 400)
         try:
             store = self.device_store()
         except Exception:
