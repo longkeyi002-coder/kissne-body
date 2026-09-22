@@ -574,7 +574,21 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   pointer-events:none;contain:layout paint;
 }
 .msg__ava .ph{width:34px!important;height:34px!important;min-width:34px;min-height:34px}
-.msg__ava .ph__asset{transition:none!important;opacity:1!important;transform:none!important}
+.msg__ava .ph__asset{transition:opacity .14s ease!important;opacity:1!important;transform:none!important}
+.msg--ai.is-awaiting .msg__ava{animation:aiPresenceFloat 1.8s ease-in-out infinite}
+.msg--ai.is-awaiting .msg__time{display:none}
+@keyframes aiPresenceFloat{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(-2px)}
+}
+.aipresence{
+  display:flex;align-items:center;gap:7px;min-height:28px;padding:2px 1px;
+  color:var(--ink-3);font-size:11px;line-height:1.35;
+}
+.aipresence[hidden]{display:none!important}
+.aipresence__text{white-space:nowrap}
+.aipresence .dots{transform:translateY(1px)}
+.aipresence .dots i{width:3px;height:3px}
 
 /* —— 真实思考 / 工具过程：一个折叠区 —— */
 .activity-history{width:100%;max-width:100%;min-width:0}
