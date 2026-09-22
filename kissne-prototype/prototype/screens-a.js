@@ -440,13 +440,43 @@
   }
 
   var CHAT_LOG = [];
-  var TURN_ACTIVITY = Object.create(null);
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
+  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v1';
+  var TURN_ACTIVITY = Object.create(null);
+
+  function loadTurnActivity() {
+    try {
+      var raw = localStorage.getItem(TURN_ACTIVITY_STORAGE_KEY);
+      var parsed = raw ? JSON.parse(raw) : {};
+      if (!parsed || typeof parsed !== 'object') return;
+      Object.keys(parsed).slice(-120).forEach(function (id) {
+        var row = parsed[id];
+        if (!row || typeof row !== 'object') return;
+        TURN_ACTIVITY[id] = {
+          reasoning: Array.isArray(row.reasoning) ? row.reasoning.filter(function (x) { return typeof x === 'string' && x; }).slice(-40) : [],
+          tools: Array.isArray(row.tools) ? row.tools.filter(function (x) { return typeof x === 'string' && x; }).slice(-40) : [],
+          done: !!row.done,
+          updatedAt: Number(row.updatedAt) || 0
+        };
+      });
+    } catch (e) {}
+  }
+  function persistTurnActivity() {
+    try {
+      var ids = Object.keys(TURN_ACTIVITY).sort(function (a, b) {
+        return (Number(TURN_ACTIVITY[a] && TURN_ACTIVITY[a].updatedAt) || 0)
+          - (Number(TURN_ACTIVITY[b] && TURN_ACTIVITY[b].updatedAt) || 0);
+      });
+      while (ids.length > 120) delete TURN_ACTIVITY[ids.shift()];
+      localStorage.setItem(TURN_ACTIVITY_STORAGE_KEY, JSON.stringify(TURN_ACTIVITY));
+    } catch (e) {}
+  }
+  loadTurnActivity();
 
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: [], tools: [], done: false };
+      TURN_ACTIVITY[id] = { reasoning: [], tools: [], done: false, updatedAt: Date.now() };
     }
     return TURN_ACTIVITY[id];
   }
@@ -458,6 +488,8 @@
     if (bucket.length && bucket[bucket.length - 1] === text) return false;
     bucket.push(text);
     if (bucket.length > 40) bucket.splice(0, bucket.length - 40);
+    state.updatedAt = Date.now();
+    persistTurnActivity();
     return true;
   }
   function activitySummary(state, closed) {
@@ -500,6 +532,8 @@
     if (!raw) return '';
     var state = activityForTurn(turnId);
     state.done = true;
+    state.updatedAt = Date.now();
+    persistTurnActivity();
     var html = activityMarkupForTurn(turnId, true);
     if (html) FINAL_ACTIVITY_BY_TEXT[raw] = html;
     else delete FINAL_ACTIVITY_BY_TEXT[raw];
@@ -1073,18 +1107,42 @@
         var line = bootstrapStatusEl.querySelector('.msg__sysline');
         if (line) line.textContent = text;
       }
+      function turnIdFromMessageRef(ref) {
+        var match = /^turn:(kbm_turn_[^:]+):(user|assistant)$/.exec(String(ref || ''));
+        return match ? match[1] : '';
+      }
       function hydrateHistory(history) {
+        var clientSystem = CHAT_LOG.filter(function (m) { return m && m.who === 'sys' && m.localOnly; });
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
         (history || []).forEach(function (item) {
-          if (!item || (item.role !== 'user' && item.role !== 'assistant') || typeof item.text !== 'string') return;
+          if (!item || typeof item.text !== 'string') return;
+          var role = String(item.role || '');
           var rawText = String(item.text);
+          if (role === 'system') {
+            CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at) });
+            return;
+          }
+          if (role !== 'user' && role !== 'assistant') return;
+          var turnId = turnIdFromMessageRef(item.message_ref);
+          var activity = '';
+          if (role === 'assistant' && turnId) {
+            var state = TURN_ACTIVITY[turnId];
+            if (state && ((state.reasoning && state.reasoning.length) || (state.tools && state.tools.length))) {
+              state.done = true;
+              activity = activityMarkupForTurn(turnId, true);
+            }
+          }
+          if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
           CHAT_LOG.push({
-            who: item.role === 'user' ? 'me' : 'ai',
+            who: role === 'user' ? 'me' : 'ai',
             html: chatHtmlFromWire(rawText),
-            activity: item.role === 'assistant' ? (FINAL_ACTIVITY_BY_TEXT[rawText] || '') : '',
+            activity: activity,
             time: historyClock(item.created_at)
           });
+        });
+        clientSystem.forEach(function (m) {
+          if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
         jumpTo(list.scrollHeight);
@@ -1120,6 +1178,8 @@
       function finishActivities(el, turnId) {
         var state = activityForTurn(turnId || 'pending');
         state.done = true;
+        state.updatedAt = Date.now();
+        persistTurnActivity();
         paintActivity(el, turnId, true);
       }
       function liveText(el, text, pending) {
@@ -1202,7 +1262,10 @@
           return;
         }
         if (type === 'notice') {
-          append(sysMsg(esc(event.text || '系统通知'), clockNow()));
+          var noticeText = String(event.text || '系统通知');
+          var noticeTime = clockNow();
+          append(sysMsg(esc(noticeText), noticeTime));
+          pushLog({ who: 'sys', html: esc(noticeText), time: noticeTime, localOnly: true });
           return;
         }
         if (type === 'approval_required') {
@@ -1312,8 +1375,16 @@
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
-          if (liveCurrentTurn) liveSetCancel(true);
-          else liveSetCancel(false);
+          if (liveCurrentTurn) {
+            liveSetCancel(true);
+            var pendingState = TURN_ACTIVITY[liveCurrentTurn];
+            if (pendingState && ((pendingState.reasoning && pendingState.reasoning.length)
+                || (pendingState.tools && pendingState.tools.length))) {
+              var pendingEl = liveEnsure(liveCurrentTurn);
+              pendingState.done = false;
+              paintActivity(pendingEl, liveCurrentTurn, false);
+            }
+          } else liveSetCancel(false);
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) {
