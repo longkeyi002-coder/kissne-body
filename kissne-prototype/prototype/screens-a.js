@@ -878,6 +878,12 @@
         list.insertAdjacentHTML('beforeend', html);
         jumpTo(list.scrollHeight);
       }
+      function appendSystemNotice(text) {
+        var html = esc(String(text || '系统通知'));
+        var time = clockNow();
+        append(sysMsg(html, time));
+        pushLog({ who: 'sys', html: html, time: time, localOnly: true });
+      }
       var T = window.KissneTransport;
       var live = !!(T && T.hasToken());
       var liveStopped = false;
@@ -1049,7 +1055,7 @@
         e.preventDefault();
         e.stopPropagation();
         if (!live || !T || typeof T.setModel !== 'function') {
-          append(sysMsg('请先连接 Kissne，再切换模型或思考强度。', clockNow()));
+          appendSystemNotice('请先连接 Kissne，再切换模型或思考强度。');
           return;
         }
         var kind = String(el.getAttribute('data-hermes-control') || '');
@@ -1070,7 +1076,7 @@
             var msg = err && err.payload && err.payload.error
               ? String(err.payload.error)
               : 'Hermes 切换失败';
-            append(sysMsg(esc(msg), clockNow()));
+            appendSystemNotice(msg);
           });
       }
 
@@ -1262,10 +1268,7 @@
           return;
         }
         if (type === 'notice') {
-          var noticeText = String(event.text || '系统通知');
-          var noticeTime = clockNow();
-          append(sysMsg(esc(noticeText), noticeTime));
-          pushLog({ who: 'sys', html: esc(noticeText), time: noticeTime, localOnly: true });
+          appendSystemNotice(event.text || '系统通知');
           return;
         }
         if (type === 'approval_required') {
