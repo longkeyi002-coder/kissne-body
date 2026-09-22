@@ -1343,10 +1343,29 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if current is not None:
             groups.append(current)
 
+        # Keep the long-standing contract: history_cap is a physical message-row ceiling.
+        # Select only whole user-led groups from the tail, so the response is <= cap rows and never
+        # starts in the middle of a turn. A single pathological turn larger than the cap is omitted
+        # rather than split into an orphaned tool/final fragment.
         cap = max(0, self._history_cap)
-        truncated = bool(cap and len(groups) > cap)
-        if truncated:
-            groups = groups[-cap:]
+        all_groups = groups
+        if cap:
+            selected: List[Dict[str, Any]] = []
+            used = 0
+            for group in reversed(all_groups):
+                size = len(group.get("items") or [])
+                if size > cap:
+                    if not selected:
+                        continue
+                    break
+                if used + size > cap:
+                    break
+                selected.append(group)
+                used += size
+            groups = list(reversed(selected))
+            truncated = len(groups) < len(all_groups)
+        else:
+            truncated = False
 
         items: List[Dict[str, Any]] = []
         represented_turn_ids: set[str] = set()
