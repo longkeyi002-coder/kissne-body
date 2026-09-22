@@ -298,9 +298,9 @@
       body = '<div class="sessiondrawer__empty">服务器暂无会话</div>';
     } else {
       body = sessions.map(function (s) {
-        var active = (CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
-          || (CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY)
-          || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
+        var active = CURRENT_SESSION_ID
+          ? s.id === CURRENT_SESSION_ID
+          : (CURRENT_SESSION_KEY ? s.key === CURRENT_SESSION_KEY : !!s.active);
         return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
           + ((s.key || s.id) ? '' : ' disabled')
@@ -1494,8 +1494,9 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
-            s.active = (!!CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
-              || (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
+            s.active = CURRENT_SESSION_ID
+              ? s.id === CURRENT_SESSION_ID
+              : (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
           });
           paintSessionList();
           hydrateHistory(boot.history || []);
@@ -1840,11 +1841,14 @@
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
         if (!key && !id) return;
-        if ((id && id === CURRENT_SESSION_ID) || (key && key === CURRENT_SESSION_KEY)) {
+        var alreadyCurrent = CURRENT_SESSION_ID
+          ? (id && id === CURRENT_SESSION_ID)
+          : (CURRENT_SESSION_KEY && key && key === CURRENT_SESSION_KEY);
+        if (alreadyCurrent) {
           setSessionDrawer(false);
           return;
         }
-        if (liveSendInFlight || liveCurrentTurn) {
+        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) {
           setSessionStatus('当前消息或回复尚未结束，请先完成或停止后再切换会话。');
           setSessionDrawer(false);
           return;
