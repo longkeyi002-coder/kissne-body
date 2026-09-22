@@ -197,7 +197,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
                 if (::bridge.isInitialized) {
-                    bridge.uploadPickedAttachment(requestId, kind, name, mime, bytes)
+                    val attachmentId = "local-attachment-" + java.util.UUID.randomUUID().toString()
+                    bridge.emitAttachmentSelected(attachmentId, kind, name, mime, bytes.size)
+                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes)
                 }
             } catch (error: Throwable) {
                 if (::bridge.isInitialized) {
