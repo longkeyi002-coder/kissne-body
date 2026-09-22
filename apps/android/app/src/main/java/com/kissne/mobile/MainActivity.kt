@@ -191,6 +191,10 @@ class MainActivity : AppCompatActivity() {
                     ?: if (kind == "photo") "photo" else "file"
                 val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
                     ?: "application/octet-stream"
+                val size = queryAttachmentSize(uri)
+                if (::bridge.isInitialized) {
+                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size)
+                }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
                 if (::bridge.isInitialized) {
                     bridge.uploadPickedAttachment(requestId, kind, name, mime, bytes)
@@ -217,6 +221,18 @@ class MainActivity : AppCompatActivity() {
             }.orEmpty()
         } catch (_: Throwable) {
             ""
+        }
+    }
+
+    private fun queryAttachmentSize(uri: Uri): Long {
+        return try {
+            contentResolver.query(
+                uri, arrayOf(OpenableColumns.SIZE), null, null, null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+            } ?: 0L
+        } catch (_: Throwable) {
+            0L
         }
     }
 
