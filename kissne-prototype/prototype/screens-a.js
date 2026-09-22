@@ -1514,15 +1514,13 @@
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
-          liveCurrentTurn = '';
-          liveSetCancel(false);
+          liveCurrentTurn = restoredPendingTurn;
+          liveSetCancel(!!restoredPendingTurn);
           if (restoredPendingTurn) {
             livePendingTurns[restoredPendingTurn] = true;
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
             if (pendingState && ((pendingState.reasoning && pendingState.reasoning.length)
                 || (pendingState.tools && pendingState.tools.length))) {
-              liveCurrentTurn = restoredPendingTurn;
-              liveSetCancel(true);
               var pendingEl = liveEnsure(restoredPendingTurn);
               pendingState.done = false;
               paintActivity(pendingEl, restoredPendingTurn, false);
@@ -1619,7 +1617,11 @@
           var accepted = await T.sendText(item.text, item.messageId);
           CHAT_OUTBOX.shift();
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
-          if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
+          if (acceptedTurn) {
+            livePendingTurns[acceptedTurn] = true;
+            liveCurrentTurn = acceptedTurn;
+            liveSetCancel(true);
+          }
           scheduleLivePoll(0);
         } catch (err) {
           setSessionStatus('消息暂未送达，连接恢复后会继续发送。');
