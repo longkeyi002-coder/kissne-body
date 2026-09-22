@@ -37,7 +37,7 @@
       if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       return 'android-web-' + r;
     }
-    function nativeCall(action, payload, timeoutMs) {
+    function nativeCall(action, payload, timeoutMs, hooks) {
       return new Promise(function (resolve, reject) {
         var id = 'n' + (++nativeSeq);
         var timer = setTimeout(function () {
@@ -48,7 +48,8 @@
         }, Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000);
         nativePending[id] = {
           resolve: function (value) { clearTimeout(timer); resolve(value); },
-          reject: function (error) { clearTimeout(timer); reject(error); }
+          reject: function (error) { clearTimeout(timer); reject(error); },
+          selected: hooks && typeof hooks.selected === 'function' ? hooks.selected : null
         };
         try {
           Native.request(id, action, JSON.stringify(payload || {}));
@@ -60,6 +61,13 @@
       });
     }
     window.KissneNativeBridge = {
+      attachmentSelected: function (id, raw) {
+        var waiter = nativePending[id];
+        if (!waiter || typeof waiter.selected !== 'function') return;
+        var payload = {};
+        try { payload = raw ? JSON.parse(raw) : {}; } catch (e) { payload = {}; }
+        waiter.selected(payload);
+      },
       resolve: function (id, ok, raw) {
         var waiter = nativePending[id];
         if (!waiter) return;
@@ -126,8 +134,8 @@
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
-      pickAttachment: function (kind) {
-        return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000);
+      pickAttachment: function (kind, hooks) {
+        return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000, hooks || null);
       },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort, provider) {
