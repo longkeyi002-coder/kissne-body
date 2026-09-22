@@ -10,6 +10,7 @@ class PrototypeBridge(
     private val webView: WebView,
     private val store: MobileSessionStore,
     private val checkUpdates: () -> Unit = {},
+    private val startVoiceInput: (String) -> Unit = {},
 ) {
     /*
      * Keep chat transport isolated from slower control-plane calls.
@@ -219,6 +220,10 @@ class PrototypeBridge(
 
     @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
+        if (action == "voiceInput") {
+            webView.post { startVoiceInput(id) }
+            return
+        }
         val executor = when (bridgeLane(action)) {
             BridgeLane.TRANSPORT -> transportExecutor
             BridgeLane.BACKGROUND -> backgroundExecutor
@@ -278,6 +283,10 @@ class PrototypeBridge(
                 )
             }
         }
+    }
+
+    fun resolveNative(id: String, ok: Boolean, payload: JSONObject) {
+        resolve(id, ok, payload)
     }
 
     private fun resolve(id: String, ok: Boolean, payload: JSONObject) {
