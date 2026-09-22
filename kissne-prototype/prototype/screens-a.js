@@ -494,9 +494,33 @@
   var CHAT_OUTBOX_UPDATED_AT = 0;
   var CHAT_USER_INPUT_AT = 0;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
-  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v2';
+  var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v3';
   var TURN_ACTIVITY = Object.create(null);
 
+  function toolCallKey(value, fallbackIndex) {
+    var row = value && typeof value === 'object' ? value : {};
+    return cleanActivityText(
+      row.tool_call_id || row.call_id || row.id || row.tool_id || '',
+      ''
+    ) || ('tool:' + String(row.index != null ? row.index : (fallbackIndex || 0)));
+  }
+  function toolCallStatus(value, fallback) {
+    var raw = cleanActivityText(value, '').toLowerCase();
+    if (/fail|error|denied|reject/.test(raw)) return 'failed';
+    if (/complete|completed|done|success|ok|result/.test(raw)) return 'completed';
+    if (/running|progress|start|pending|call/.test(raw)) return 'running';
+    return fallback || 'running';
+  }
+  function activityForTurn(turnId) {
+    var id = String(turnId || 'pending');
+    if (!TURN_ACTIVITY[id]) {
+      TURN_ACTIVITY[id] = { reasoning: false, toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
+    }
+    var state = TURN_ACTIVITY[id];
+    if (!Array.isArray(state.toolOrder)) state.toolOrder = [];
+    if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
+    return state;
+  }
   function loadTurnActivity() {
     try {
       var raw = localStorage.getItem(TURN_ACTIVITY_STORAGE_KEY);
@@ -505,19 +529,23 @@
       Object.keys(parsed).slice(-120).forEach(function (id) {
         var row = parsed[id];
         if (!row || typeof row !== 'object') return;
-        var tools = [];
-        (Array.isArray(row.tools) ? row.tools : []).forEach(function (x) {
-          var label = typeof x === 'string' ? toolActivityLabel(x) : String(x && x.label || '');
-          if (label && tools.indexOf(label) < 0) tools.push(label);
+        var state = activityForTurn(id);
+        state.reasoning = !!row.reasoning;
+        state.done = !!row.done;
+        state.updatedAt = Number(row.updatedAt) || 0;
+        (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
+          var tool = row.toolCalls && row.toolCalls[key];
+          if (!tool || typeof tool !== 'object') return;
+          state.toolOrder.push(String(key));
+          state.toolCalls[String(key)] = {
+            id: String(tool.id || key),
+            name: cleanActivityText(tool.name || '', ''),
+            label: cleanActivityText(tool.label || '', '使用工具'),
+            detail: activityDetailText(tool.detail || ''),
+            result: activityDetailText(tool.result || ''),
+            status: toolCallStatus(tool.status, 'completed')
+          };
         });
-        TURN_ACTIVITY[id] = {
-          reasoning: Array.isArray(row.reasoning) && row.reasoning.length ? ['思考'] : [],
-          tools: tools.slice(-12),
-          counts: row.counts && typeof row.counts === 'object' ? row.counts : {},
-          details: row.details && typeof row.details === 'object' ? row.details : {},
-          done: !!row.done,
-          updatedAt: Number(row.updatedAt) || 0
-        };
       });
     } catch (e) {}
   }
@@ -533,58 +561,71 @@
   }
   loadTurnActivity();
 
-  function activityForTurn(turnId) {
-    var id = String(turnId || 'pending');
-    if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: [], tools: [], counts: {}, details: {}, done: false, updatedAt: Date.now() };
-    }
-    if (!TURN_ACTIVITY[id].counts) TURN_ACTIVITY[id].counts = {};
-    if (!TURN_ACTIVITY[id].details) TURN_ACTIVITY[id].details = {};
-    return TURN_ACTIVITY[id];
-  }
-  function appendActivity(turnId, kind, value) {
+  function upsertToolActivity(turnId, value, phase) {
     var state = activityForTurn(turnId);
-    if (kind === 'reasoning') {
-      if (!state.reasoning.length) state.reasoning.push('思考');
-      state.updatedAt = Date.now();
-      persistTurnActivity();
-      return true;
+    var row = value && typeof value === 'object' ? value : { detail: value };
+    var key = toolCallKey(row, state.toolOrder.length);
+    var current = state.toolCalls[key];
+    if (!current) {
+      current = {
+        id: key,
+        name: '',
+        label: '',
+        detail: '',
+        result: '',
+        status: 'running'
+      };
+      state.toolCalls[key] = current;
+      state.toolOrder.push(key);
+      if (state.toolOrder.length > 24) {
+        var dropped = state.toolOrder.shift();
+        delete state.toolCalls[dropped];
+      }
     }
-    var structured = value && typeof value === 'object' ? value : null;
-    var label = cleanActivityText(structured && structured.label || '', '') || toolActivityLabel(value);
-    if (!label) return false;
-    var count = Number(state.counts[label] || 0) + 1;
-    state.counts[label] = count;
-    var detail = structured
-      ? activityDetailText(structured.detail || structured.preview || structured.tool || label)
-      : activityDetailText(value);
-    if (detail) state.details[label] = detail;
-    if (state.tools.indexOf(label) < 0) {
-      state.tools.push(label);
-      if (state.tools.length > 12) state.tools.splice(0, state.tools.length - 12);
-    }
+    current.name = cleanActivityText(row.tool_name || row.tool || row.function_name || current.name, current.name);
+    current.label = cleanActivityText(row.label || '', current.label)
+      || toolActivityLabel(current.name || row.detail || row.preview || value);
+    var detail = activityDetailText(row.arguments || row.detail || row.preview || '');
+    var result = activityDetailText(row.result || row.output || '');
+    if (detail) current.detail = detail;
+    if (result) current.result = result;
+    current.status = toolCallStatus(row.status || phase, phase === 'result' ? 'completed' : 'running');
+    if (phase === 'result' && current.status === 'running') current.status = 'completed';
     state.updatedAt = Date.now();
     persistTurnActivity();
     return true;
   }
+  function appendActivity(turnId, kind, value) {
+    var state = activityForTurn(turnId);
+    if (kind === 'reasoning') {
+      state.reasoning = true;
+      state.updatedAt = Date.now();
+      persistTurnActivity();
+      return true;
+    }
+    return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
+  }
   function activityRows(state, closed) {
     var rows = [];
-    if (state.reasoning && state.reasoning.length) {
-      var thoughtDetail = closed ? '已完成这一步处理。' : '正在分析并处理当前请求。';
+    if (state.reasoning) {
       rows.push('<div class="activity-item">'
         + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
         + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(thoughtDetail) + '</div></div>');
+        + '<div class="activity-detail" hidden>' + esc(closed ? '已完成这一步处理。' : '正在分析并处理当前请求。') + '</div></div>');
     }
-    (state.tools || []).forEach(function (label) {
-      var count = Number(state.counts && state.counts[label] || 1);
-      var detail = String(state.details && state.details[label] || label);
-      rows.push('<div class="activity-item">'
+    (state.toolOrder || []).forEach(function (key) {
+      var tool = state.toolCalls[key];
+      if (!tool) return;
+      var status = closed && tool.status === 'running' ? 'completed' : tool.status;
+      var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
+      var detail = tool.detail || tool.name || tool.label || '工具调用';
+      if (tool.result) detail += '\n\n结果：' + tool.result;
+      rows.push('<div class="activity-item" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-icon">' + icon(toolActivityIcon(label), 13) + '</span>'
-        + '<span class="activity-label">' + esc(label) + '</span>'
-        + (count > 1 ? '<span class="activity-count">×' + count + '</span>' : '')
+        + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
+        + '<span class="activity-label">' + esc(tool.label || '使用工具') + '</span>'
+        + '<span class="activity-count">' + esc(statusText) + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
         + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
     });
@@ -604,6 +645,10 @@
     if (!raw) return '';
     var state = activityForTurn(turnId);
     state.done = true;
+    state.toolOrder.forEach(function (key) {
+      var tool = state.toolCalls[key];
+      if (tool && tool.status === 'running') tool.status = 'completed';
+    });
     state.updatedAt = Date.now();
     persistTurnActivity();
     var html = activityMarkupForTurn(turnId, true);
@@ -1322,9 +1367,11 @@
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
         (history || []).forEach(function (item) {
-          if (!item || typeof item.text !== 'string') return;
+          if (!item) return;
           var role = String(item.role || '');
-          var rawText = String(item.text);
+          var rawText = typeof item.text === 'string' ? String(item.text) : '';
+          if (role === 'tool') return;
+          if (role === 'assistant' && (item.tool_calls || item.activity_only) && !rawText.trim()) return;
           if (role === 'system') {
             CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
             return;
@@ -1346,7 +1393,7 @@
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
-            if (state && ((state.reasoning && state.reasoning.length) || (state.tools && state.tools.length))) {
+            if (state && (state.reasoning || (state.toolOrder && state.toolOrder.length))) {
               state.done = true;
               activity = activityMarkupForTurn(turnId, true);
             }
@@ -1496,14 +1543,21 @@
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
-        if (presentation === 'tool_progress') {
+        if (presentation === 'tool_progress' || presentation === 'tool_call' || presentation === 'tool_result') {
           var toolActivity = event.activity && typeof event.activity === 'object'
-            ? event.activity
-            : { label: event.activity_label || '', detail: event.activity_detail || event.text || '', tool: event.tool_name || '' };
+            ? Object.assign({}, event.activity)
+            : {};
+          toolActivity.tool_call_id = toolActivity.tool_call_id || event.tool_call_id || event.call_id || event.id || '';
+          toolActivity.tool_name = toolActivity.tool_name || event.tool_name || event.function_name || toolActivity.tool || '';
+          toolActivity.arguments = toolActivity.arguments || event.arguments || event.function_arguments || '';
+          toolActivity.result = toolActivity.result || event.result || event.output || '';
+          toolActivity.label = toolActivity.label || event.activity_label || '';
+          toolActivity.detail = toolActivity.detail || event.activity_detail || event.text || '';
+          toolActivity.status = toolActivity.status || event.status || (presentation === 'tool_result' ? 'completed' : 'running');
           var progressEl = liveEnsure(turnId);
           livePresence(progressEl, false);
-          addActivity(progressEl, 'tool', turnId, toolActivity);
-          liveAvatar(progressEl, 'work');
+          addActivity(progressEl, presentation === 'tool_result' ? 'tool_result' : 'tool', turnId, toolActivity);
+          liveAvatar(progressEl, presentation === 'tool_result' ? 'read' : 'work');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
@@ -1694,12 +1748,12 @@
             livePendingTurns[restoredPendingTurn] = true;
             var pendingEl = liveEnsure(restoredPendingTurn);
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
-            if (pendingState && ((pendingState.reasoning && pendingState.reasoning.length)
-                || (pendingState.tools && pendingState.tools.length))) {
+            if (pendingState && (pendingState.reasoning
+                || (pendingState.toolOrder && pendingState.toolOrder.length))) {
               livePresence(pendingEl, false);
               pendingState.done = false;
               paintActivity(pendingEl, restoredPendingTurn, false);
-              liveAvatar(pendingEl, pendingState.tools && pendingState.tools.length ? 'work' : 'think');
+              liveAvatar(pendingEl, pendingState.toolOrder && pendingState.toolOrder.length ? 'work' : 'think');
             } else {
               livePresence(pendingEl, true, '正在继续处理刚才的消息');
               liveAvatar(pendingEl, 'read');
