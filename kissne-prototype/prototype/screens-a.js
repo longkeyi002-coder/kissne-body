@@ -2123,26 +2123,46 @@
         btn.disabled = true;
         setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
         try {
-          /* Native pickAttachment resolves only after the selected bytes have been uploaded and
-             accepted by /messages. We therefore do not fake an upload bubble before selection
-             returns: the picker does not expose filename/size early enough for a truthful card. */
-          var result = await T.pickAttachment(kind);
+          var localId = 'attachment-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+          var selectedMeta = null;
+          var selectedLog = null;
+          function paintAttachment(state, meta) {
+            var html = attachmentMsg(meta || selectedMeta || {}, kind, state, localId);
+            var node = root.querySelector('[data-attachment-id="' + localId + '"]');
+            if (node) node.outerHTML = html;
+            if (selectedLog) {
+              selectedLog.html = html;
+              persistChatLog();
+            }
+            return html;
+          }
+          var result = await T.pickAttachment(kind, {
+            selected: function (meta) {
+              selectedMeta = meta || {};
+              if (chatLogSessionId() !== sendSession) return;
+              var html = attachmentMsg(selectedMeta, kind, 'sending', localId);
+              append(meMsg(html, '', clockNow()));
+              selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+              setPlusPanel(false);
+              setSessionStatus('');
+            }
+          });
           if (!result || result.cancelled) {
             setSessionStatus('');
             return;
           }
           var turn = String(result.turn_id || '');
-          var localId = 'attachment-' + (turn || Date.now().toString(36));
           bindChatLogSession(sendSession);
-          var html = attachmentMsg(result, kind, 'sent', localId);
-          append(meMsg(html, '', clockNow()));
-          pushLog({
-            who: 'me',
-            html: html,
-            time: clockNow(),
-            messageRef: turn ? 'turn:' + turn + ':user' : '',
-            turnId: turn
-          });
+          if (!selectedLog) {
+            var html = attachmentMsg(result, kind, 'sent', localId);
+            if (chatLogSessionId() === sendSession) append(meMsg(html, '', clockNow()));
+            selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+          } else {
+            paintAttachment('sent', Object.assign({}, selectedMeta || {}, result || {}));
+          }
+          selectedLog.messageRef = turn ? 'turn:' + turn + ':user' : '';
+          selectedLog.turnId = turn;
+          persistChatLog();
           setPlusPanel(false);
           setSessionStatus('');
           if (turn) {
@@ -2155,6 +2175,7 @@
           }
           scheduleLivePoll(0);
         } catch (err) {
+          if (typeof selectedLog !== 'undefined' && selectedLog) paintAttachment('failed', selectedMeta || {});
           var code = String(err && err.payload && err.payload.error || err && err.message || '');
           setSessionStatus(code === 'attachment_too_large'
             ? '文件太大，请选择 20 MB 以内的文件。'
