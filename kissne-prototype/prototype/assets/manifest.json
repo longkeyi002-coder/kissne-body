@@ -143,6 +143,7 @@
   },
   "charStates": {
     "FOX_CHAT_AVATAR": {
+      "read": "real/fox-chat-avatar-read.webp",
       "confused": "real/fox-chat-avatar-confused.webp",
       "happy": "real/fox-chat-avatar-happy.webp",
       "panic": "real/fox-chat-avatar-panic.webp",
