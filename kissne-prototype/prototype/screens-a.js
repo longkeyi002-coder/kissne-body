@@ -737,7 +737,7 @@
         + '<input class="composer__input" type="text" aria-label="输入消息"'
         + ((offline || netlost) ? ' disabled' : '')
         + ' placeholder="' + (offline ? '设备离线，无法发送' : (netlost ? '网络已断开' : '说点什么…')) + '">'
-        + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入">' + icon('mic', 19) + '</button>'
+        + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入" data-voice-input aria-pressed="false">' + icon('mic', 19) + '</button>'
         + '<button class="sendbtn"' + dis + ' aria-label="发送">' + icon('send', 18) + '</button>'
         + '</div>';
 
@@ -853,6 +853,7 @@
 
       var input = root.querySelector('input.composer__input');
       var send  = root.querySelector('.sendbtn');
+      var mic   = root.querySelector('[data-voice-input]');
       var list  = root.querySelector('.chatbody');
       if (!input || !send || !list) return null;
       var p = ctx && ctx.params;      /* 放在最前面：下面的 find / sticker 都要用 */
@@ -1408,6 +1409,54 @@
           if (err && err.status === 409) { liveCurrentTurn = ''; liveSetCancel(false); }
         }
       }
+      function voiceErrorText(err) {
+        var code = String(err && err.payload && err.payload.error || err && err.message || '');
+        if (code === 'microphone_permission_denied') return '需要麦克风权限才能使用语音输入';
+        if (code === 'speech_no_match' || code === 'speech_timeout') return '没有识别到语音，请再试一次';
+        if (code === 'speech_recognition_unavailable') return '当前设备没有可用的系统语音识别服务';
+        if (code === 'speech_network_error') return '语音识别网络不可用，请重试';
+        if (code === 'speech_recognizer_busy') return '语音识别正在忙，请稍后再试';
+        return '语音输入失败，请重试';
+      }
+      async function onVoiceInput(e) {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        if (!mic || mic.disabled) return;
+        if (!T || typeof T.voiceInput !== 'function') {
+          setSessionStatus('当前版本不支持语音输入');
+          return;
+        }
+        mic.disabled = true;
+        mic.classList.add('is-listening');
+        mic.setAttribute('aria-pressed', 'true');
+        mic.setAttribute('aria-label', '正在听');
+        setSessionStatus('正在听…');
+        try {
+          var result = await T.voiceInput();
+          var text = String(result && result.text || '').trim();
+          if (!text) {
+            setSessionStatus('没有识别到语音，请再试一次');
+            return;
+          }
+          var before = String(input.value || '');
+          input.value = before
+            ? before + (/\s$/.test(before) ? '' : ' ') + text
+            : text;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.focus();
+          setSessionStatus('');
+        } catch (err) {
+          setSessionStatus(voiceErrorText(err));
+        } finally {
+          mic.disabled = false;
+          mic.classList.remove('is-listening');
+          mic.setAttribute('aria-pressed', 'false');
+          mic.setAttribute('aria-label', '语音输入');
+        }
+      }
+
       async function push() {
         if (liveSendInFlight) return;
         if (live && send.getAttribute('data-live-cancel') === '1') {
@@ -1735,6 +1784,7 @@
       function onKey(e) { if (e.key === 'Enter') push(); }
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
+      if (mic) mic.addEventListener('click', onVoiceInput);
       return function () {
         root.removeEventListener('click', onChatMenuTap);
         root.removeEventListener('click', onHermesControl);
@@ -1756,6 +1806,7 @@
         list.removeEventListener('click', onTlogTap);
         list.removeEventListener('click', onApprovalTap);
         send.removeEventListener('click', push);
+        if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
         clearTimeout(livePollTimer);
         /* 演出用的一串定时器：切页/重渲染时必须全清，
