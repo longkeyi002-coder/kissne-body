@@ -370,81 +370,56 @@ async def _handle_admin_sessions(request: Any) -> Any:
         "sessions": sessions,
     })
 
-def _memory_id(target: str, text: str) -> str:
-    return hashlib.sha256((target + "\0" + text).encode("utf-8")).hexdigest()[:24]
+def _memory_provider_status() -> tuple[bool, str]:
+    """Return whether Kissne has an explicit memory provider configured.
 
+    Hermes' built-in MEMORY.md / USER.md files are agent-local curated notes, not a Kissne
+    memory provider. Mobile must not reinterpret those files as provider-backed memories.
+    """
+    try:
+        from hermes_cli.config import load_config
 
-def _builtin_memory_snapshot() -> list[dict[str, Any]]:
-    from tools.memory_tool import load_on_disk_store
-
-    store = load_on_disk_store()
-    items: list[dict[str, Any]] = []
-    for target, source in (("memory", "MEMORY.md"), ("user", "USER.md")):
-        if not store.target_enabled(target):
-            continue
-        for text in list(store._entries_for(target)):
-            value = str(text or "").strip()
-            if not value:
-                continue
-            items.append({
-                "id": _memory_id(target, value),
-                "target": target,
-                "source": source,
-                "text": value,
-                "deletable": True,
-            })
-    return items
+        cfg = load_config() or {}
+    except Exception:
+        return False, ""
+    memory_cfg = cfg.get("memory") if isinstance(cfg.get("memory"), dict) else {}
+    provider = str(memory_cfg.get("provider") or "").strip()
+    return bool(provider), provider
 
 
 # --- GET/DELETE /admin/memory ---
 async def _handle_admin_memory(request: Any) -> Any:
-    """Expose only real built-in Hermes curated memories; never demo rows."""
+    """Return provider-backed Kissne memories only; never synthesize rows from Hermes files."""
     from aiohttp import web
 
     installation = await _authenticated_admin(request)
     if not installation:
         return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        items = await asyncio.to_thread(_builtin_memory_snapshot)
-        return web.json_response({"ok": True, "items": items, "count": len(items)})
-    except Exception as exc:
-        logger.warning("[kissne_mobile] failed to read memory: %s", exc, exc_info=True)
-        return web.json_response({"error": "memory_unavailable"}, status=503)
+
+    configured, provider = await asyncio.to_thread(_memory_provider_status)
+    # No provider implementation is wired into Kissne Mobile yet. An empty provider is a valid,
+    # explicit state: the UI should show "未配置记忆供应商", not old MEMORY.md/USER.md rows.
+    return web.json_response({
+        "ok": True,
+        "provider_configured": configured,
+        "provider": provider,
+        "items": [],
+        "count": 0,
+    })
 
 
 async def _handle_admin_memory_delete(request: Any) -> Any:
-    """Delete one exact built-in memory selected by its stable content id."""
+    """Deletion is unavailable until a real Kissne memory provider owns these records."""
     from aiohttp import web
-    from tools.memory_tool import load_on_disk_store
 
     installation = await _authenticated_admin(request)
     if not installation:
         return web.json_response({"error": "unauthorized"}, status=401)
-
-    memory_id = str(request.match_info.get("memory_id") or "").strip()
-    if not memory_id:
-        return web.json_response({"error": "memory_id_required"}, status=400)
-
-    try:
-        items = await asyncio.to_thread(_builtin_memory_snapshot)
-        item = next((entry for entry in items if entry["id"] == memory_id), None)
-        if item is None:
-            return web.json_response({"error": "memory_not_found"}, status=404)
-
-        def _delete() -> dict:
-            store = load_on_disk_store()
-            return store.remove(item["target"], item["text"])
-
-        result = await asyncio.to_thread(_delete)
-        if not bool(result.get("success")):
-            return web.json_response(
-                {"error": "memory_delete_failed", "detail": result.get("error", "")},
-                status=409,
-            )
-        return web.json_response({"ok": True, "deleted_id": memory_id})
-    except Exception as exc:
-        logger.warning("[kissne_mobile] failed to delete memory: %s", exc, exc_info=True)
-        return web.json_response({"error": "memory_delete_failed"}, status=500)
+    configured, provider = await asyncio.to_thread(_memory_provider_status)
+    return web.json_response({
+        "error": "memory_provider_not_wired" if configured else "memory_provider_unconfigured",
+        "provider": provider,
+    }, status=409)
 
 
 async def _run_deploy(deploy_type: str, cmd: list[str], log_path: Path) -> None:
