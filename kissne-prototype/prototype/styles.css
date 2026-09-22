@@ -558,6 +558,33 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .dd__foot{padding:8px 13px;font-size:10px;color:var(--ink-3);background:var(--g1);
   border-top:1px solid var(--line)}
 
+/* Hermes Dashboard 同构：左列供应商，右列该供应商的模型。 */
+.modelpick{
+  position:absolute;top:60px;left:8px;right:8px;z-index:40;
+  height:min(56vh,430px);display:grid;grid-template-columns:minmax(112px,38%) minmax(0,62%);
+  background:#fff;border:1px solid var(--line-2);border-radius:14px;
+  box-shadow:0 14px 34px rgba(20,20,25,.16);overflow:hidden;
+}
+.modelpick__col{min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.modelpick__providers{border-right:1px solid var(--line)}
+.modelpick__head{flex:none;padding:9px 10px;font-size:10.5px;font-weight:700;color:var(--ink-2);
+  background:var(--g1);border-bottom:1px solid var(--line)}
+.modelpick__list{flex:1;min-height:0;overflow-y:auto}
+.modelpick__row{display:flex;align-items:center;gap:6px;width:100%;min-width:0;
+  padding:9px 10px;border:0;border-bottom:1px solid var(--line);background:transparent;
+  color:var(--ink-2);font:inherit;text-align:left;cursor:pointer;-webkit-appearance:none;appearance:none}
+.modelpick__row:last-child{border-bottom:0}
+.modelpick__row.is-active{background:var(--g2)}
+.modelpick__row:active{background:var(--g3)}
+.modelpick__main{flex:1;min-width:0;font-size:11.5px;color:var(--ink);
+  white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.modelpick__sub{flex:none;max-width:54px;font-size:8.5px;color:var(--g6);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modelpick__models .modelpick__row{min-height:38px}
+.modelpick__empty{padding:18px 10px;font-size:10.5px;line-height:1.5;color:var(--ink-3)}
+.modelpick__foot{position:absolute;left:0;right:0;bottom:0;padding:6px 10px;
+  font-size:9px;color:var(--ink-3);background:rgba(255,255,255,.94);border-top:1px solid var(--line)}
+
 /* 底部给**悬浮**的输入框让出位置（--composer-h）：
    停着不动时，最后一条消息能停在输入框上方，而不是被它盖住。
    注意：**打字时这里不再追加高度** —— 那等于把消息往上推。
@@ -1144,6 +1171,15 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   border:1px solid var(--line);background:var(--g1);
   font-size:9.5px;color:var(--ink-3);
 }
+.attachmsg{
+  display:flex;align-items:center;gap:9px;min-width:150px;max-width:100%;
+  padding:2px 0;color:var(--ink)
+}
+.attachmsg__ic{flex:none;width:30px;height:30px;border-radius:9px;background:var(--g1);
+  display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
+.attachmsg__body{min-width:0;display:flex;flex-direction:column;gap:1px}
+.attachmsg__body b{font-size:11.5px;font-weight:650;overflow-wrap:anywhere;word-break:break-word}
+.attachmsg__body small{font-size:9.5px;color:var(--ink-3)}
 /* —— 输入栏上方的磁吸快捷条：表情包 / 语音通话 / 屏幕共享 ——
    吸附在输入框上沿（负下边距让它压住一点点），不再是「＋」里的浮层入口。 */
 .quickbar{

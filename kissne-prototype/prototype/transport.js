@@ -126,6 +126,9 @@
       ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
+      pickAttachment: function (kind) {
+        return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000);
+      },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort) {
         return nativeCall('setModel', {
@@ -328,6 +331,10 @@
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
     return request('/mobile/messages', { method: 'POST', body: body });
   }
+
+  function pickAttachment() {
+    return Promise.reject(new ApiError(0, { error: 'native_attachment_picker_required' }, 'native_attachment_picker_required'));
+  }
   function poll() { return request('/mobile/messages?cursor=' + encodeURIComponent(cursor()), { method: 'GET' }); }
   async function ack(nextCursor) {
     var n = Number(nextCursor);
@@ -399,6 +406,7 @@
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
+    pickAttachment: pickAttachment,
     poll: poll,
     ack: ack,
     cancel: cancel,

@@ -350,88 +350,114 @@
 
   function applyHermesModelOptions(payload) {
     payload = payload || {};
-    var currentModel = String(payload.current_model || MODEL_CURRENT || '');
-    var reportedCurrentProvider = String(payload.current_provider || '').trim();
-    var providerLabels = Object.create(null);
+    var currentModel = String(payload.model || payload.current_model || MODEL_CURRENT || '').trim();
+    var reportedCurrentProvider = String(payload.provider || payload.current_provider || '').trim();
+    var providerRows = Array.isArray(payload.providers) ? payload.providers : [];
+    var nextProviders = [];
+    var nextModels = [];
 
-    var nextModels = (payload.models || []).map(function (item) {
-      if (typeof item === 'string') {
-        var value = String(item || '').trim();
-        if (!value) return null;
-        var slash = value.indexOf('/');
-        var provider = slash > 0 ? value.slice(0, slash) : '';
-        var modelLabel = slash > 0 ? value.slice(slash + 1) : value;
-        if (!provider && value === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
-        if (provider) providerLabels[provider] = provider;
-        return { k: value, v: modelLabel, d: provider || 'Hermes', p: provider };
+    if (providerRows.length) {
+      providerRows.forEach(function (raw) {
+        raw = raw || {};
+        var slug = String(raw.slug || raw.provider || raw.id || '').trim();
+        if (!slug) return;
+        var name = String(raw.name || raw.label || slug).trim() || slug;
+        var models = Array.isArray(raw.models) ? raw.models : [];
+        nextProviders.push({
+          k: slug,
+          v: name,
+          d: String(raw.warning || ((raw.total_models != null ? raw.total_models : models.length) + ' 个模型')),
+          current: !!raw.is_current
+        });
+        models.forEach(function (entry) {
+          var model = typeof entry === 'string'
+            ? String(entry || '').trim()
+            : String((entry || {}).model || (entry || {}).id || (entry || {}).value || '').trim();
+          if (!model) return;
+          var wire = model.indexOf('/') > 0 ? model : slug + '/' + model;
+          var label = typeof entry === 'string'
+            ? model
+            : String((entry || {}).label || model);
+          if (label.indexOf(slug + '/') === 0) label = label.slice(slug.length + 1);
+          nextModels.push({ k: wire, raw: model, v: label, d: name, p: slug });
+        });
+      });
+      if (!reportedCurrentProvider) {
+        var currentRow = nextProviders.filter(function (p) { return p.current; })[0];
+        if (currentRow) reportedCurrentProvider = currentRow.k;
       }
+    } else {
+      /* Compatibility with older Mobile control payloads. */
+      var providerLabels = Object.create(null);
+      nextModels = (payload.models || []).map(function (item) {
+        if (typeof item === 'string') {
+          var value = String(item || '').trim();
+          if (!value) return null;
+          var slash = value.indexOf('/');
+          var provider = slash > 0 ? value.slice(0, slash) : '';
+          var label = slash > 0 ? value.slice(slash + 1) : value;
+          if (!provider && value === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
+          if (provider) providerLabels[provider] = provider;
+          return { k: value, raw: label, v: label, d: provider || 'Hermes', p: provider };
+        }
+        item = item || {};
+        var provider = String(item.provider || item.provider_slug || item.provider_id || '').trim();
+        var model = String(item.model || item.id || item.value || '').trim();
+        if (!model) return null;
+        if (!provider && model.indexOf('/') > 0) provider = model.slice(0, model.indexOf('/'));
+        if (!provider && model === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
+        var key = provider && model.indexOf('/') < 0 ? provider + '/' + model : model;
+        var providerLabel = String(item.provider_label || provider || '').trim();
+        if (provider) providerLabels[provider] = providerLabel || provider;
+        return {
+          k: key,
+          raw: model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model,
+          v: String(item.label || (model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model) || key),
+          d: providerLabel || provider || 'Hermes',
+          p: provider
+        };
+      }).filter(function (item) { return !!(item && item.k); });
+      nextProviders = Object.keys(providerLabels).map(function (key) {
+        var count = nextModels.filter(function (m) { return m.p === key; }).length;
+        return { k: key, v: providerLabels[key] || key, d: count + ' 个模型' };
+      });
+    }
 
-      item = item || {};
-      var provider = String(item.provider || item.provider_slug || item.provider_id || '').trim();
-      var model = String(item.model || item.id || item.value || '').trim();
-      if (!model) return null;
-      if (!provider && model.indexOf('/') > 0) provider = model.slice(0, model.indexOf('/'));
-      if (!provider && model === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
-      var key = provider
-        ? (model.indexOf(provider + '/') === 0 ? model : provider + '/' + model)
-        : model;
-      var providerLabel = String(item.provider_label || provider || '').trim();
-      if (provider) providerLabels[provider] = providerLabel || provider;
-      return {
-        k: key,
-        v: String(item.label || (model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model) || key),
-        d: providerLabel || provider || 'Hermes',
-        p: provider
-      };
-    }).filter(function (item) { return !!(item && item.k); });
-
-    var nextEfforts = (payload.efforts || []).map(function (item) {
+    var nextEfforts = (payload.efforts || payload.reasoning_efforts || []).map(function (item) {
       if (typeof item === 'string') {
         var value = String(item || '').trim();
         return { k: value, v: value, d: 'Hermes reasoning effort' };
       }
       item = item || {};
       var value = String(item.value || item.key || item.effort || '');
-      return {
-        k: value,
-        v: String(item.label || value),
-        d: 'Hermes reasoning effort'
-      };
+      return { k: value, v: String(item.label || value), d: 'Hermes reasoning effort' };
     }).filter(function (item) { return !!item.k; });
 
+    PROVIDERS = nextProviders.length
+      ? nextProviders
+      : [{ k: '', v: '暂无供应商', d: 'Hermes Dashboard 未返回可选供应商' }];
     MODELS = nextModels.length
       ? nextModels
-      : [{ k: '', v: '暂无可用模型', d: 'Hermes 未返回可用模型', p: '' }];
-
-    /* Provider 必须来自上面的真实可用模型，不读取静态 provider catalog。 */
-    PROVIDERS = Object.keys(providerLabels).filter(function (key) {
-      return nextModels.some(function (m) { return m.p === key; });
-    }).map(function (key) {
-      var count = nextModels.filter(function (m) { return m.p === key; }).length;
-      return { k: key, v: providerLabels[key] || key, d: count + ' 个当前可用模型' };
-    });
-    if (!PROVIDERS.length && reportedCurrentProvider) {
-      PROVIDERS = [{ k: reportedCurrentProvider, v: reportedCurrentProvider, d: '当前 Hermes Provider' }];
-    }
-    if (!PROVIDERS.length) {
-      PROVIDERS = [{ k: '', v: '暂无供应商', d: '当前模型数据未提供 Provider' }];
-    }
-
+      : [{ k: '', raw: '', v: '暂无可用模型', d: 'Hermes 未返回可用模型', p: '' }];
     EFFORTS = nextEfforts.length
       ? nextEfforts
       : [{ k: '', v: '暂无可用档位', d: 'Hermes 未返回 reasoning ladder' }];
 
     MODEL_CURRENT = currentModel;
-    var selectedModel = null;
-    for (var mi = 0; mi < MODELS.length; mi++) {
-      if (MODELS[mi].k === MODEL_CURRENT) { selectedModel = MODELS[mi]; break; }
+    var currentMatch = MODELS.filter(function (m) {
+      if (m.k === currentModel) return true;
+      if (reportedCurrentProvider && m.p === reportedCurrentProvider) {
+        return m.raw === currentModel || m.k === reportedCurrentProvider + '/' + currentModel;
+      }
+      return false;
+    })[0];
+    PROVIDER_CURRENT = reportedCurrentProvider || (currentMatch && currentMatch.p) || '';
+    if (!PROVIDER_CURRENT) {
+      var marked = PROVIDERS.filter(function (p) { return p.current; })[0];
+      PROVIDER_CURRENT = marked ? marked.k : '';
     }
-    var derivedProvider = selectedModel && selectedModel.p ? selectedModel.p : '';
-    if (!derivedProvider && MODEL_CURRENT.indexOf('/') > 0) {
-      derivedProvider = MODEL_CURRENT.slice(0, MODEL_CURRENT.indexOf('/'));
-    }
-    PROVIDER_CURRENT = derivedProvider || reportedCurrentProvider || '';
-    EFFORT_CURRENT = String(payload.current_effort || EFFORT_CURRENT || '');
+    if (currentMatch) MODEL_CURRENT = currentMatch.k;
+    EFFORT_CURRENT = String(payload.effort || payload.current_effort || EFFORT_CURRENT || '');
     MODEL_OPTIONS_ERROR = '';
     MODEL_OPTIONS_LOADED_AT = Date.now();
   }
@@ -460,68 +486,66 @@
       + '</div>';
   }
 
+  function modelPicker(providerKey, modelKey) {
+    var selectedProvider = String(providerKey || PROVIDER_CURRENT || (PROVIDERS[0] && PROVIDERS[0].k) || '');
+    var visible = modelsForProvider(selectedProvider);
+    return '<div class="modelpick" role="dialog" aria-label="切换供应商和模型">'
+      + '<div class="modelpick__col modelpick__providers">'
+      + '<div class="modelpick__head">供应商</div>'
+      + '<div class="modelpick__list">'
+      + PROVIDERS.map(function (p) {
+          return '<button type="button" class="modelpick__row' + (p.k === selectedProvider ? ' is-active' : '') + '"'
+            + (!p.k ? ' disabled' : '')
+            + ' data-provider-pick="' + esc(p.k) + '">'
+            + '<span class="modelpick__main">' + esc(p.v) + '</span>'
+            + '<span class="modelpick__sub">' + esc(p.d || '') + '</span></button>';
+        }).join('')
+      + '</div></div>'
+      + '<div class="modelpick__col modelpick__models">'
+      + '<div class="modelpick__head">模型</div>'
+      + '<div class="modelpick__list">'
+      + (visible.length ? visible.map(function (m) {
+          var active = m.k === modelKey || (m.p === PROVIDER_CURRENT && m.k === MODEL_CURRENT);
+          return '<button type="button" class="modelpick__row' + (active ? ' is-active' : '') + '"'
+            + (!m.k ? ' disabled' : '')
+            + ' data-hermes-control="model" data-hermes-provider="' + esc(selectedProvider) + '"'
+            + ' data-hermes-value="' + esc(m.k) + '" data-hermes-origin="normal">'
+            + '<span class="modelpick__main">' + esc(m.v) + '</span>'
+            + (active ? icon('check', 14) : '') + '</button>';
+        }).join('') : '<div class="modelpick__empty">这个供应商当前没有可用模型</div>')
+      + '</div></div>'
+      + (MODEL_OPTIONS_ERROR ? '<div class="modelpick__foot">' + esc(MODEL_OPTIONS_ERROR) + '</div>' : '')
+      + '</div>';
+  }
+
   /* 「+」点开后的浮层：**紧贴加号上方**弹出的小框（不是从屏幕底端滑上来的面板）。
      只剩照片 / 文件两个占位入口 —— 表情包 / 语音通话 / 屏幕共享已移到
      输入框上方的磁吸快捷条（.quickbar），不再藏在「＋」里。 */
   function plusPopLayer(origin) {
     var items = [
-      { ic: 'image', t: '照片',        d: '从相册选一张发过去', nav: '#/chat?state=' + origin },
-      { ic: 'file',  t: '文件',        d: '上传文档、压缩包等', nav: '#/chat?state=' + origin }
+      { ic: 'image', t: '照片', d: '从相册选择并发送原图', kind: 'photo' },
+      { ic: 'file',  t: '文件', d: '选择文档、压缩包等并发送', kind: 'file' }
     ];
-    return '<div class="pop">'
+    return '<div class="pop" data-plus-panel hidden>'
       + items.map(function (it) {
-          return '<a class="pop__item" data-nav="' + it.nav + '">'
-            + '<span class="pop__ic">' + icon(it.ic, 17) + '</span>'
-            + '<span class="pop__main"><span class="pop__t">' + esc(it.t) + '</span>'
-            + '<span class="pop__d">' + esc(it.d) + '</span></span></a>';
+          return '<button type="button" class="pop__item" data-attachment-kind="' + it.kind + '">'
+            + '<span class="pop__ic">' + icon(it.ic, 16) + '</span>'
+            + '<span class="pop__txt"><b>' + esc(it.t) + '</b><small>' + esc(it.d) + '</small></span></button>';
         }).join('')
       + '</div>';
   }
 
-  /* 消息两侧都带头像：AI 一侧是叶青栩的头像，我这一侧是用户头像。
-     每条消息都带时间戳 —— 真实聊天不可能没有时间。
-
-     **叶青栩的头像不是一张固定图，而是跟着状态换的** —— 思考一张、开心一张、
-     没听懂一张……换图只改 <img> 的 src（K.swapAsset），消息结构不动。
-     素材放在 assets/_inbox/，命名 = fox-chat-avatar-<state>.png；缺哪个状态
-     就自动回落到 fox-chat-avatar.png（平静），所以少给几张也不会破。
-
-     **tag** 只是占位盒上的一行小字（真素材上线后基本看不见），保留是为了
-     占位阶段还能读懂这一步在干嘛。 */
-  var AVA_STATES = {
-    idle:     '平静',        /* 兜底：普通消息、闲着 */
-    read:     '正在看消息',  /* 已接收这一批用户消息，尚未产生 reasoning/tool/text */
-    think:    '思考中',      /* 托腮 + 问号泡泡 */
-    work:     '干活中',      /* 手忙脚乱那张（暂无正脸"在忙"素材，先借它） */
-    talk:     '说话',        /* 平静微笑，正好也是兜底图 */
-    happy:    '开心',        /* 大笑 */
-    confused: '没听懂',      /* 问号（词表里留着，等页面用得上再接） */
-    sad:      '委屈 / 出错',
-    sleep:    '睡着 / 离线',
-    panic:    '卡住了'
-  };
-
-  function ava(code, tag, state) {
-    /* 头像是**透明底**素材，**不切圆形** —— 狐狸耳朵是尖的，切圆会吃掉耳朵和蝴蝶结。
-       直接按素材自己的轮廓显示（圆角/底色由 .ph--img 在 CSS 里清掉）。 */
-    return '<div class="msg__ava">'
-      + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
-      + '</div>';
+  function attachmentMsg(meta, kind) {
+    meta = meta || {};
+    var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : '文件'));
+    var size = Number(meta.size || 0);
+    var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
+    return '<span class="attachmsg">'
+      + '<span class="attachmsg__ic">' + icon(kind === 'photo' ? 'image' : 'file', 19) + '</span>'
+      + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
+      + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '') + '</span></span>';
   }
-  function aiMsg(html, cls, time, tag, state, activity) {
-    return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
-      + '<div class="msg__body">' + (activity || '')
-      + '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
-      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
-      + '</div>';
-  }
-  /* 「我」这一侧：头像是**小羊**（人人星）。
-     状态词表和狐狸共用一套（AVA_STATES），缺图自动回落兜底那张平静脸。
 
-     MY_AVA 是**模块级**的当前表情 —— 渲染时按页面状态写一次，meMsg 默认读它，
-     省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
-       设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
-  var MY_AVA = 'idle';
   function meMsg(html, meta, time, state) {
     return '<div class="msg msg--me">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
@@ -830,6 +854,7 @@
   }
   function pushLog(m) {
     if (m && !m.day) m.day = chatDayKey(Date.now());
+    if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     CHAT_LOG.push(m);
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
@@ -1000,11 +1025,11 @@
         + '<button class="qbtn" data-nav="#/call">' + icon('call', 13) + '<span>语音通话</span></button>'
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
         + '</div>';
-      var popLayer = (menu === 'plus' && !offline && !netlost) ? plusPopLayer(origin) : '';
+      var popLayer = (!offline && !netlost) ? plusPopLayer(origin) : '';
       var composer = '<div class="composer' + ((offline || netlost) ? ' is-disabled' : '') + '">'
         + popLayer
         + '<button class="composer__btn"' + dis + ' aria-label="添加"'
-        + ((offline || netlost) ? '' : ' data-nav="#/chat?state=plus-menu&from=' + origin + '"')
+        + ((offline || netlost) ? '' : ' data-plus-toggle')
         + '>' + icon('plus', 19) + '</button>'
         + '<input class="composer__input" type="text" aria-label="输入消息"'
         + ((offline || netlost) ? ' disabled' : '')
@@ -1017,16 +1042,12 @@
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
          模型 / 思考强度的下拉面板仍从这里渲染（它们锚在顶栏下方）。 */
       var renderModels = modelsForProvider(PROVIDER_CURRENT);
-      var menuLayer = menu === 'plus'
-        ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
-        : menu
-        ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
-          + (menu === 'provider'
-              ? dropdown('供应商', PROVIDERS, curProvider.k, 'provider', origin)
-              : (menu === 'model'
-                  ? dropdown('模型', renderModels, curModel.k, 'model', origin)
-                  : dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin)))
-        : '';
+      var menuLayer = (menu === 'provider' || menu === 'model')
+        ? '<div class="menuscrim" data-chat-menu-close></div>' + modelPicker(PROVIDER_CURRENT, MODEL_CURRENT)
+        : (menu === 'effort'
+          ? '<div class="menuscrim" data-chat-menu-close></div>'
+            + dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin)
+          : '');
 
       return `
       <div class="screen screen--chat${typing ? ' is-typing' : ''}">
@@ -1235,7 +1256,9 @@
         : (mountState === 'model-menu' ? 'model'
         : (mountState === 'effort-menu' ? 'effort'
           : (mountState === 'plus-menu' ? 'plus' : null)));
-      var openMenu = menu === 'provider' || menu === 'model' || menu === 'effort' ? menu : null;
+      var openMenu = menu === 'provider' || menu === 'model' ? 'model-picker'
+        : (menu === 'effort' ? 'effort' : null);
+      var pickerProvider = PROVIDER_CURRENT || (PROVIDERS[0] && PROVIDERS[0].k) || '';
 
       function updateHeaderControls() {
         var pvd = pick(PROVIDERS, PROVIDER_CURRENT, PROVIDER_CURRENT);
@@ -1247,12 +1270,12 @@
         if (pb) {
           var pv = pb.querySelector('.hsel__v');
           if (pv) pv.textContent = pvd.v || '—';
-          pb.classList.toggle('is-open', openMenu === 'provider');
+          pb.classList.toggle('is-open', openMenu === 'model-picker');
         }
         if (mb) {
           var mv = mb.querySelector('.hsel__v');
           if (mv) mv.textContent = m.v || '—';
-          mb.classList.toggle('is-open', openMenu === 'model');
+          mb.classList.toggle('is-open', openMenu === 'model-picker');
         }
         if (eb) {
           var ev = eb.querySelector('.hsel__v');
@@ -1262,6 +1285,7 @@
       }
 
       function paintChatMenu(kind) {
+        if (kind === 'provider' || kind === 'model') kind = 'model-picker';
         openMenu = kind || null;
         updateHeaderControls();
         if (!menuHost) return;
@@ -1269,16 +1293,11 @@
           menuHost.innerHTML = '';
           return;
         }
-        var pvd = pick(PROVIDERS, PROVIDER_CURRENT, PROVIDER_CURRENT);
-        var m = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
         var e = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
-        var visibleModels = modelsForProvider(PROVIDER_CURRENT);
         menuHost.innerHTML = '<div class="menuscrim" data-chat-menu-close></div>'
-          + (openMenu === 'provider'
-              ? dropdown('供应商', PROVIDERS, pvd.k, 'provider', 'normal')
-              : (openMenu === 'model'
-                ? dropdown('模型', visibleModels, m.k, 'model', 'normal')
-                : dropdown('思考强度', EFFORTS, e.k, 'effort', 'normal')));
+          + (openMenu === 'model-picker'
+            ? modelPicker(pickerProvider || PROVIDER_CURRENT, MODEL_CURRENT)
+            : dropdown('思考强度', EFFORTS, e.k, 'effort', 'normal'));
       }
 
       function refreshHermesModelControls(force) {
@@ -1327,12 +1346,24 @@
       }
 
       function onChatMenuTap(e) {
+        var providerPick = e.target && e.target.closest ? e.target.closest('[data-provider-pick]') : null;
+        if (providerPick && root.contains(providerPick)) {
+          e.preventDefault();
+          e.stopPropagation();
+          pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
+          paintChatMenu('model-picker');
+          return;
+        }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
         if (toggle && root.contains(toggle)) {
           e.preventDefault();
           e.stopPropagation();
           var kind = String(toggle.getAttribute('data-chat-menu') || '');
-          paintChatMenu(openMenu === kind ? null : kind);
+          var target = (kind === 'provider' || kind === 'model') ? 'model-picker' : kind;
+          if (target === 'model-picker' && openMenu !== 'model-picker') {
+            pickerProvider = PROVIDER_CURRENT || (PROVIDERS[0] && PROVIDERS[0].k) || '';
+          }
+          paintChatMenu(openMenu === target ? null : target);
           if (kind) refreshHermesModelControls(false);
           return;
         }
@@ -1359,28 +1390,8 @@
         if (!value) return;
         el.disabled = true;
         var modelValue = kind === 'model' ? value : '';
-        if (kind === 'provider') {
-          var candidates = modelsForProvider(value).filter(function (m) { return m.p === value && m.k; });
-          var currentProvider = PROVIDER_CURRENT || (MODEL_CURRENT.indexOf('/') > 0 ? MODEL_CURRENT.slice(0, MODEL_CURRENT.indexOf('/')) : '');
-          var currentModelId = currentProvider && MODEL_CURRENT.indexOf(currentProvider + '/') === 0
-            ? MODEL_CURRENT.slice(currentProvider.length + 1) : MODEL_CURRENT;
-          var same = candidates.filter(function (m) {
-            var id = m.p && m.k.indexOf(m.p + '/') === 0 ? m.k.slice(m.p.length + 1) : m.k;
-            return id === currentModelId;
-          })[0];
-          modelValue = (same || candidates[0] || {}).k || '';
-          if (!modelValue) {
-            el.disabled = false;
-            appendSystemNotice('这个供应商当前没有可用模型。');
-            return;
-          }
-        }
         T.setModel(modelValue, kind === 'effort' ? value : '')
           .then(function () {
-            if (kind === 'provider') {
-              PROVIDER_CURRENT = value;
-              MODEL_CURRENT = modelValue;
-            }
             if (kind === 'model') {
               MODEL_CURRENT = value;
               var selected = pick(MODELS, value, value);
@@ -1439,6 +1450,9 @@
         return match ? match[1] : '';
       }
       function hydrateHistory(history) {
+        var optimistic = CHAT_LOG.filter(function (m) {
+          return m && m.who !== 'sys' && m.optimistic;
+        });
         var clientSystem = CHAT_LOG.filter(function (m) { return m && m.who === 'sys' && m.localOnly; });
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
@@ -1466,8 +1480,27 @@
             html: chatHtmlFromWire(rawText),
             activity: activity,
             time: historyClock(item.created_at),
-            day: chatDayKey(item.created_at)
+            day: chatDayKey(item.created_at),
+            optimistic: false
           });
+        });
+
+        /* A route/button remount can happen before the Runtime transcript catches up. Keep local rows
+           until the same role+content is observed server-side; use counts so repeated identical messages
+           reconcile one-for-one instead of vanishing or duplicating. */
+        var serverCounts = Object.create(null);
+        CHAT_LOG.forEach(function (m) {
+          if (!m || m.who === 'sys') return;
+          var key = m.who + '\u0000' + String(m.html || '');
+          serverCounts[key] = Number(serverCounts[key] || 0) + 1;
+        });
+        optimistic.forEach(function (m) {
+          var key = m.who + '\u0000' + String(m.html || '');
+          if (serverCounts[key] > 0) {
+            serverCounts[key] -= 1;
+            return;
+          }
+          CHAT_LOG.push(m);
         });
         clientSystem.forEach(function (m) {
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
@@ -1475,6 +1508,7 @@
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
         jumpTo(list.scrollHeight);
       }
+
       function liveSetCancel(on) {
         if (!stop) return;
         stop.hidden = !on;
@@ -2010,6 +2044,63 @@
         }
       }
 
+      /* 「+」里的照片 / 文件使用 Android 系统选择器并真正上传给当前 Hermes turn。 */
+      var plusToggle = root.querySelector('[data-plus-toggle]');
+      var plusPanel = root.querySelector('[data-plus-panel]');
+      function setPlusPanel(open) {
+        if (plusPanel) plusPanel.hidden = !open;
+        if (plusToggle) plusToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      function onPlusToggle(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPlusPanel(plusPanel ? plusPanel.hidden : false);
+      }
+      async function onAttachmentPick(e) {
+        var btn = e.target && e.target.closest ? e.target.closest('[data-attachment-kind]') : null;
+        if (!btn || !root.contains(btn)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!live || !T || typeof T.pickAttachment !== 'function') {
+          setSessionStatus('当前版本还不能发送附件。');
+          return;
+        }
+        var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
+        btn.disabled = true;
+        setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
+        try {
+          var result = await T.pickAttachment(kind);
+          if (!result || result.cancelled) {
+            setSessionStatus('');
+            return;
+          }
+          var html = attachmentMsg(result, kind);
+          append(meMsg(html, '', clockNow()));
+          pushLog({ who: 'me', html: html, time: clockNow() });
+          setPlusPanel(false);
+          setSessionStatus('');
+          var turn = String(result.turn_id || '');
+          if (turn) {
+            livePendingTurns[turn] = true;
+            liveCurrentTurn = turn;
+            liveSetCancel(true);
+            var attachmentEl = liveEnsure(turn);
+            livePresence(attachmentEl, true, '正在查看你发来的' + (kind === 'photo' ? '照片' : '文件'));
+            liveAvatar(attachmentEl, 'read');
+          }
+          scheduleLivePoll(0);
+        } catch (err) {
+          var code = String(err && err.payload && err.payload.error || err && err.message || '');
+          setSessionStatus(code === 'attachment_too_large'
+            ? '文件太大，请选择 20 MB 以内的文件。'
+            : '附件发送失败，请重试。');
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      if (plusToggle) plusToggle.addEventListener('click', onPlusToggle);
+      root.addEventListener('click', onAttachmentPick);
+
       /* 表情面板里的贴图：点一张就发出去，然后收起面板（不跳页） */
       var stkState = (ctx && ctx.state && ctx.state !== 'empty' && ctx.state !== 'keyboard')
         ? ctx.state : 'normal';
@@ -2297,6 +2388,8 @@
         }
         clearTimeout(keyboardT);
 
+        if (plusToggle) plusToggle.removeEventListener('click', onPlusToggle);
+        root.removeEventListener('click', onAttachmentPick);
         if (stickerToggle) stickerToggle.removeEventListener('click', onStickerToggle);
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
