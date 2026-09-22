@@ -130,10 +130,11 @@
         return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000);
       },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
-      setModel: function (model, effort) {
+      setModel: function (model, effort, provider) {
         return nativeCall('setModel', {
           model: String(model || ''),
-          effort: String(effort || '')
+          effort: String(effort || ''),
+          provider: String(provider || '')
         });
       },
       respondApproval: function (approvalId, decision, scope) {
@@ -349,13 +350,14 @@
   function modelOptions() {
     return request('/mobile/model-options', { method: 'GET', clearAuthOn401: false });
   }
-  function setModel(model, effort) {
+  function setModel(model, effort, provider) {
     return request('/mobile/set-model', {
       method: 'POST',
       clearAuthOn401: false,
       body: {
         model: String(model || ''),
-        effort: String(effort || '')
+        effort: String(effort || ''),
+        provider: String(provider || '')
       }
     });
   }
