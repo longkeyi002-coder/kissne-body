@@ -365,15 +365,20 @@
       + '</div>';
   }
 
-  function attachmentMsg(meta, kind) {
+  function attachmentMsg(meta, kind, status, localId) {
     meta = meta || {};
     var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : '文件'));
     var size = Number(meta.size || 0);
     var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
-    return '<span class="attachmsg">'
+    var state = String(status || 'sent');
+    var statusText = state === 'sending' ? '正在发送…' : (state === 'failed' ? '发送失败' : '已发送');
+    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
       + '<span class="attachmsg__ic">' + icon(kind === 'photo' ? 'image' : 'file', 19) + '</span>'
       + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
-      + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '') + '</span></span>';
+      + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
+      + '<small class="attachmsg__status">' + esc(statusText) + '</small></span>'
+      + (state === 'sending' ? '<span class="attachmsg__spin" aria-hidden="true"></span>' : '')
+      + '</span>';
   }
 
   var AVA_STATES = {
@@ -2114,18 +2119,22 @@
           return;
         }
         var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
-        var sendSession = chatLogSessionId(); /* 以"发起发送时"的会话为准，防 bootstrap/切换时序写错会话 */
+        var sendSession = chatLogSessionId();
         btn.disabled = true;
         setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
         try {
+          /* Native pickAttachment resolves only after the selected bytes have been uploaded and
+             accepted by /messages. We therefore do not fake an upload bubble before selection
+             returns: the picker does not expose filename/size early enough for a truthful card. */
           var result = await T.pickAttachment(kind);
           if (!result || result.cancelled) {
             setSessionStatus('');
             return;
           }
-          var html = attachmentMsg(result, kind);
           var turn = String(result.turn_id || '');
-          bindChatLogSession(sendSession); /* 附件回执落回发送时所属的会话 */
+          var localId = 'attachment-' + (turn || Date.now().toString(36));
+          bindChatLogSession(sendSession);
+          var html = attachmentMsg(result, kind, 'sent', localId);
           append(meMsg(html, '', clockNow()));
           pushLog({
             who: 'me',
