@@ -460,6 +460,7 @@
      占位阶段还能读懂这一步在干嘛。 */
   var AVA_STATES = {
     idle:     '平静',        /* 兜底：普通消息、闲着 */
+    read:     '正在看消息',  /* 已接收这一批用户消息，尚未产生 reasoning/tool/text */
     think:    '思考中',      /* 托腮 + 问号泡泡 */
     work:     '干活中',      /* 手忙脚乱那张（暂无正脸"在忙"素材，先借它） */
     talk:     '说话',        /* 平静微笑，正好也是兜底图 */
@@ -521,6 +522,7 @@
   var CHAT_OUTBOX_BUSY = false;
   var CHAT_OUTBOX_RETRY = null;
   var CHAT_OUTBOX_UPDATED_AT = 0;
+  var CHAT_USER_INPUT_AT = 0;
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
   var TURN_ACTIVITY_STORAGE_KEY = 'kissne.chat.turn_activity.v1';
   var TURN_ACTIVITY = Object.create(null);
@@ -1293,13 +1295,25 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        append('<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', '', 'idle')
-          + '<div class="msg__body"><div data-live-activity></div>'
+        append('<div class="msg msg--ai is-awaiting">' + ava('FOX_CHAT_AVATAR', '', 'read')
+          + '<div class="msg__body"><div class="aipresence" data-live-presence>'
+          + '<span class="aipresence__text">正在看你刚才说的话</span>' + dots() + '</div>'
+          + '<div data-live-activity></div>'
           + '<div class="liveanswer bubble" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
+      }
+      function livePresence(el, visible, text) {
+        if (!el) return;
+        var presence = el.querySelector('[data-live-presence]');
+        if (presence) {
+          presence.hidden = !visible;
+          var label = presence.querySelector('.aipresence__text');
+          if (label && text) label.textContent = text;
+        }
+        el.classList.toggle('is-awaiting', !!visible);
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -1384,6 +1398,7 @@
           var reasoningText = cleanActivityText(event.text || '', '');
           if (!reasoningText) return;
           var reasoningEl = liveEnsure(turnId);
+          livePresence(reasoningEl, false);
           addActivity(reasoningEl, 'reasoning', turnId, reasoningText);
           liveAvatar(reasoningEl, 'think');
           liveCurrentTurn = turnId || liveCurrentTurn;
@@ -1395,6 +1410,7 @@
           var toolText = cleanActivityText(event.text || '', '');
           if (!toolText) return;
           var progressEl = liveEnsure(turnId);
+          livePresence(progressEl, false);
           addActivity(progressEl, 'tool', turnId, toolText);
           liveAvatar(progressEl, 'work');
           liveCurrentTurn = turnId || liveCurrentTurn;
@@ -1423,12 +1439,14 @@
 
         var el = liveEnsure(turnId);
         if (type === 'delta') {
+          livePresence(el, false);
           liveText(el, event.text || '', true);
           liveAvatar(el, 'talk');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
+          livePresence(el, false);
           setSessionStatus('');
           finishActivities(el, turnId);
           var finalText = String(event.text || '');
@@ -1443,6 +1461,7 @@
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
         } else if (type === 'cancelled') {
+          livePresence(el, false);
           setSessionStatus('');
           finishActivities(el, turnId);
           liveText(el, '已停止回复', false);
@@ -1522,12 +1541,17 @@
           liveSetCancel(!!restoredPendingTurn);
           if (restoredPendingTurn) {
             livePendingTurns[restoredPendingTurn] = true;
+            var pendingEl = liveEnsure(restoredPendingTurn);
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
             if (pendingState && ((pendingState.reasoning && pendingState.reasoning.length)
                 || (pendingState.tools && pendingState.tools.length))) {
-              var pendingEl = liveEnsure(restoredPendingTurn);
+              livePresence(pendingEl, false);
               pendingState.done = false;
               paintActivity(pendingEl, restoredPendingTurn, false);
+              liveAvatar(pendingEl, pendingState.tools && pendingState.tools.length ? 'work' : 'think');
+            } else {
+              livePresence(pendingEl, true, '正在继续处理刚才的消息');
+              liveAvatar(pendingEl, 'read');
             }
           }
           scheduleOutboxDrain();
@@ -1600,18 +1624,27 @@
       }
 
       var OUTBOX_BATCH_DELAY_MS = 900;
+      var USER_TYPING_IDLE_MS = 1400;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
         if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
         return 'android-web-batch-' + r;
       }
+      function outboxWaitMs() {
+        var now = Date.now();
+        var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
+        var sinceTyping = now - CHAT_USER_INPUT_AT;
+        return Math.max(
+          0,
+          OUTBOX_BATCH_DELAY_MS - sinceBubble,
+          CHAT_USER_INPUT_AT ? USER_TYPING_IDLE_MS - sinceTyping : 0
+        );
+      }
       function scheduleOutboxDrain() {
         clearTimeout(liveOutboxTimer);
         if (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) return;
-        var elapsed = Date.now() - CHAT_OUTBOX_UPDATED_AT;
-        var delay = Math.max(0, OUTBOX_BATCH_DELAY_MS - elapsed);
-        liveOutboxTimer = setTimeout(drainOutbox, delay);
+        liveOutboxTimer = setTimeout(drainOutbox, outboxWaitMs());
       }
       function queueOutboundText(text) {
         var value = String(text || '').trim();
@@ -1626,8 +1659,7 @@
         if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) return;
 
         if (!CHAT_OUTBOX_RETRY) {
-          var elapsed = Date.now() - CHAT_OUTBOX_UPDATED_AT;
-          if (elapsed < OUTBOX_BATCH_DELAY_MS) {
+          if (outboxWaitMs() > 0) {
             scheduleOutboxDrain();
             return;
           }
@@ -1651,6 +1683,9 @@
             livePendingTurns[acceptedTurn] = true;
             liveCurrentTurn = acceptedTurn;
             liveSetCancel(true);
+            var acceptedEl = liveEnsure(acceptedTurn);
+            liveAvatar(acceptedEl, 'read');
+            livePresence(acceptedEl, true, '正在看你刚才说的话');
           }
           scheduleLivePoll(0);
         } catch (err) {
@@ -1945,7 +1980,15 @@
       }
       startLiveTransport();
 
-      function onKey(e) { if (e.key === 'Enter') push(); }
+      function onComposerInput() {
+        CHAT_USER_INPUT_AT = Date.now();
+        if (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY) scheduleOutboxDrain();
+      }
+      function onKey(e) {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter') push();
+      }
+      input.addEventListener('input', onComposerInput);
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
       if (stop) stop.addEventListener('click', liveCancel);
@@ -1956,6 +1999,7 @@
         if (sessionOpen) sessionOpen.removeEventListener('click', onSessionOpen);
         if (sessionScrim) sessionScrim.removeEventListener('click', onSessionDrawerClick);
         if (sessionDrawer) sessionDrawer.removeEventListener('click', onSessionDrawerClick);
+        input.removeEventListener('input', onComposerInput);
         input.removeEventListener('keydown', onKey);
         send.removeEventListener('click', push);
         if (stop) stop.removeEventListener('click', liveCancel);
