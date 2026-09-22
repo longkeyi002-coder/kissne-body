@@ -426,30 +426,10 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 显式思考摘要 / 工具折叠框使用同一套 Kissne 装饰语言。
-     没有真实 activity 事件时绝不凭空创建“思考”折叠框。 */
-  var TLOG_DECOS = [
-    '₊⁺ ꒰১┈┈┈┈┈┈ ♡ ┈┈┈┈┈┈໒꒱ ⁺₊',
-    '๑┈┈┈┈┈┈૮⑅•̤ ༝ •̤⑅ა┈┈┈┈┈┈๑',
-    '☆──⚝───˗ˋˏ ♡ ˎˊ˗───⚝──☆',
-    '⑅ --- ･ --- ･ ---- ･ --- ･ ---ᦏᦑ--- ･ --- ･ --- ･ --- ･ --- ⑅',
-    '♡₊˚‧⸝⸝⸝♡₊˚‧⸝⸝⸝𓆩♡𓆪⸝⸝⸝‧˚₊ ♡⸝⸝⸝‧˚₊ ♡',
-    '˖✧꙳⊹☆₊★⁺☆℡★℡☆₊★⁺☆₊⁺ ⊹꙳✧˖',
-    '⌁⌁⌁⋆❤︎⋆⌁⌁⌁ 𓆩☘︎𓆪 ⌁⌁⌁⋆❤︎⋆⌁⌁⌁',
-    '♬• * ¨ * •. ¸¸ ♬• * ¨ * •. ¸¸ ♬• * ¨ * •. ¸¸ ♬',
-    '—————·★₊˚☪︎.‎˖ ♥︎ ·˖✶—————'
-  ];
-  function tlogDeco(seed, kind) {
-    var s = String(seed || '') + ':' + String(kind || '');
-    var h = 0;
-    for (var i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) >>> 0;
-    return TLOG_DECOS[h % TLOG_DECOS.length];
-  }
+  /* 思考过程与工具调用共用一个折叠区。
+     没有真实 reasoning/tool 事件时不创建折叠区，也不伪造“正在思考”。 */
   function cleanActivityText(value, fallback) {
     var text = String(value == null ? '' : value);
-    /* Activity rows are intentionally text-only: remove pictographic emoji,
-       variation selectors and ZWJ sequences. The decorative frame is separate
-       and is not passed through this sanitizer. */
     try {
       text = text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '');
     } catch (e) {
@@ -458,48 +438,62 @@
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
     return text || String(fallback || '');
   }
-  function tlogHtml(kind, title, body, seed, open) {
-    var deco = tlogDeco(seed, kind);
-    return '<div class="tlog tlog--' + esc(kind) + (open ? ' is-open' : '') + '" data-tlog-kind="' + esc(kind) + '">'
-      + '<button type="button" class="tlog__row" aria-expanded="' + (open ? 'true' : 'false') + '">'
-      + '<span class="tlog__orn">' + esc(deco) + '</span>'
-      + '<span class="tlog__rowmeta"><span class="tlog__label">' + esc(title) + '</span>'
-      + '<span class="tlog__state" data-tlog-state>' + (open ? '展开' : '已折叠') + '</span>'
-      + '<i class="tlog__car">⌄</i></span></button>'
-      + '<div class="tlog__body" data-tlog-body>' + esc(cleanActivityText(body, '处理中…')) + '</div>'
-      + '<span class="tlog__orn tlog__bottom">' + esc(deco) + '</span></div>';
-  }
 
-  /* 真机只显示允许公开的运行摘要；不渲染 terminal 命令、工具内部参数或 provider hidden reasoning。 */
-
-  /* —— 聊天记录：**模块级**，切页（含去通话页再回来）都不会丢 ——
-     之前消息是每次 render 现拼的，去一次通话页回来就"记录全没了"。 */
   var CHAT_LOG = [];
-  /* UI-rich state is kept outside the transient DOM so a chat rerender cannot
-     erase an in-flight/completed thought/tool fold. Backend history still
-     remains the source of truth for message text. */
   var TURN_ACTIVITY = Object.create(null);
   var FINAL_ACTIVITY_BY_TEXT = Object.create(null);
 
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { thought: false, tool: false, done: false };
+      TURN_ACTIVITY[id] = { reasoning: [], tools: [], done: false };
     }
     return TURN_ACTIVITY[id];
+  }
+  function appendActivity(turnId, kind, value) {
+    var text = cleanActivityText(value, '');
+    if (!text) return false;
+    var state = activityForTurn(turnId);
+    var bucket = kind === 'reasoning' ? state.reasoning : state.tools;
+    if (bucket.length && bucket[bucket.length - 1] === text) return false;
+    bucket.push(text);
+    if (bucket.length > 40) bucket.splice(0, bucket.length - 40);
+    return true;
+  }
+  function activitySummary(state, closed) {
+    var hasReasoning = !!state.reasoning.length;
+    var hasTools = !!state.tools.length;
+    if (hasReasoning && hasTools) return closed ? '思考与工具调用' : '思考与工具调用中';
+    if (hasReasoning) return closed ? '思考过程' : '思考中';
+    if (hasTools) return closed ? '工具调用' : '工具调用中';
+    return '';
+  }
+  function activityBody(state) {
+    var html = '';
+    state.reasoning.forEach(function (text) {
+      html += '<div class="tlog__entry"><span class="tlog__kind">思考</span>'
+        + '<span class="tlog__text">' + esc(text) + '</span></div>';
+    });
+    state.tools.forEach(function (text) {
+      html += '<div class="tlog__entry"><span class="tlog__kind">工具</span>'
+        + '<span class="tlog__text">' + esc(text) + '</span></div>';
+    });
+    return html;
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
     var state = activityForTurn(id);
     var closed = done === true || state.done === true;
-    var html = '';
-    if (state.thought) {
-      html += tlogHtml('thought', '思考', closed ? '思考已完成。' : '正在整理思路并组织回复…', id, !closed);
-    }
-    if (state.tool) {
-      html += tlogHtml('tool', '工具调用', closed ? '工具调用已完成。' : 'Hermes 正在执行工具调用…', id, !closed);
-    }
-    return html ? '<div class="activity-history" data-activity-turn="' + esc(id) + '">' + html + '</div>' : '';
+    var summary = activitySummary(state, closed);
+    if (!summary) return '';
+    return '<div class="activity-history" data-activity-turn="' + esc(id) + '">'
+      + '<div class="tlog tlog--activity' + (closed ? '' : ' is-open') + '" data-tlog-kind="activity">'
+      + '<button type="button" class="tlog__row" aria-expanded="' + (closed ? 'false' : 'true') + '">'
+      + '<span class="tlog__rowmeta"><span class="tlog__label">' + esc(summary) + '</span>'
+      + '<span class="tlog__state" data-tlog-state>' + (closed ? '已折叠' : '展开') + '</span>'
+      + '<i class="tlog__car">⌄</i></span></button>'
+      + '<div class="tlog__body" data-tlog-body>' + activityBody(state) + '</div>'
+      + '</div></div>';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
@@ -511,6 +505,7 @@
     else delete FINAL_ACTIVITY_BY_TEXT[raw];
     return html;
   }
+
   function stickerFromWire(text) {
     var raw = String(text == null ? '' : text).trim();
     var m = /^\[表情包：(.+)\]$/.exec(raw);
@@ -1102,11 +1097,9 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        activityForTurn(id || 'pending');
-        var activityMarkup = activityMarkupForTurn(id || 'pending', false);
-        var activity = '<div data-live-activity>' + activityMarkup + '</div>';
-        append(aiMsg(activity + '<div class="liveanswer is-pending" data-live-answer>正在回复' + dots() + '</div>',
-          '', clockNow(), '', 'think'));
+        var activity = '<div data-live-activity></div>';
+        append(aiMsg(activity + '<div class="liveanswer" data-live-answer hidden></div>',
+          '', clockNow(), '', 'idle'));
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
@@ -1114,44 +1107,29 @@
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
       }
-      function ensureActivity(el, kind, turnId) {
-        if (!el) return null;
+      function paintActivity(el, turnId, done) {
+        if (!el) return;
         var host = el.querySelector('[data-live-activity]');
-        if (!host) return null;
-        var activityStateForTurn = activityForTurn(turnId || 'pending');
-        if (kind === 'tool') activityStateForTurn.tool = true;
-        if (kind === 'thought') activityStateForTurn.thought = true;
-        var found = host.querySelector('[data-tlog-kind="' + kind + '"]');
-        if (found) return found;
-        var title = kind === 'tool' ? '工具调用' : '思考';
-        var body = kind === 'tool' ? 'Hermes 正在执行工具调用…' : '正在整理思路并组织回复…';
-        host.insertAdjacentHTML('beforeend', tlogHtml(kind, title, body, turnId || kind, true));
-        return host.lastElementChild;
+        if (!host) return;
+        host.innerHTML = activityMarkupForTurn(turnId || 'pending', !!done);
       }
-      function activityState(block, body, done) {
-        if (!block) return;
-        var b = block.querySelector('[data-tlog-body]');
-        if (b) b.textContent = cleanActivityText(body, done ? '已完成。' : '处理中…');
-        var st = block.querySelector('[data-tlog-state]');
-        if (st) st.textContent = done ? '完成 · 点按展开' : '进行中';
-        if (done) block.classList.remove('is-open');
-        var row = block.querySelector('.tlog__row');
-        if (row) row.setAttribute('aria-expanded', done ? 'false' : 'true');
+      function addActivity(el, kind, turnId, text) {
+        if (!el || !appendActivity(turnId || 'pending', kind, text)) return;
+        paintActivity(el, turnId, false);
       }
       function finishActivities(el, turnId) {
-        if (!el) return;
-        activityForTurn(turnId || 'pending').done = true;
-        var thought = el.querySelector('[data-tlog-kind="thought"]');
-        var tool = el.querySelector('[data-tlog-kind="tool"]');
-        activityState(thought, '思考已完成。', true);
-        if (tool) activityState(tool, '工具调用已完成。', true);
+        var state = activityForTurn(turnId || 'pending');
+        state.done = true;
+        paintActivity(el, turnId, true);
       }
       function liveText(el, text, pending) {
         if (!el) return;
         var box = el.querySelector('[data-live-answer]') || el.querySelector('.msg__text');
         if (!box) return;
-        box.classList.toggle('is-pending', !!pending);
-        box.textContent = String(text || '');
+        var value = String(text || '');
+        box.hidden = !value;
+        box.classList.toggle('is-pending', !!pending && !!value);
+        box.textContent = value;
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1199,17 +1177,28 @@
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
-        /* Operational/runtime output is activity chrome, never assistant prose.
-           Hidden/internal/reasoning presentation is not shown on Mobile at all. */
-        if (presentation === 'hidden' || presentation === 'internal_notification' || presentation === 'reasoning') {
+
+        /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
+           when Hermes actually sends reasoning text; tool progress follows the same rule. */
+        if (presentation === 'hidden' || presentation === 'internal_notification') return;
+        if (presentation === 'reasoning') {
+          var reasoningText = cleanActivityText(event.text || '', '');
+          if (!reasoningText) return;
+          var reasoningEl = liveEnsure(turnId);
+          addActivity(reasoningEl, 'reasoning', turnId, reasoningText);
+          liveAvatar(reasoningEl, 'think');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          liveSetCancel(!!liveCurrentTurn);
           return;
         }
         if (presentation === 'tool_progress') {
+          var toolText = cleanActivityText(event.text || '', '');
+          if (!toolText) return;
           var progressEl = liveEnsure(turnId);
-          var progressBlock = ensureActivity(progressEl, 'tool', turnId);
-          activityState(progressBlock, event.text || 'Hermes 正在执行工具调用…', false);
+          addActivity(progressEl, 'tool', turnId, toolText);
           liveAvatar(progressEl, 'work');
-          setSessionStatus('正在调用工具…');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          liveSetCancel(!!liveCurrentTurn);
           return;
         }
         if (type === 'notice') {
@@ -1224,13 +1213,16 @@
           resolveApprovalCard(event.approval_id, String(event.decision || event.status || 'denied'));
           return;
         }
-        var el = liveEnsure(turnId);
+
         if (type === 'pending') {
-          liveText(el, '正在回复…', true);
-          liveAvatar(el, 'think');
+          /* pending is transport state only. Do not invent visible “thinking/replying” content. */
           liveCurrentTurn = turnId || liveCurrentTurn;
           liveSetCancel(!!liveCurrentTurn);
-        } else if (type === 'delta') {
+          return;
+        }
+
+        var el = liveEnsure(turnId);
+        if (type === 'delta') {
           liveText(el, event.text || '', true);
           liveAvatar(el, 'talk');
           liveCurrentTurn = turnId || liveCurrentTurn;
@@ -1320,7 +1312,7 @@
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           liveCurrentTurn = String(boot.pending_turn_id || '');
-          if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+          if (liveCurrentTurn) liveSetCancel(true);
           else liveSetCancel(false);
           scheduleLivePoll(0);
         } catch (err) {
