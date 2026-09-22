@@ -472,12 +472,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
             detail = json.dumps(event.args, ensure_ascii=False, default=str)
         else:
             detail = str(event.tool_name or "")
+        index = int(event.index or 0)
         payload = {
-            "kind": "tool",
+            "kind": "tool_call",
+            "tool_call_id": f"draft-tool:{index}",
             "label": self._semantic_activity_label(event.tool_name, event.args, event.preview),
-            "tool": str(event.tool_name or ""),
-            "detail": self._activity_detail(detail),
-            "index": int(event.index or 0),
+            "tool_name": str(event.tool_name or ""),
+            "arguments": self._activity_detail(detail),
+            "index": index,
+            "status": "running",
         }
         return self._encode_activity_marker(payload)
 
@@ -573,10 +576,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         last_message_id: Optional[str] = None
 
         for activity in activities:
-            identity = (
-                f"{activity.get('index', '')}:"
-                f"{activity.get('tool', '')}:"
-                f"{activity.get('label', '')}"
+            identity = str(
+                activity.get("tool_call_id")
+                or f"draft-tool:{activity.get('index', '')}"
             )
             if identity in seen:
                 continue
@@ -585,7 +587,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 installation, EVENT_DELTA, content="",
                 extra={
                     "draft_id": int(draft_id),
-                    "presentation": "tool_progress",
+                    "presentation": "tool_call",
+                    "tool_call_id": identity,
                     "activity": activity,
                 })
 
@@ -713,8 +716,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         body = payload or {}
         code = str(body.get("pairing_code") or "").strip()
         installation = str(body.get("installation_id") or "").strip()
-        if not code or not installation:
-            return _error_response("pairing_code_and_installation_id_required", 400)
+        if not installation:
+            return _error_response("installation_id_required", 400)
         try:
             store = self.device_store()
         except Exception:
