@@ -4,6 +4,7 @@ import android.view.HapticFeedbackConstants
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class PrototypeBridge(
@@ -11,6 +12,7 @@ class PrototypeBridge(
     private val store: MobileSessionStore,
     private val checkUpdates: () -> Unit = {},
     private val startVoiceInput: (String) -> Unit = {},
+    private val startAttachmentPicker: (String, String) -> Unit = { _, _ -> },
 ) {
     /*
      * Keep chat transport isolated from slower control-plane calls.
@@ -172,7 +174,9 @@ class PrototypeBridge(
             "sendText" -> client().sendPayload(
                 messageId = body.optString("message_id"),
                 text = body.optString("text"),
-            )
+            ).also {
+                invalidateBootstrapCache(clearPersistedMetadata = false)
+            }
             "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
             "ack" -> {
                 val cursor = body.optLong("cursor", store.cursor)
@@ -222,6 +226,20 @@ class PrototypeBridge(
     fun request(id: String, action: String, payload: String) {
         if (action == "voiceInput") {
             webView.post { startVoiceInput(id) }
+            return
+        }
+        if (action == "pickAttachment") {
+            val body = try {
+                if (payload.isBlank()) JSONObject() else JSONObject(payload)
+            } catch (error: Throwable) {
+                resolve(id, false, JSONObject().put("status", 0)
+                    .put("error", error.message ?: "invalid_native_payload"))
+                return
+            }
+            val kind = body.optString("kind", "file").let {
+                if (it == "photo") "photo" else "file"
+            }
+            webView.post { startAttachmentPicker(id, kind) }
             return
         }
         val executor = when (bridgeLane(action)) {
@@ -280,6 +298,51 @@ class PrototypeBridge(
                     JSONObject()
                         .put("status", finalStatus)
                         .put("error", finalError.message ?: "native_transport_error"),
+                )
+            }
+        }
+    }
+
+    fun uploadPickedAttachment(
+        requestId: String,
+        kind: String,
+        fileName: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ) {
+        transportExecutor.execute {
+            val messageId = "android-media-" + UUID.randomUUID().toString()
+            val failedToken = store.deviceToken
+            try {
+                val result = client().sendAttachmentPayload(
+                    messageId, kind, fileName, mimeType, bytes,
+                )
+                invalidateBootstrapCache(clearPersistedMetadata = false)
+                resolve(requestId, true, result)
+            } catch (firstError: Throwable) {
+                var finalError = firstError
+                val firstStatus = (firstError as? MobileTransportException)?.status ?: 0
+                if (firstStatus == 401) {
+                    try {
+                        refreshDeviceTokenAfterUnauthorized(failedToken)
+                        rememberBootstrap(client().bootstrapPayload(store.cursor))
+                        val retried = client().sendAttachmentPayload(
+                            messageId, kind, fileName, mimeType, bytes,
+                        )
+                        invalidateBootstrapCache(clearPersistedMetadata = false)
+                        resolve(requestId, true, retried)
+                        return@execute
+                    } catch (retryError: Throwable) {
+                        finalError = retryError
+                    }
+                }
+                val status = (finalError as? MobileTransportException)?.status ?: firstStatus
+                if (status == 401) store.invalidateToken()
+                resolve(
+                    requestId,
+                    false,
+                    JSONObject().put("status", status)
+                        .put("error", finalError.message ?: "attachment_upload_failed"),
                 )
             }
         }

@@ -5,7 +5,9 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -24,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -33,6 +36,23 @@ class MainActivity : AppCompatActivity() {
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var pendingVoiceRequestId: String? = null
+    private var pendingAttachmentRequestId: String? = null
+    private var pendingAttachmentKind: String? = null
+
+    private val attachmentPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val requestId = pendingAttachmentRequestId ?: return@registerForActivityResult
+            val kind = pendingAttachmentKind ?: "file"
+            pendingAttachmentRequestId = null
+            pendingAttachmentKind = null
+            if (uri == null) {
+                if (::bridge.isInitialized) {
+                    bridge.resolveNative(requestId, true, JSONObject().put("cancelled", true))
+                }
+                return@registerForActivityResult
+            }
+            readAndUploadAttachment(requestId, kind, uri)
+        }
 
     private val recordAudioPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -137,6 +157,7 @@ class MainActivity : AppCompatActivity() {
             store = store,
             checkUpdates = { updateManager.checkForUpdates(force = true) },
             startVoiceInput = { requestId -> startVoiceInput(requestId) },
+            startAttachmentPicker = { requestId, kind -> startAttachmentPicker(requestId, kind) },
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -145,6 +166,76 @@ class MainActivity : AppCompatActivity() {
             "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}#/welcome?state=animate"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
+
+    private fun startAttachmentPicker(requestId: String, rawKind: String) {
+        val kind = if (rawKind == "photo") "photo" else "file"
+        pendingAttachmentRequestId?.takeIf { it != requestId }?.let { previous ->
+            if (::bridge.isInitialized) {
+                bridge.resolveNative(
+                    previous,
+                    false,
+                    JSONObject().put("status", 0).put("error", "attachment_picker_replaced"),
+                )
+            }
+        }
+        pendingAttachmentRequestId = requestId
+        pendingAttachmentKind = kind
+        attachmentPicker.launch(if (kind == "photo") arrayOf("image/*") else arrayOf("*/*"))
+    }
+
+    private fun readAndUploadAttachment(requestId: String, kind: String, uri: Uri) {
+        Thread {
+            try {
+                val name = queryDisplayName(uri).takeIf { it.isNotBlank() }
+                    ?: if (kind == "photo") "photo" else "file"
+                val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
+                    ?: "application/octet-stream"
+                val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
+                if (::bridge.isInitialized) {
+                    bridge.uploadPickedAttachment(requestId, kind, name, mime, bytes)
+                }
+            } catch (error: Throwable) {
+                if (::bridge.isInitialized) {
+                    bridge.resolveNative(
+                        requestId,
+                        false,
+                        JSONObject().put("status", 0)
+                            .put("error", error.message ?: "attachment_read_failed"),
+                    )
+                }
+            }
+        }.start()
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        return try {
+            contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else ""
+            }.orEmpty()
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    private fun readAttachmentBytes(uri: Uri, maxBytes: Int): ByteArray {
+        val input = contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("attachment_open_failed")
+        return input.use { stream ->
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(64 * 1024)
+            var total = 0
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > maxBytes) throw IllegalArgumentException("attachment_too_large")
+                out.write(buffer, 0, read)
+            }
+            out.toByteArray()
+        }
     }
 
     private fun startVoiceInput(requestId: String) {
@@ -285,6 +376,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        pendingAttachmentRequestId = null
+        pendingAttachmentKind = null
         pendingVoiceRequestId = null
         speechRecognizer?.destroy()
         speechRecognizer = null
