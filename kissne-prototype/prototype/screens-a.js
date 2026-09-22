@@ -1457,10 +1457,34 @@
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
+          var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
           if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
+          /* Prefer the transport's semantic presentation. Do not let persisted
+             commentary/tool frames fall through to generic assistant/system rows. */
+          if (historyPresentation === 'hidden' || historyPresentation === 'internal_notification') return;
+          if (historyPresentation === 'tool_call' || historyPresentation === 'tool_progress' || historyPresentation === 'tool_result') {
+            upsertToolActivity(historyTurnId || 'history', {
+              tool_call_id: item.tool_call_id || item.call_id || item.id || ('history-presented:' + String(CHAT_LOG.length)),
+              tool_name: item.tool_name || item.function_name || '',
+              arguments: item.arguments || '',
+              result: item.result || item.output || '',
+              detail: item.activity_detail || rawText,
+              status: item.status || (historyPresentation === 'tool_result' ? 'completed' : 'running')
+            }, historyPresentation === 'tool_result' ? 'result' : 'call');
+            return;
+          }
+          if (historyPresentation === 'commentary') {
+            if (!rawText.trim()) return;
+            CHAT_LOG.push({
+              who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
+              time: historyClock(item.created_at), day: chatDayKey(item.created_at),
+              messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
+            });
+            return;
+          }
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
           if (role === 'assistant' && historyCalls.length) {
             historyCalls.forEach(function (call, ci) {
