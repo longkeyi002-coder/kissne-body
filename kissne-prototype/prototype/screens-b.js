@@ -178,17 +178,17 @@
   });
 
   /* =====================================================================
-     08 设备管理页
+     08 高级诊断页
      ===================================================================== */
   K.registerScreen({
-    no: '08', id: 'device', name: '设备管理页', route: '#/device', tab: null,
-    purpose: '查看 installation_id、服务器地址和真实连接状态。token 由 App 自动领取与刷新。',
+    no: '08', id: 'device', name: '高级诊断', route: '#/device', tab: null,
+    purpose: '仅用于排查运行问题。认证、token 续期和服务恢复均由 App 自动完成。',
     out: ['#/home', '#/settings'],
     states: [{ key: 'normal', label: '自动状态' }],
     render: function () {
       return `
       <div class="screen">
-        ${appbar({ title: '设备管理', back: '#/home',
+        ${appbar({ title: '高级诊断', back: '#/settings',
           right: '<button class="iconbtn" data-device-refresh aria-label="刷新">' + icon('refresh') + '</button>' })}
         <div class="screen__body">
           <div class="adminnotice" data-device-notice hidden></div>
@@ -200,7 +200,7 @@
             + kv('认证', '<span data-device-auth>自动 device token</span>')
             + kv('当前模型', '跟随 Hermes')
           )}
-          ${note('无需配对码。App 会用 installation_id 自动领取 device token；token 失效时会自动重新领取。')}
+          ${note('这些信息仅用于诊断。App 会自动完成认证与恢复，无需手动配对、连接或刷新 token。')}
         </div>
       </div>`;
     },
@@ -453,7 +453,7 @@
      ===================================================================== */
   K.registerScreen({
     no: '09', id: 'settings', name: '设置页', route: '#/settings', tab: null,
-    purpose: '账号信息、设备状态、通知、运维与版本更新入口。',
+    purpose: '账号信息、通知、运维、版本更新与高级诊断入口。',
     out: ['#/home', '#/device', '#/admin'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
@@ -470,7 +470,7 @@
           )}
           ${card(
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
-            + listRow({ title: '设备管理', sub: '当前设备', icon: 'plug', to: '#/device' })
+            + listRow({ title: '高级诊断', sub: '服务状态 / 安装标识', icon: 'plug', to: '#/device' })
             + listRow({ title: '会话列表', sub: '查看服务器上的全部对话', icon: 'chat', to: '#/sessions' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
             + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
@@ -478,7 +478,7 @@
           , { tight: true })}
           ${card(
             listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
-            + listRow({ title: '关于 Kissne', sub: 'V0.2.1 · Android 合体版', icon: 'info' })
+            + listRow({ title: '关于 Kissne', sub: 'V0.2.23 · Android 合体版', icon: 'info' })
           , { tight: true })}
           ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
@@ -491,8 +491,8 @@
      ===================================================================== */
   K.registerScreen({
     no: '10', id: 'notifications', name: '通知和弹窗', route: '#/notifications', tab: null,
-    purpose: '消息、连接、记忆同步、配对与确认操作的通知状态。',
-    out: ['#/chat', '#/device', '#/memory'],
+    purpose: '消息、服务恢复、记忆同步与确认操作的通知状态。',
+    out: ['#/chat', '#/memory'],
     states: [{ key: 'default', label: '全部' }],
     render: function () {
       var foxNotify = ph('FOX_NOTIFICATION_AVATAR', { size: 40, compact: true, tag: '头像' });
@@ -503,25 +503,20 @@
           ${sectionTitle('轻提示')}
           ${card(
             '<div class="demo">' + toast({ avatar: foxNotify, title: '叶青栩', body: '在的，今天想聊什么？', time: '刚刚' }) + '</div>'
-            + '<div class="demo">' + toast({ icon: 'check', kind: 'ok', title: '连接成功', body: '设备已连接', time: '09:41' }) + '</div>'
+            + '<div class="demo">' + toast({ icon: 'check', kind: 'ok', title: '服务已恢复', body: 'Kissne 已自动恢复，可以继续使用', time: '09:41' }) + '</div>'
             + '<div class="demo">' + toast({ icon: 'check', title: '记忆已保存', body: '「周末计划」已写入记忆库', time: '09:38' }) + '</div>'
           , { tight: true })}
 
           ${sectionTitle('状态横幅')}
           ${card(
-            '<div class="demo">' + banner({ icon: 'wifioff', kind: 'warn', title: '设备离线',
-              body: '聊天与同步暂不可用。', action: { label: '重新连接', to: '#/device' } }) + '</div>'
-            + '<div class="demo">' + banner({ icon: 'alert', kind: 'warn', title: '记忆同步失败',
-              body: '无法访问设备，请检查连接。', action: { label: '重试', action: 'sync' } }) + '</div>'
+            '<div class="demo">' + banner({ icon: 'wifioff', kind: 'warn', title: '服务暂时不可用',
+              body: 'Kissne 正在后台自动恢复，聊天记录不会丢失。' }) + '</div>'
+            + '<div class="demo">' + banner({ icon: 'alert', kind: 'warn', title: '记忆同步暂缓',
+              body: '服务恢复后会自动继续同步。' }) + '</div>'
 
           , { tight: true })}
 
           ${sectionTitle('确认弹窗')}
-          <div class="demo demo--modal">
-            ${modal({ title: '断开设备？', kind: 'danger',
-              body: '<p>断开后将无法聊天，记忆同步也会暂停。</p>',
-              actions: [{ label: '取消', kind: 'ghost' }, { label: '确认断开', kind: 'danger' }] })}
-          </div>
           <div class="demo demo--modal">
             ${modal({ title: '删除这条记忆？', kind: 'danger',
               body: '<p>「周末计划」将被永久删除，且无法恢复。</p>',
