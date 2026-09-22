@@ -508,3 +508,37 @@ async def test_primary_adapter_busy_origin_uses_routed_privacy(
     assert asdict(event.source) == original
     assert get_hermes_home_override() == ambient
     assert key not in adapter._pending_messages
+
+
+@pytest.mark.asyncio
+async def test_adapter_busy_preference_can_make_mobile_style_followups_fifo():
+    """An adapter preference overrides the global interrupt default without touching other platforms."""
+    runner = _runner(default_mode="interrupt")
+    adapter = _adapter()
+    adapter.preferred_busy_input_mode = "queue"
+    adapter.preferred_busy_text_mode = "interrupt"
+    adapter.busy_ack_enabled = False
+    runner.adapters[Platform.TELEGRAM] = adapter
+
+    first = _event(profile=None)
+    first.text = "first follow up"
+    first.message_id = "message-1"
+    second = _event(profile=None)
+    second.text = "second follow up"
+    second.message_id = "message-2"
+    session_key = runner._session_key_for_source(first.source)
+
+    agent = MagicMock()
+    agent._active_children = []
+    runner._running_agents[session_key] = agent
+
+    assert runner._effective_busy_input_mode(first.source) == "queue"
+    assert runner._effective_busy_text_mode(first.source) == "interrupt"
+
+    assert await runner._handle_active_session_busy_message(first, session_key) is True
+    assert await runner._handle_active_session_busy_message(second, session_key) is True
+
+    assert adapter._pending_messages[session_key] is first
+    assert runner._session_state(session_key).conversation.queued_events == [second]
+    agent.interrupt.assert_not_called()
+    agent.steer.assert_not_called()
