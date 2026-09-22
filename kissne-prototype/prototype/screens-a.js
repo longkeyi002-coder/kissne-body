@@ -278,6 +278,12 @@
     var idx = window.KissneSessionIndex || {};
     return Array.isArray(idx.sessions) ? idx.sessions : [];
   }
+  function sessionIsCurrent(s) {
+    if (!s) return false;
+    if (CURRENT_SESSION_ID) return String(s.id || '') === CURRENT_SESSION_ID;
+    if (CURRENT_SESSION_KEY) return String(s.key || '') === CURRENT_SESSION_KEY;
+    return !!s.active;
+  }
   function sessionMetaText(s, active) {
     if (active) return '当前会话';
     var parts = [];
@@ -298,9 +304,7 @@
       body = '<div class="sessiondrawer__empty">服务器暂无会话</div>';
     } else {
       body = sessions.map(function (s) {
-        var active = CURRENT_SESSION_ID
-          ? s.id === CURRENT_SESSION_ID
-          : (CURRENT_SESSION_KEY ? s.key === CURRENT_SESSION_KEY : !!s.active);
+        var active = sessionIsCurrent(s);
         return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
           + ((s.key || s.id) ? '' : ' disabled')
@@ -344,36 +348,41 @@
 
   function applyHermesModelOptions(payload) {
     payload = payload || {};
+    var currentModel = String(payload.current_model || MODEL_CURRENT || '');
+    var reportedCurrentProvider = String(payload.current_provider || '').trim();
     var providerLabels = Object.create(null);
-    (payload.providers || []).forEach(function (item) {
-      if (typeof item === 'string') providerLabels[String(item)] = String(item);
-      else if (item) {
-        var pk = String(item.value || item.slug || item.provider || item.id || '');
-        if (pk) providerLabels[pk] = String(item.label || item.name || pk);
-      }
-    });
+
     var nextModels = (payload.models || []).map(function (item) {
       if (typeof item === 'string') {
         var value = String(item || '').trim();
+        if (!value) return null;
         var slash = value.indexOf('/');
-        var p = slash > 0 ? value.slice(0, slash) : '';
-        if (p && !providerLabels[p]) providerLabels[p] = p;
-        return { k: value, v: slash > 0 ? value.slice(slash + 1) : value, d: providerLabels[p] || p || 'Hermes', p: p };
+        var provider = slash > 0 ? value.slice(0, slash) : '';
+        var modelLabel = slash > 0 ? value.slice(slash + 1) : value;
+        if (!provider && value === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
+        if (provider) providerLabels[provider] = provider;
+        return { k: value, v: modelLabel, d: provider || 'Hermes', p: provider };
       }
+
       item = item || {};
-      var provider = String(item.provider || '');
-      var model = String(item.model || item.id || item.value || '');
+      var provider = String(item.provider || item.provider_slug || item.provider_id || '').trim();
+      var model = String(item.model || item.id || item.value || '').trim();
+      if (!model) return null;
+      if (!provider && model.indexOf('/') > 0) provider = model.slice(0, model.indexOf('/'));
+      if (!provider && model === currentModel && reportedCurrentProvider) provider = reportedCurrentProvider;
       var key = provider
         ? (model.indexOf(provider + '/') === 0 ? model : provider + '/' + model)
         : model;
-      if (provider && !providerLabels[provider]) providerLabels[provider] = String(item.provider_label || provider);
+      var providerLabel = String(item.provider_label || provider || '').trim();
+      if (provider) providerLabels[provider] = providerLabel || provider;
       return {
         k: key,
-        v: String(item.label || model || key),
-        d: String(item.provider_label || provider || 'Hermes'),
+        v: String(item.label || (model.indexOf('/') > 0 ? model.slice(model.indexOf('/') + 1) : model) || key),
+        d: providerLabel || provider || 'Hermes',
         p: provider
       };
-    }).filter(function (item) { return !!item.k; });
+    }).filter(function (item) { return !!(item && item.k); });
+
     var nextEfforts = (payload.efforts || []).map(function (item) {
       if (typeof item === 'string') {
         var value = String(item || '').trim();
@@ -390,17 +399,36 @@
 
     MODELS = nextModels.length
       ? nextModels
-      : [{ k: '', v: '暂无可用模型', d: '请检查 Hermes Provider 配置', p: '' }];
-    PROVIDERS = Object.keys(providerLabels).map(function (key) {
-      return { k: key, v: providerLabels[key] || key, d: key };
+      : [{ k: '', v: '暂无可用模型', d: 'Hermes 未返回可用模型', p: '' }];
+
+    /* Provider 必须来自上面的真实可用模型，不读取静态 provider catalog。 */
+    PROVIDERS = Object.keys(providerLabels).filter(function (key) {
+      return nextModels.some(function (m) { return m.p === key; });
+    }).map(function (key) {
+      var count = nextModels.filter(function (m) { return m.p === key; }).length;
+      return { k: key, v: providerLabels[key] || key, d: count + ' 个当前可用模型' };
     });
-    if (!PROVIDERS.length) PROVIDERS = [{ k: '', v: '暂无供应商', d: 'Hermes 未返回 Provider' }];
+    if (!PROVIDERS.length && reportedCurrentProvider) {
+      PROVIDERS = [{ k: reportedCurrentProvider, v: reportedCurrentProvider, d: '当前 Hermes Provider' }];
+    }
+    if (!PROVIDERS.length) {
+      PROVIDERS = [{ k: '', v: '暂无供应商', d: '当前模型数据未提供 Provider' }];
+    }
+
     EFFORTS = nextEfforts.length
       ? nextEfforts
       : [{ k: '', v: '暂无可用档位', d: 'Hermes 未返回 reasoning ladder' }];
-    MODEL_CURRENT = String(payload.current_model || MODEL_CURRENT || '');
-    PROVIDER_CURRENT = String(payload.current_provider || PROVIDER_CURRENT || '');
-    if (!PROVIDER_CURRENT && MODEL_CURRENT.indexOf('/') > 0) PROVIDER_CURRENT = MODEL_CURRENT.split('/', 1)[0];
+
+    MODEL_CURRENT = currentModel;
+    var selectedModel = null;
+    for (var mi = 0; mi < MODELS.length; mi++) {
+      if (MODELS[mi].k === MODEL_CURRENT) { selectedModel = MODELS[mi]; break; }
+    }
+    var derivedProvider = selectedModel && selectedModel.p ? selectedModel.p : '';
+    if (!derivedProvider && MODEL_CURRENT.indexOf('/') > 0) {
+      derivedProvider = MODEL_CURRENT.slice(0, MODEL_CURRENT.indexOf('/'));
+    }
+    PROVIDER_CURRENT = derivedProvider || reportedCurrentProvider || '';
     EFFORT_CURRENT = String(payload.current_effort || EFFORT_CURRENT || '');
     MODEL_OPTIONS_ERROR = '';
     MODEL_OPTIONS_LOADED_AT = Date.now();
@@ -793,7 +821,7 @@
       /* 表情面板：**内嵌在聊天页里**（只占两排、横向可滚），不是整屏页面 ——
          点了「表情包」不跳页、不遮住消息。 */
       var panel = (q && q.get('panel')) || '';
-      var stkPanel = panel === 'sticker' ? '<div class="stkpanel">'
+      var stkPanel = '<div class="stkpanel"' + (panel === 'sticker' ? '' : ' hidden') + '>'
         + '<div class="stkpanel__grid">'
         + STICKERS.map(function (s) {
             return '<button class="stkpanel__i" type="button" data-stk="' + s.k + '"'
@@ -803,12 +831,12 @@
         + '</div>'
         + '<div class="stkpanel__foot"><span>' + STICKERS.length + ' 张 · 两排 · 左右滑动看更多</span>'
         + '<a class="stkpanel__more" data-nav="#/stickers">管理表情包</a></div>'
-        + '</div>' : '';
+        + '</div>';
       /* 输入栏上方的**磁吸快捷条**：表情包 / 语音通话 / 屏幕共享。
          表情包是**开关**：点开在输入栏上方长出面板，再点收起。 */
       var quickbar = (offline || netlost) ? '' : '<div class="quickbar">'
-        + '<button class="qbtn' + (panel === 'sticker' ? ' is-on' : '') + '"'
-        + ' data-nav="#/chat?state=' + origin + (panel === 'sticker' ? '' : '&panel=sticker') + '">'
+        + '<button type="button" class="qbtn' + (panel === 'sticker' ? ' is-on' : '') + '"'
+        + ' data-sticker-toggle aria-expanded="' + (panel === 'sticker' ? 'true' : 'false') + '">'
         + icon('smile', 13) + '<span>表情包</span></button>'
         + '<button class="qbtn" data-nav="#/call">' + icon('call', 13) + '<span>语音通话</span></button>'
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
@@ -1019,9 +1047,7 @@
           return;
         }
         host.innerHTML = sessions.map(function (s) {
-          var active = (CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
-            || (CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY)
-            || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
+          var active = sessionIsCurrent(s);
           return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
             + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
             + ((s.key || s.id) ? '' : ' disabled')
@@ -1204,6 +1230,7 @@
             MODEL_OPTIONS_LOADED_AT = 0;
             paintChatMenu(null);
             updateHeaderControls();
+            refreshHermesModelControls(true);
           })
           .catch(function (err) {
             el.disabled = false;
@@ -1536,9 +1563,7 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
-            s.active = CURRENT_SESSION_ID
-              ? s.id === CURRENT_SESSION_ID
-              : (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
+            s.active = sessionIsCurrent(s);
           });
           paintSessionList();
           hydrateHistory(boot.history || []);
@@ -1755,6 +1780,20 @@
       var stkState = (ctx && ctx.state && ctx.state !== 'empty' && ctx.state !== 'keyboard')
         ? ctx.state : 'normal';
       var stkItems = root.querySelectorAll('[data-stk]');
+      var stickerToggle = root.querySelector('[data-sticker-toggle]');
+      var stickerPanel = root.querySelector('.stkpanel');
+      function setStickerPanel(open) {
+        if (stickerPanel) stickerPanel.hidden = !open;
+        if (stickerToggle) {
+          stickerToggle.classList.toggle('is-on', !!open);
+          stickerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+      }
+      function onStickerToggle(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setStickerPanel(stickerPanel ? stickerPanel.hidden : false);
+      }
       function onStkTap(e) {
         var s2 = pick(STICKERS, e.currentTarget.getAttribute('data-stk'), STICKERS[0].k);
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
@@ -1765,12 +1804,10 @@
         if (live) queueOutboundText('[表情包：' + s2.label + ']');
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
-        var panelEl = root.querySelector('.stkpanel');
-        if (panelEl && panelEl.parentNode) panelEl.parentNode.removeChild(panelEl);
-        var stickerToggle = root.querySelector('.qbtn.is-on');
-        if (stickerToggle) stickerToggle.classList.remove('is-on');
+        setStickerPanel(false);
         try { history.replaceState(null, '', '#/chat?state=' + stkState); } catch (ignore) {}
       }
+      if (stickerToggle) stickerToggle.addEventListener('click', onStickerToggle);
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
       /* Android WebView 在不同系统/键盘上对 adjustResize 的 viewport 行为并不一致。
@@ -1944,10 +1981,12 @@
         setSessionDrawer(false);
         clearTimeout(livePollTimer);
         clearTimeout(liveBootstrapTimer);
+        var previousSessionId = CURRENT_SESSION_ID;
+        var previousSessionKey = CURRENT_SESSION_KEY;
         try {
           await T.selectSession(key, id);
-          CURRENT_SESSION_ID = id;
-          CURRENT_SESSION_KEY = key;
+          CURRENT_SESSION_ID = '';
+          CURRENT_SESSION_KEY = '';
           CHAT_LOG.length = 0;
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
@@ -1956,9 +1995,12 @@
           liveCurrentTurn = '';
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
-          await refreshSessions();
           await liveBootstrap();
+          await refreshSessions();
         } catch (err) {
+          CURRENT_SESSION_ID = previousSessionId;
+          CURRENT_SESSION_KEY = previousSessionKey;
+          paintSessionList();
           setSessionStatus('会话切换失败，请稍后重试。');
         }
       }
@@ -2022,6 +2064,7 @@
         }
         clearTimeout(keyboardT);
 
+        if (stickerToggle) stickerToggle.removeEventListener('click', onStickerToggle);
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
