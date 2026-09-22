@@ -1,6 +1,6 @@
 /* =====================================================================
    Kissne 手机端 UI · screens-a.js
-   页面 01–06：欢迎 / 首页 / 聊天 / 小机星 / 通话 / 表情包
+   页面： 首页 / 聊天 / 小机星 / 通话 / 表情包
    ===================================================================== */
 (function () {
   'use strict';
@@ -9,51 +9,6 @@
       card = K.card, field = K.field, tabbar = K.tabbar, modal = K.modal,
       note = K.note, sectionTitle = K.sectionTitle, listRow = K.listRow,
       banner = K.banner, kv = K.kv, esc = K.esc;
-
-  /* =====================================================================
-     01 欢迎 / 入口页
-     ===================================================================== */
-  K.registerScreen({
-    no: '01', id: 'welcome', name: '欢迎 / 入口页', route: '#/welcome', tab: null,
-    purpose: '正式开屏动画：Kiss + ne 融合成蓝绿球，分裂并化成叶青栩与小羊，最终双人贴贴定格。',
-    out: ['#/home'],
-    states: [
-      { key: 'final', label: '定格 · 双人贴贴' },
-      { key: 'animate', label: '播放完整开屏动画' },
-      { key: 'intro', label: '定格 · 开场 Logo' }
-    ],
-    render: function (ctx) {
-      var state = (ctx && ctx.state) || 'final';
-      return '<div class="screen screen--splash">'
-        + '<iframe class="splash-embed" data-splash-embed src="splash/index.html?mode='
-        + encodeURIComponent(state) + '&v=20260921f" title="Kissne 开屏动画" aria-label="Kissne 开屏动画"></iframe>'
-        + '<button type="button" class="splash-skip" data-action="splash-skip" aria-label="跳过开屏动画"></button>'
-        + '</div>';
-    },
-    mount: function (root, ctx) {
-      var frame = root.querySelector('[data-splash-embed]');
-      if (!frame || !ctx || ctx.state !== 'animate') return null;
-      var disposed = false, ended = false;
-      frame.style.pointerEvents = 'none';
-      function finishNow() {
-        if (disposed || ended) return;
-        ended = true;
-        document.dispatchEvent(new CustomEvent('kissne:splash-end'));
-      }
-      root.addEventListener('click', finishNow);
-      var poll = setInterval(function () {
-        if (disposed || ended) return;
-        try {
-          if (frame.contentWindow && frame.contentWindow.__finished === true) finishNow();
-        } catch (e) {}
-      }, 80);
-      return function () {
-        disposed = true;
-        clearInterval(poll);
-        root.removeEventListener('click', finishNow);
-      };
-    }
-  });
 
   /* =====================================================================
      04 首页 / 控制台
