@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         clearWebViewCacheAfterUpgrade()
         webView.loadUrl(
-            "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}#/welcome?state=animate"
+            "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
