@@ -672,6 +672,9 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   display:flex;align-items:center;justify-content:center;
 }
 .composer__btn:hover{background:var(--g2)}
+.composer__btn--mic.is-listening{
+  background:var(--g2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-2)
+}
 .composer__input{
   flex:1;min-width:0;border:0;background:transparent;padding:0 6px;
   font-size:13px;color:var(--ink);font-family:inherit;
