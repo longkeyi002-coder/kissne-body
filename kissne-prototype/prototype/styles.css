@@ -1377,36 +1377,6 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .empty404 b{font-size:15px;color:var(--ink)}
 
 /* =====================================================================
-   正式 Kissne 开屏页：使用用户提供的完整成品 splash 页面。
-   动画内容、时间轴和素材保持独立页面原样，不在外壳层重制。
-   ===================================================================== */
-.screen--splash{background:#FDFCF8;overflow:hidden}
-.splash-embed{
-  display:block;
-  width:100%;
-  height:100%;
-  flex:1;
-  min-width:0;
-  min-height:0;
-  border:0;
-  background:#FDFCF8;
-}
-.screen--splash{position:relative}
-.splash-skip{
-  position:absolute;
-  inset:0;
-  z-index:5;
-  width:100%;
-  height:100%;
-  margin:0;
-  padding:0;
-  border:0;
-  background:transparent;
-  cursor:pointer;
-  -webkit-tap-highlight-color:transparent;
-}
-
-/* =====================================================================
    首页 / 控制台 — 白蓝主题（仅此页）
    上：人人星｜小机星 两张图片卡；下：手机桌面式图标网格
    ===================================================================== */
