@@ -340,14 +340,18 @@ async def _handle_admin_sessions(request: Any) -> Any:
             seen.add(session_id)
             source = str(row.get("source") or "")
             user_id = str(row.get("user_id") or "")
-            title = str(row.get("title") or row.get("display_name") or "").strip()
+            # Session title is semantic user-facing metadata. display_name is a transport/runtime
+            # label (often English, e.g. "Kissne Mobile") and must not masquerade as the chat name.
+            title = str(row.get("title") or "").strip()
+            title_source = str(row.get("title_source") or "").strip()
             if not title:
                 preview = str(row.get("preview") or "").strip()
                 title = preview[:42] + ("…" if len(preview) > 42 else "")
             sessions.append({
                 "session_id": session_id,
                 "session_key": str(row.get("session_key") or ""),
-                "title": title or f"{source or '?'}: {user_id or 'local'}",
+                "title": title or "未命名会话",
+                "title_source": title_source,
                 "created_at": row.get("started_at") or row.get("created_at"),
                 "last_active": row.get("last_active") or row.get("updated_at"),
                 "message_count": row.get("message_count", 0),
@@ -364,9 +368,32 @@ async def _handle_admin_sessions(request: Any) -> Any:
         logger.warning("[kissne_mobile] sessions query failed: %s", exc, exc_info=True)
         return web.json_response({"error": "sessions_unavailable"}, status=503)
 
+    title_generation = {
+        "enabled": True,
+        "provider": "auto",
+        "model": "",
+        "language": "",
+    }
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        aux = cfg.get("auxiliary") if isinstance(cfg.get("auxiliary"), dict) else {}
+        title_cfg = aux.get("title_generation") if isinstance(aux.get("title_generation"), dict) else {}
+        title_generation = {
+            "enabled": bool(title_cfg.get("enabled", True)),
+            "provider": str(title_cfg.get("provider") or "auto"),
+            "model": str(title_cfg.get("model") or ""),
+            # Empty means Hermes' canonical behavior: match the opening user's language.
+            "language": str(title_cfg.get("language") or ""),
+        }
+    except Exception:
+        logger.debug("[kissne_mobile] could not read title-generation status", exc_info=True)
+
     return web.json_response({
         "ok": True,
         "installation_id": installation,
+        "active_session_id": active_id,
+        "title_generation": title_generation,
         "sessions": sessions,
     })
 
