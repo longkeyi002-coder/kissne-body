@@ -276,7 +276,10 @@ code{font-family:var(--mono)}
 .card.is-tight .row:last-child{border-bottom:0}
 .row.is-tappable:hover{background:var(--g1)}
 .sessionpage__row{width:100%;border-top:0;border-left:0;border-right:0;background:transparent;
-  text-align:left;font:inherit;color:inherit;-webkit-appearance:none;appearance:none;cursor:pointer}
+  text-align:left;font:inherit;color:inherit;-webkit-appearance:none;appearance:none;cursor:pointer;
+  outline:none;-webkit-tap-highlight-color:transparent}
+.sessionpage__row:focus,.sessionpage__row:active{outline:none}
+html.is-native-shell .sessionpage__row:focus{background:transparent;box-shadow:none}
 .row--plain{border-bottom:0;padding:2px 0}
 .row__icon{width:30px;height:30px;flex:none;border-radius:9px;background:var(--g2);
   display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
@@ -430,7 +433,10 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
   position:absolute;left:40px;top:50%;transform:translateY(-50%);
   font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;line-height:1.1;
 }
-.chathead__row{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:6px}
+.chathead__row{
+  flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;
+  padding:0 34px 0 96px;box-sizing:border-box
+}
 /* 右上角：历史搜索入口 */
 .chathead__search{position:absolute;right:4px;top:50%;transform:translateY(-50%);z-index:2;
   width:30px;height:30px}
@@ -506,15 +512,15 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 
 /* 两个可点的下拉触发器：本体是一枚小胶囊，不是输入框 */
 .hsel{
-  display:inline-flex;align-items:center;gap:2px;flex:none;
-  height:22px;padding:0 7px;border-radius:999px;
+  display:inline-flex;align-items:center;gap:2px;flex:1 1 0;min-width:0;overflow:hidden;
+  height:22px;padding:0 5px;border-radius:999px;
   border:1px solid var(--line);background:var(--g1);
   font-size:10px;color:var(--ink-2);cursor:pointer;
   white-space:nowrap;
 }
 .hsel:hover{border-color:var(--line-2);background:var(--g2)}
 .hsel__k{color:var(--ink-3)}
-.hsel__v{color:var(--ink);font-weight:600}
+.hsel__v{color:var(--ink);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .hsel__car{color:var(--g6);transform:rotate(90deg);flex:none}
 .hsel.is-open{border-color:var(--g8);background:var(--g9)}
 .hsel.is-open .hsel__k,.hsel.is-open .hsel__v{color:#fff}
@@ -692,6 +698,14 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 }
 .sendbtn:hover{background:var(--g2)}
 .sendbtn[disabled]{color:var(--g5);cursor:not-allowed;background:transparent}
+.cancelbtn{
+  width:34px;height:34px;flex:none;border-radius:50%;border:1px solid var(--line-2);
+  background:var(--g1);color:var(--ink-2);display:flex;align-items:center;justify-content:center;
+  -webkit-tap-highlight-color:transparent
+}
+.cancelbtn:hover{background:var(--g2)}
+.cancelbtn[hidden]{display:none!important}
+
 
 /* ===================== 06 小机星 · 叶青栩的家与外面的世界 =====================
    纯色块拼像素，不生成图片。
@@ -1572,7 +1586,11 @@ html.is-native-shell .chatbanner{gap:8px;padding:8px 12px}
 html.is-native-shell .screen--chat > .banner{margin:7px 10px 0}
 html.is-native-shell .composer{height:44px;margin:7px 12px 9px}
 html.is-native-shell .composer__btn,
-html.is-native-shell .sendbtn{width:32px;height:32px}
+html.is-native-shell .sendbtn,
+html.is-native-shell .cancelbtn{width:32px;height:32px}
+html.is-native-shell .chathead__row{padding-left:88px;padding-right:32px;gap:3px}
+html.is-native-shell .hsel{font-size:9px;padding:0 4px}
+html.is-native-shell .hsel__k{font-size:8.5px}
 html.is-native-shell .sessionpage__search{flex-basis:32px;height:32px;border-radius:16px;padding:0 10px}
 html.is-native-shell .srchpanel{padding:0 12px 8px}
 html.is-native-shell .srch__head{padding:8px 2px 4px}

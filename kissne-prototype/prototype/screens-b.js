@@ -402,6 +402,7 @@
         if (!row || !host || !host.contains(row)) return;
         e.preventDefault();
         e.stopPropagation();
+        try { row.blur(); } catch (ignore) {}
         if (row.getAttribute('data-session-page-active') === '1') {
           location.hash = '#/chat';
           return;
@@ -413,6 +414,12 @@
         show('正在切换会话…');
         try {
           await T.selectSession(key, id);
+          var idx = window.KissneSessionIndex || {};
+          (idx.sessions || []).forEach(function (s) {
+            s.active = id ? s.id === id : (!!key && s.key === key);
+          });
+          if (idx.raw && id) idx.raw.active_session_id = id;
+          paint();
           if (typeof window.KissneRefreshSessions === 'function') await window.KissneRefreshSessions();
           location.hash = '#/chat';
         } catch (err) {

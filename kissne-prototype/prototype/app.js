@@ -33,17 +33,31 @@
   function normalizeRemoteSessions(payload) {
     var raw = payload || {};
     var list = Array.isArray(raw) ? raw : (Array.isArray(raw.sessions) ? raw.sessions : []);
+    var explicitActiveId = String(raw.active_session_id || raw.activeSessionId || '');
+    var fallbackActiveId = '';
+    if (!explicitActiveId) {
+      for (var ai = 0; ai < list.length; ai++) {
+        var candidate = list[ai] || {};
+        if (candidate.active === true || candidate.current === true || candidate.is_current === true) {
+          fallbackActiveId = String(candidate.session_id || candidate.id || candidate.sessionId || '');
+          if (fallbackActiveId) break;
+        }
+      }
+    }
+    var activeId = explicitActiveId || fallbackActiveId;
     return list.map(function (item, index) {
       item = item || {};
+      var id = String(item.session_id || item.id || item.sessionId || '');
       return {
-        id: String(item.session_id || item.id || item.sessionId || ''),
+        id: id,
         key: String(item.session_key || item.key || item.sessionKey || ''),
-        title: String(item.title || item.name || item.label || item.session_key || item.session_id || ('会话 ' + (index + 1))),
+        title: String(item.title || item.name || item.label || ('会话 ' + (index + 1))),
+        titleSource: String(item.title_source || item.titleSource || ''),
         updatedAt: item.last_active || item.updated_at || item.updatedAt || null,
         createdAt: item.created_at || item.createdAt || null,
         messageCount: Number(item.message_count || item.messageCount || 0) || 0,
         source: String(item.source || ''),
-        active: item.active === true || item.current === true || item.is_current === true
+        active: !!activeId && id === activeId
       };
     }).filter(function (item) { return !!(item.id || item.key); });
   }

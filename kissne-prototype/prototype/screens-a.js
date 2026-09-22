@@ -266,6 +266,7 @@
     { key: 'network-lost',   label: '网络断开' },
     { key: 'request-enter',  label: '小机星进入请示' },
     { key: 'plus-menu',      label: '更多操作' },
+    { key: 'provider-menu',  label: '供应商选择' },
     { key: 'model-menu',     label: '模型选择' },
     { key: 'effort-menu',    label: '思考强度' }
   ];
@@ -297,9 +298,9 @@
       body = '<div class="sessiondrawer__empty">服务器暂无会话</div>';
     } else {
       body = sessions.map(function (s) {
-        var active = (CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
-          || (CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY)
-          || (!CURRENT_SESSION_ID && !CURRENT_SESSION_KEY && s.active);
+        var active = CURRENT_SESSION_ID
+          ? s.id === CURRENT_SESSION_ID
+          : (CURRENT_SESSION_KEY ? s.key === CURRENT_SESSION_KEY : !!s.active);
         return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
           + ((s.key || s.id) ? '' : ' disabled')
@@ -319,12 +320,16 @@
      App 不维护模型名或 reasoning ladder。/model-options 的数据源来自
      Hermes provider catalog + agent.reasoning_effort.EFFORT_LADDER；
      /set-model 委托给 Gateway 的 canonical /model / /reasoning handlers。 */
+  var PROVIDERS = [
+    { k: '', v: '读取中…', d: '正在从 Hermes 获取供应商' }
+  ];
   var MODELS = [
-    { k: '', v: '读取中…', d: '正在从 Hermes 获取模型' }
+    { k: '', v: '读取中…', d: '正在从 Hermes 获取模型', p: '' }
   ];
   var EFFORTS = [
     { k: '', v: '读取中…', d: '正在从 Hermes 获取思考强度' }
   ];
+  var PROVIDER_CURRENT = '';
   var MODEL_CURRENT = '';
   var EFFORT_CURRENT = '';
   var MODEL_OPTIONS_LOADING = false;
@@ -339,19 +344,34 @@
 
   function applyHermesModelOptions(payload) {
     payload = payload || {};
+    var providerLabels = Object.create(null);
+    (payload.providers || []).forEach(function (item) {
+      if (typeof item === 'string') providerLabels[String(item)] = String(item);
+      else if (item) {
+        var pk = String(item.value || item.slug || item.provider || item.id || '');
+        if (pk) providerLabels[pk] = String(item.label || item.name || pk);
+      }
+    });
     var nextModels = (payload.models || []).map(function (item) {
       if (typeof item === 'string') {
         var value = String(item || '').trim();
-        return { k: value, v: value, d: 'Hermes' };
+        var slash = value.indexOf('/');
+        var p = slash > 0 ? value.slice(0, slash) : '';
+        if (p && !providerLabels[p]) providerLabels[p] = p;
+        return { k: value, v: slash > 0 ? value.slice(slash + 1) : value, d: providerLabels[p] || p || 'Hermes', p: p };
       }
       item = item || {};
       var provider = String(item.provider || '');
       var model = String(item.model || item.id || item.value || '');
-      var key = provider && model.indexOf('/') < 0 ? provider + '/' + model : model;
+      var key = provider
+        ? (model.indexOf(provider + '/') === 0 ? model : provider + '/' + model)
+        : model;
+      if (provider && !providerLabels[provider]) providerLabels[provider] = String(item.provider_label || provider);
       return {
         k: key,
         v: String(item.label || model || key),
-        d: String(item.provider_label || provider || 'Hermes')
+        d: String(item.provider_label || provider || 'Hermes'),
+        p: provider
       };
     }).filter(function (item) { return !!item.k; });
     var nextEfforts = (payload.efforts || []).map(function (item) {
@@ -370,14 +390,26 @@
 
     MODELS = nextModels.length
       ? nextModels
-      : [{ k: '', v: '暂无可用模型', d: '请检查 Hermes Provider 配置' }];
+      : [{ k: '', v: '暂无可用模型', d: '请检查 Hermes Provider 配置', p: '' }];
+    PROVIDERS = Object.keys(providerLabels).map(function (key) {
+      return { k: key, v: providerLabels[key] || key, d: key };
+    });
+    if (!PROVIDERS.length) PROVIDERS = [{ k: '', v: '暂无供应商', d: 'Hermes 未返回 Provider' }];
     EFFORTS = nextEfforts.length
       ? nextEfforts
       : [{ k: '', v: '暂无可用档位', d: 'Hermes 未返回 reasoning ladder' }];
     MODEL_CURRENT = String(payload.current_model || MODEL_CURRENT || '');
+    PROVIDER_CURRENT = String(payload.current_provider || PROVIDER_CURRENT || '');
+    if (!PROVIDER_CURRENT && MODEL_CURRENT.indexOf('/') > 0) PROVIDER_CURRENT = MODEL_CURRENT.split('/', 1)[0];
     EFFORT_CURRENT = String(payload.current_effort || EFFORT_CURRENT || '');
     MODEL_OPTIONS_ERROR = '';
     MODEL_OPTIONS_LOADED_AT = Date.now();
+  }
+
+  function modelsForProvider(provider) {
+    var p = String(provider || '');
+    var filtered = p ? MODELS.filter(function (m) { return m.p === p; }) : MODELS.slice();
+    return filtered.length ? filtered : MODELS.slice();
   }
 
   function dropdown(title, items, curKey, param, origin) {
@@ -445,9 +477,10 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
-  function aiMsg(html, cls, time, tag, state) {
+  function aiMsg(html, cls, time, tag, state, activity) {
     return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
-      + '<div class="msg__body"><div class="msg__text' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
+      + '<div class="msg__body">' + (activity || '')
+      + '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
   }
@@ -638,7 +671,7 @@
     return CHAT_LOG.map(function (m) {
       if (m.who === 'sys') return sysMsg(m.html, m.time);
       return m.who === 'ai'
-        ? aiMsg((m.activity || '') + m.html, m.cls || '', m.time)
+        ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
         : meMsg(m.html, m.meta || '', m.time);
     }).join('');
   }
@@ -653,8 +686,9 @@
       var offline = s === 'device-offline';
       var netlost = s === 'network-lost';
       /* 下拉展开态：底下照常显示一段对话，菜单浮在上面 */
-      var menu = s === 'model-menu' ? 'model'
-               : (s === 'effort-menu' ? 'effort' : (s === 'plus-menu' ? 'plus' : null));
+      var menu = s === 'provider-menu' ? 'provider'
+               : (s === 'model-menu' ? 'model'
+               : (s === 'effort-menu' ? 'effort' : (s === 'plus-menu' ? 'plus' : null)));
       var bs = menu ? 'normal' : s;   /* 消息列表按这个状态渲染 */
       if (bs === 'empty' && CHAT_LOG.length) bs = 'normal';
       var typing = s === 'keyboard';  /* 打字态：悬浮的输入区整组抬起（不画键盘，那段高度全透明） */
@@ -710,11 +744,12 @@
 
       /* --- 当前选中的模型 / 思考强度（从查询参数读，选完能立刻反映到头部）--- */
       var q = ctx.params;
+      var curProvider = pick(PROVIDERS, PROVIDER_CURRENT, PROVIDER_CURRENT);
       var curModel  = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
       var curEffort = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
       /* 菜单是从哪个状态点开的：选中后回到那里（从侧栏直接切到菜单态时兜底到空态） */
       var origin = (q && q.get('from')) || '';
-      if (!origin || origin === 'model-menu' || origin === 'effort-menu') {
+      if (!origin || origin === 'provider-menu' || origin === 'model-menu' || origin === 'effort-menu') {
         origin = menu ? (CHAT_LOG.length ? 'normal' : 'empty') : s;
       }
       if (origin === 'empty' && CHAT_LOG.length) origin = 'normal';
@@ -779,22 +814,27 @@
         + ((offline || netlost) ? ' disabled' : '')
         + ' placeholder="' + (offline ? '设备离线，无法发送' : (netlost ? '网络已断开' : '说点什么…')) + '">'
         + '<button class="composer__btn composer__btn--mic"' + dis + ' aria-label="语音输入" data-voice-input aria-pressed="false">' + icon('mic', 19) + '</button>'
+        + '<button class="cancelbtn" type="button" aria-label="停止当前回复" data-live-stop hidden>' + icon('close', 17) + '</button>'
         + '<button class="sendbtn"' + dis + ' aria-label="发送">' + icon('send', 18) + '</button>'
         + '</div>';
 
       /* 浮层/下拉展开时的遮罩：点一下收回。加号的浮层已挂在输入框里，这里只放遮罩；
          模型 / 思考强度的下拉面板仍从这里渲染（它们锚在顶栏下方）。 */
+      var renderModels = modelsForProvider(PROVIDER_CURRENT);
       var menuLayer = menu === 'plus'
         ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
         : menu
         ? '<div class="menuscrim" data-nav="#/chat?state=' + origin + '"></div>'
-          + (menu === 'model' ? dropdown('模型', MODELS, curModel.k, 'model', origin)
-             : dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin))
+          + (menu === 'provider'
+              ? dropdown('供应商', PROVIDERS, curProvider.k, 'provider', origin)
+              : (menu === 'model'
+                  ? dropdown('模型', renderModels, curModel.k, 'model', origin)
+                  : dropdown('思考强度', EFFORTS, curEffort.k, 'effort', origin)))
         : '';
 
       return `
       <div class="screen screen--chat${typing ? ' is-typing' : ''}">
-        <!-- 顶端：左=叶青栩，中=模型 / 思考强度（都可点开下拉，列表由 Hermes 提供）。
+        <!-- 顶端：左=叶青栩，中=供应商 / 模型 / 思考强度（列表由 Hermes 提供）。
              不放头像与右上角表情。字号刻意压小，不要抢消息区的视觉。 -->
         <header class="chathead">
           <button class="iconbtn chathead__back" data-session-drawer-open aria-label="会话列表">${icon('chat')}</button>
@@ -802,11 +842,14 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
+            <button class="hsel${menu === 'provider' ? ' is-open' : ''}" data-chat-menu="provider">
+              <span class="hsel__k">供应商</span><span class="hsel__v">${esc(curProvider.v)}</span>${icon('chevron', 11, 'hsel__car')}
+            </button>
             <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
-              <span class="hsel__k">思考强度</span><span class="hsel__v">${esc(curEffort.v)}</span>${icon('chevron', 11, 'hsel__car')}
+              <span class="hsel__k">思考</span><span class="hsel__v">${esc(curEffort.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
           </div>
         </header>
@@ -894,6 +937,7 @@
 
       var input = root.querySelector('input.composer__input');
       var send  = root.querySelector('.sendbtn');
+      var stop  = root.querySelector('[data-live-stop]');
       var mic   = root.querySelector('[data-voice-input]');
       var list  = root.querySelector('.chatbody');
       if (!input || !send || !list) return null;
@@ -934,7 +978,8 @@
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
       var liveCurrentTurn = '';
-      var liveSendInFlight = false;
+      var livePendingTurns = Object.create(null);
+      var liveSendInFlight = 0;
       var liveBootstrapTimer = null;
       var retryMessageId = '';
       var retryMessageText = '';
@@ -992,16 +1037,24 @@
          using render()'s local `menu` caused a ReferenceError that aborted chat
          initialization before model loading, bootstrap, and send click binding. */
       var mountState = (ctx && ctx.state) || 'empty';
-      var menu = mountState === 'model-menu' ? 'model'
+      var menu = mountState === 'provider-menu' ? 'provider'
+        : (mountState === 'model-menu' ? 'model'
         : (mountState === 'effort-menu' ? 'effort'
-          : (mountState === 'plus-menu' ? 'plus' : null));
-      var openMenu = menu === 'model' || menu === 'effort' ? menu : null;
+          : (mountState === 'plus-menu' ? 'plus' : null)));
+      var openMenu = menu === 'provider' || menu === 'model' || menu === 'effort' ? menu : null;
 
       function updateHeaderControls() {
+        var pvd = pick(PROVIDERS, PROVIDER_CURRENT, PROVIDER_CURRENT);
         var m = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
         var e = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
+        var pb = root.querySelector('[data-chat-menu="provider"]');
         var mb = root.querySelector('[data-chat-menu="model"]');
         var eb = root.querySelector('[data-chat-menu="effort"]');
+        if (pb) {
+          var pv = pb.querySelector('.hsel__v');
+          if (pv) pv.textContent = pvd.v || '—';
+          pb.classList.toggle('is-open', openMenu === 'provider');
+        }
         if (mb) {
           var mv = mb.querySelector('.hsel__v');
           if (mv) mv.textContent = m.v || '—';
@@ -1022,17 +1075,22 @@
           menuHost.innerHTML = '';
           return;
         }
+        var pvd = pick(PROVIDERS, PROVIDER_CURRENT, PROVIDER_CURRENT);
         var m = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
         var e = pick(EFFORTS, EFFORT_CURRENT, EFFORT_CURRENT);
+        var visibleModels = modelsForProvider(PROVIDER_CURRENT);
         menuHost.innerHTML = '<div class="menuscrim" data-chat-menu-close></div>'
-          + (openMenu === 'model'
-              ? dropdown('模型', MODELS, m.k, 'model', 'normal')
-              : dropdown('思考强度', EFFORTS, e.k, 'effort', 'normal'));
+          + (openMenu === 'provider'
+              ? dropdown('供应商', PROVIDERS, pvd.k, 'provider', 'normal')
+              : (openMenu === 'model'
+                ? dropdown('模型', visibleModels, m.k, 'model', 'normal')
+                : dropdown('思考强度', EFFORTS, e.k, 'effort', 'normal')));
       }
 
       function refreshHermesModelControls(force) {
         if (!live || !T || typeof T.modelOptions !== 'function') {
-          MODELS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取模型' }];
+          PROVIDERS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取供应商' }];
+          MODELS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取模型', p: '' }];
           EFFORTS = [{ k: '', v: '未连接', d: '连接 Kissne 后读取思考强度' }];
           MODEL_OPTIONS_ERROR = '尚未连接 Kissne';
           MODEL_OPTIONS_LOADED_AT = Date.now();
@@ -1062,7 +1120,8 @@
             : (status === 401
                 ? '模型控制接口认证失败，聊天连接保持不变'
                 : '无法读取 Hermes 模型列表');
-          MODELS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
+          PROVIDERS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
+          MODELS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR, p: '' }];
           EFFORTS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
           MODEL_OPTIONS_LOADED_AT = Date.now();
           updateHeaderControls();
@@ -1105,9 +1164,34 @@
         var origin = String(el.getAttribute('data-hermes-origin') || 'empty');
         if (!value) return;
         el.disabled = true;
-        T.setModel(kind === 'model' ? value : '', kind === 'effort' ? value : '')
+        var modelValue = kind === 'model' ? value : '';
+        if (kind === 'provider') {
+          var candidates = modelsForProvider(value).filter(function (m) { return m.p === value && m.k; });
+          var currentProvider = PROVIDER_CURRENT || (MODEL_CURRENT.indexOf('/') > 0 ? MODEL_CURRENT.slice(0, MODEL_CURRENT.indexOf('/')) : '');
+          var currentModelId = currentProvider && MODEL_CURRENT.indexOf(currentProvider + '/') === 0
+            ? MODEL_CURRENT.slice(currentProvider.length + 1) : MODEL_CURRENT;
+          var same = candidates.filter(function (m) {
+            var id = m.p && m.k.indexOf(m.p + '/') === 0 ? m.k.slice(m.p.length + 1) : m.k;
+            return id === currentModelId;
+          })[0];
+          modelValue = (same || candidates[0] || {}).k || '';
+          if (!modelValue) {
+            el.disabled = false;
+            appendSystemNotice('这个供应商当前没有可用模型。');
+            return;
+          }
+        }
+        T.setModel(modelValue, kind === 'effort' ? value : '')
           .then(function () {
-            if (kind === 'model') MODEL_CURRENT = value;
+            if (kind === 'provider') {
+              PROVIDER_CURRENT = value;
+              MODEL_CURRENT = modelValue;
+            }
+            if (kind === 'model') {
+              MODEL_CURRENT = value;
+              var selected = pick(MODELS, value, value);
+              PROVIDER_CURRENT = selected.p || PROVIDER_CURRENT;
+            }
             if (kind === 'effort') EFFORT_CURRENT = value;
             MODEL_OPTIONS_LOADED_AT = 0;
             paintChatMenu(null);
@@ -1196,16 +1280,17 @@
         jumpTo(list.scrollHeight);
       }
       function liveSetCancel(on) {
-        send.setAttribute('data-live-cancel', on ? '1' : '0');
-        send.setAttribute('aria-label', on ? '停止回复' : '发送');
-        send.innerHTML = on ? icon('close', 18) : icon('send', 18);
+        if (!stop) return;
+        stop.hidden = !on;
+        stop.disabled = !on;
       }
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        var activity = '<div data-live-activity></div>';
-        append(aiMsg(activity + '<div class="liveanswer" data-live-answer hidden></div>',
-          '', clockNow(), '', 'idle'));
+        append('<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', '', 'idle')
+          + '<div class="msg__body"><div data-live-activity></div>'
+          + '<div class="liveanswer bubble" data-live-answer hidden></div>'
+          + '<span class="msg__time">' + clockNow() + '</span></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
@@ -1296,6 +1381,7 @@
           addActivity(reasoningEl, 'reasoning', turnId, reasoningText);
           liveAvatar(reasoningEl, 'think');
           liveCurrentTurn = turnId || liveCurrentTurn;
+          if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
@@ -1306,6 +1392,7 @@
           addActivity(progressEl, 'tool', turnId, toolText);
           liveAvatar(progressEl, 'work');
           liveCurrentTurn = turnId || liveCurrentTurn;
+          if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
@@ -1323,9 +1410,8 @@
         }
 
         if (type === 'pending') {
-          /* pending is transport state only. Do not invent visible “thinking/replying” content. */
-          liveCurrentTurn = turnId || liveCurrentTurn;
-          liveSetCancel(!!liveCurrentTurn);
+          /* A queued user turn is transport state only. Send stays available; no fake AI bubble. */
+          if (turnId) livePendingTurns[turnId] = true;
           return;
         }
 
@@ -1334,6 +1420,7 @@
           liveText(el, event.text || '', true);
           liveAvatar(el, 'talk');
           liveCurrentTurn = turnId || liveCurrentTurn;
+          if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           setSessionStatus('');
@@ -1346,12 +1433,15 @@
             liveCompleted[turnId] = true;
             CHAT_LOG.push({ who: 'ai', html: esc(finalText), activity: finalActivity, time: clockNow() });
           }
+          if (turnId) delete livePendingTurns[turnId];
+          if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         } else if (type === 'cancelled') {
           setSessionStatus('');
           finishActivities(el, turnId);
           liveText(el, '已停止回复', false);
           liveAvatar(el, 'idle');
+          if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
         }
       }
@@ -1412,24 +1502,29 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
-            s.active = (!!CURRENT_SESSION_ID && s.id === CURRENT_SESSION_ID)
-              || (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
+            s.active = CURRENT_SESSION_ID
+              ? s.id === CURRENT_SESSION_ID
+              : (!!CURRENT_SESSION_KEY && s.key === CURRENT_SESSION_KEY);
           });
           paintSessionList();
           hydrateHistory(boot.history || []);
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
-          liveCurrentTurn = String(boot.pending_turn_id || '');
-          if (liveCurrentTurn) {
-            liveSetCancel(true);
-            var pendingState = TURN_ACTIVITY[liveCurrentTurn];
+          var restoredPendingTurn = String(boot.pending_turn_id || '');
+          liveCurrentTurn = '';
+          liveSetCancel(false);
+          if (restoredPendingTurn) {
+            livePendingTurns[restoredPendingTurn] = true;
+            var pendingState = TURN_ACTIVITY[restoredPendingTurn];
             if (pendingState && ((pendingState.reasoning && pendingState.reasoning.length)
                 || (pendingState.tools && pendingState.tools.length))) {
-              var pendingEl = liveEnsure(liveCurrentTurn);
+              liveCurrentTurn = restoredPendingTurn;
+              liveSetCancel(true);
+              var pendingEl = liveEnsure(restoredPendingTurn);
               pendingState.done = false;
-              paintActivity(pendingEl, liveCurrentTurn, false);
+              paintActivity(pendingEl, restoredPendingTurn, false);
             }
-          } else liveSetCancel(false);
+          }
           scheduleLivePoll(0);
         } catch (err) {
           if (err && err.status === 401) {
@@ -1499,11 +1594,6 @@
       }
 
       async function push() {
-        if (liveSendInFlight) return;
-        if (live && send.getAttribute('data-live-cancel') === '1') {
-          await liveCancel();
-          return;
-        }
         var v = (input.value || '').trim();
         if (!v) return;
         if (!live) {
@@ -1526,13 +1616,13 @@
         }
 
         if (live) {
-          liveSendInFlight = true;
+          liveSendInFlight += 1;
           try {
             var accepted = await T.sendText(v, messageId);
             retryMessageId = '';
             retryMessageText = '';
-            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
-            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            var acceptedTurn = String((accepted && accepted.turn_id) || '');
+            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
             scheduleLivePoll(0);
           } catch (err) {
             retryMessageId = messageId;
@@ -1547,7 +1637,7 @@
               }
             }
           } finally {
-            liveSendInFlight = false;
+            liveSendInFlight = Math.max(0, liveSendInFlight - 1);
           }
           return;
         }
@@ -1585,14 +1675,14 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
         /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
            先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live && !liveSendInFlight) {
-          liveSendInFlight = true;
+        if (live) {
+          liveSendInFlight += 1;
           T.sendText('[表情包：' + s2.label + ']').then(function (accepted) {
-            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
-            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            var acceptedTurn = String((accepted && accepted.turn_id) || '');
+            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
             scheduleLivePoll(0);
           }).catch(function () {}).then(function () {
-            liveSendInFlight = false;
+            liveSendInFlight = Math.max(0, liveSendInFlight - 1);
           });
         }
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
@@ -1734,8 +1824,8 @@
         pushLog({ who: 'me', html: html, time: clockNow() });
         if (live) {
           T.sendText('[表情包：' + sk.label + ']').then(function (accepted) {
-            liveCurrentTurn = String((accepted && accepted.turn_id) || '');
-            if (liveCurrentTurn) { liveEnsure(liveCurrentTurn); liveSetCancel(true); }
+            var acceptedTurn = String((accepted && accepted.turn_id) || '');
+            if (acceptedTurn) livePendingTurns[acceptedTurn] = true;
             scheduleLivePoll(0);
           }).catch(function () {});
         }
@@ -1759,11 +1849,14 @@
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
         if (!key && !id) return;
-        if ((id && id === CURRENT_SESSION_ID) || (key && key === CURRENT_SESSION_KEY)) {
+        var alreadyCurrent = CURRENT_SESSION_ID
+          ? (id && id === CURRENT_SESSION_ID)
+          : (CURRENT_SESSION_KEY && key && key === CURRENT_SESSION_KEY);
+        if (alreadyCurrent) {
           setSessionDrawer(false);
           return;
         }
-        if (liveSendInFlight || liveCurrentTurn) {
+        if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length) {
           setSessionStatus('当前消息或回复尚未结束，请先完成或停止后再切换会话。');
           setSessionDrawer(false);
           return;
@@ -1786,7 +1879,9 @@
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
           liveCovered = Object.create(null);
+          livePendingTurns = Object.create(null);
           liveCurrentTurn = '';
+          liveSetCancel(false);
           list.innerHTML = liveEmpty();
           await refreshSessions();
           await liveBootstrap();
@@ -1825,6 +1920,7 @@
       function onKey(e) { if (e.key === 'Enter') push(); }
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
+      if (stop) stop.addEventListener('click', liveCancel);
       if (mic) mic.addEventListener('click', onVoiceInput);
       return function () {
         root.removeEventListener('click', onChatMenuTap);
@@ -1833,6 +1929,9 @@
         if (sessionScrim) sessionScrim.removeEventListener('click', onSessionDrawerClick);
         if (sessionDrawer) sessionDrawer.removeEventListener('click', onSessionDrawerClick);
         input.removeEventListener('keydown', onKey);
+        send.removeEventListener('click', push);
+        if (stop) stop.removeEventListener('click', liveCancel);
+        if (mic) mic.removeEventListener('click', onVoiceInput);
         input.removeEventListener('focus', onFocus);
         input.removeEventListener('blur', onBlur);
         if (vv) {
