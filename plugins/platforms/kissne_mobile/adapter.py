@@ -945,6 +945,26 @@ class KissneMobileAdapter(BasePlatformAdapter):
         retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
         return _json_response({"ok": True, "acked": retired, "cursor": cursor})
 
+    def _install_mobile_approval_notify(self, installation: str) -> None:
+        """Bridge Hermes approval requests into this device's durable event stream."""
+        session_key = self.mobile_session_key(installation)
+        loop = asyncio.get_running_loop()
+        from tools.approval import register_gateway_notify
+
+        def notify(data: Dict[str, Any]) -> None:
+            payload = {
+                "approval_id": str(data.get("request_id") or ""),
+                "tool_input": {"command": str(data.get("command") or "")},
+                "summary": str(data.get("description") or "Approval required"),
+                "allow_session": bool(data.get("allow_session", False)),
+                "allow_permanent": bool(data.get("allow_permanent", False)),
+                "status": "pending",
+            }
+            asyncio.run_coroutine_threadsafe(
+                self._queue_event(installation, EVENT_APPROVAL_REQUIRED, extra=payload), loop)
+
+        register_gateway_notify(session_key, notify)
+
     async def _handle_inbound(self, request: web.Request) -> web.Response:
         """Authenticated text in -> the Runtime's normal inbound path.
 
@@ -1009,6 +1029,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
+        self._install_mobile_approval_notify(installation)
         event = MessageEvent(
             text=text,
             message_type=MessageType.TEXT,
