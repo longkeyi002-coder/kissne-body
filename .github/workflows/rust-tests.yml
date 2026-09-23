@@ -27,6 +27,11 @@ concurrency:
 jobs:
   bootstrap-installer:
     name: cargo test (bootstrap installer)
+    # `ubuntu-latest-32-core` is a larger runner this fork cannot provision (same
+    # reason as the 96-core lane in tests.yml), so this lane queued forever
+    # instead of reporting. Re-enable with the repo variable
+    # KISSNE_ENABLE_LARGER_RUNNERS=true once larger runners exist.
+    if: vars.KISSNE_ENABLE_LARGER_RUNNERS == 'true'
     # cargo builds codegen units and test binaries in parallel across the
     # cores. This lane also builds the crate from the start when Cargo.toml
     # changes.

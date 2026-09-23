@@ -1103,10 +1103,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     logger.debug("[kissne_mobile] profile scope unavailable for model options", exc_info=True)
             with scope:
                 # Keep the mobile picker identical to Hermes 9120 Dashboard:
-                # same profile, same inventory builder, same default filtering.
-                # Do not overlay stale routing-entry provider/model values and do not
-                # inject unconfigured providers that the Dashboard itself would hide.
-                payload = build_model_options_payload(load_picker_context())
+                # same profile, same inventory builder, same filtering.
+                # include_unconfigured mirrors the Dashboard's opt-in so the
+                # full provider universe is visible (same as #56974 on web).
+                payload = build_model_options_payload(
+                    load_picker_context(), include_unconfigured=True
+                )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
             payload["efforts"] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
