@@ -1,6 +1,7 @@
 package com.kissne.mobile
 
 import android.net.Uri
+import org.json.JSONObject
 
 /**
  * Small, explicit command contract for temporary Web-AI/browser assistance.
@@ -21,6 +22,23 @@ object BrowserAgent {
         val command: Command,
         val requiresConfirmation: Boolean,
     )
+
+    fun parseCommand(raw: String): Command? = runCatching {
+        val obj = JSONObject(raw)
+        val action = obj.optString("action").trim().lowercase()
+        if (action.isBlank()) return null
+        val url = obj.optString("url").takeIf { it.isNotBlank() }
+        val query = obj.optString("query").takeIf { it.isNotBlank() }
+        Command(action = action, url = url, query = query, risk = classify(action))
+    }.getOrNull()
+
+    fun resultEnvelope(ok: Boolean, action: String, payload: String? = null, error: String? = null): String =
+        JSONObject().apply {
+            put("ok", ok)
+            put("action", action)
+            if (payload != null) put("payload", payload)
+            if (error != null) put("error", error)
+        }.toString()
 
     fun decide(action: String, url: String? = null, query: String? = null): Decision {
         val command = Command(action = action, url = url, query = query, risk = classify(action))
