@@ -119,6 +119,8 @@ REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
 MODEL_OPTIONS_PATH = "/model-options"
 SET_MODEL_PATH = "/set-model"
+ADMIN_SESSIONS_PATH = "/admin/sessions"
+ADMIN_STATUS_PATH = "/admin/status"
 
 #: How many history messages a fresh app launch may ask for (§0.3.16: bootstrap returns a BOUNDED tail).
 DEFAULT_HISTORY_CAP = 50
@@ -315,6 +317,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(HEALTH_PATH, self._handle_health)
         app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
         app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
+        app.router.add_get(ADMIN_SESSIONS_PATH, self._handle_admin_sessions)
+        app.router.add_get(ADMIN_STATUS_PATH, self._handle_admin_status)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
         # is this platform's native client, so that is what handler factories receive.
@@ -1517,6 +1521,69 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     _fingerprint(turn_id), _fingerprint(installation))
         return _json_response({
             "ok": True, "acknowledged": True, "turn_id": turn_id, "state": TURN_CANCELLED,
+        })
+
+    async def _handle_admin_sessions(self, request: web.Request) -> web.Response:
+        """Device-scoped read-only session index for the Android conversation picker."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return _error_response("session_store_unavailable", 503)
+        try:
+            entries = await asyncio.to_thread(store.list_sessions)
+        except Exception:
+            logger.warning("[kissne_mobile] could not list sessions", exc_info=True)
+            return _error_response("session_list_unavailable", 503)
+
+        current = self._conversation_identity(installation)
+        current_id = str((current or {}).get("session_id") or "")
+        # Routing aliases can point at the same Conversation. Return one row per
+        # canonical session id, preferring a non-mobile key/title when available.
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for entry in entries:
+            sid = str(getattr(entry, "session_id", "") or "")
+            if not sid:
+                continue
+            key = str(getattr(entry, "session_key", "") or "")
+            display = str(getattr(entry, "display_name", "") or "")
+            updated = getattr(entry, "updated_at", None)
+            created = getattr(entry, "created_at", None)
+            row = {
+                "session_id": sid,
+                "session_key": key,
+                "title": display,
+                "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else str(updated or ""),
+                "created_at": created.isoformat() if hasattr(created, "isoformat") else str(created or ""),
+                "active": sid == current_id,
+            }
+            previous = by_id.get(sid)
+            mobile_key = key.startswith("kissne_mobile:")
+            previous_mobile = bool(previous and str(previous.get("session_key") or "").startswith("kissne_mobile:"))
+            if previous is None or (previous_mobile and not mobile_key):
+                by_id[sid] = row
+            elif sid == current_id:
+                previous["active"] = True
+        rows = list(by_id.values())
+        rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+        return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
+
+    async def _handle_admin_status(self, request: web.Request) -> web.Response:
+        """Small read-only operational snapshot safe for a paired device token."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        started = getattr(self, "_connected_at", None)
+        uptime = 0.0
+        if isinstance(started, (int, float)):
+            uptime = max(0.0, time.time() - float(started))
+        return _json_response({
+            "ok": True,
+            "uptime_seconds": uptime,
+            "git": {"head": "", "describe": "", "branch": "", "dirty_files": 0},
+            "deploy": {"running": False, "success": None, "type": None},
+            "mobile": {"connected": bool(self.is_connected), "bound_port": self.bound_port},
         })
 
     async def _handle_revoke(self, request: web.Request) -> web.Response:
