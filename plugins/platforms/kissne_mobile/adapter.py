@@ -99,6 +99,7 @@ from .device_store import (
 )
 
 logger = logging.getLogger(__name__)
+_LIVE_ADAPTERS: Dict[str, "KissneMobileAdapter"] = {}
 
 PLATFORM_NAME = "kissne_mobile"
 DEFAULT_HOST = "127.0.0.1"
@@ -945,10 +946,30 @@ class KissneMobileAdapter(BasePlatformAdapter):
         retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
         return _json_response({"ok": True, "acked": retired, "cursor": cursor})
 
+    def installation_from_session_key(self, session_key: str) -> Optional[str]:
+        prefix = f"{PLATFORM_NAME}:dm:"
+        if not session_key.startswith(prefix):
+            return None
+        return session_key[len(prefix):].split(":", 1)[0] or None
+
+    def queue_approval_resolution_from_hook(self, installation: str, approval_id: str,
+                                            status: str, reason: str) -> None:
+        loop = getattr(self, "_approval_loop", None)
+        if loop is None or loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._queue_event(
+                installation, EVENT_APPROVAL_RESOLVED,
+                extra={"approval_id": approval_id, "decision": status,
+                       "scope": None, "reason": reason}),
+            loop)
+
     def _install_mobile_approval_notify(self, installation: str) -> None:
         """Bridge Hermes approval requests into this device's durable event stream."""
         session_key = self.mobile_session_key(installation)
         loop = asyncio.get_running_loop()
+        self._approval_loop = loop
+        _LIVE_ADAPTERS[session_key] = self
         from tools.approval import register_gateway_notify
 
         def notify(data: Dict[str, Any]) -> None:
@@ -1739,8 +1760,32 @@ def _is_connected(config: Optional[PlatformConfig] = None) -> bool:
     return bool(extra.get("enabled"))
 
 
+def _mobile_post_approval_response(**payload: Any) -> None:
+    """Mirror Runtime-owned terminal approval outcomes into Mobile."""
+    session_key = str(payload.get("session_key") or "")
+    if not session_key.startswith(f"{PLATFORM_NAME}:"):
+        return
+    choice = str(payload.get("choice") or "")
+    if choice not in {"timeout", "deny"}:
+        return
+    approval_id = str(payload.get("request_id") or "")
+    if not approval_id:
+        return
+    adapter = _LIVE_ADAPTERS.get(session_key)
+    if adapter is None:
+        return
+    installation = adapter.installation_from_session_key(session_key)
+    if not installation:
+        return
+    status = "expired" if choice == "timeout" else "denied"
+    adapter.queue_approval_resolution_from_hook(
+        installation, approval_id, status,
+        "approval_timeout" if choice == "timeout" else "runtime_denied")
+
+
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
+    ctx.register_hook("post_approval_response", _mobile_post_approval_response)
     ctx.register_platform(
         name=PLATFORM_NAME,
         label="Kissne Mobile",
