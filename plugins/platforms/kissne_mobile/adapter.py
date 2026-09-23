@@ -412,9 +412,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return "检查 Git 状态"
         if re.search(r"\b(pytest|gradle|lint|test)\b", low):
             return "运行相关检查"
-        file_match = re.search(r"([\w./-]+\.(?:py|js|ts|kt|css|html|md))", raw, re.I)
-        if re.search(r"\b(sed|cat|head|tail|read|reading|open)\b", low) and file_match:
-            return f"读取 {file_match.group(1).rsplit('/', 1)[-1]}"
+        file_matches = re.findall(r"([\\w./-]+\\.(?:py|js|ts|kt|css|html|md))", raw, re.I)
+        file_name = file_matches[-1] if file_matches else ""
+        if re.search(r"\\b(sed|cat|head|tail|read|reading|open)\\b", low) and file_name:
+            return f"读取 {file_name.rsplit('/', 1)[-1]}"
         if re.search(r"\b(grep|rg)\b", low):
             pattern = re.search(
                 r"(?:grep|rg)\s+(?:-[^\s]+\s+)*(?:\"([^\"]+)\"|'([^']+)'|([^\s|]+))",
@@ -427,7 +428,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if re.search(r"\bfind\b", low):
             return "查找相关文件"
         if low_tool in {"read", "read_file", "fetch_file"} or "read" in low_tool:
-            return f"读取 {file_match.group(1).rsplit('/', 1)[-1]}" if file_match else "读取文件"
+            return f"读取 {file_name.rsplit('/', 1)[-1]}" if file_name else "读取文件"
         if any(word in low_tool for word in ("edit", "write", "patch", "update")):
             return "修改文件"
         if any(word in low_tool for word in ("search", "grep", "find")):
@@ -1101,17 +1102,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 except Exception:
                     logger.debug("[kissne_mobile] profile scope unavailable for model options", exc_info=True)
             with scope:
-                ctx = load_picker_context().with_overrides(
-                    current_model=current_model or None,
-                    current_provider=current_provider or None,
-                )
-                try:
-                    payload = build_model_options_payload(ctx, include_unconfigured=True)
-                except TypeError as exc:
-                    # Compatibility with older/mocked Dashboard inventory call signatures.
-                    if "include_unconfigured" not in str(exc):
-                        raise
-                    payload = build_model_options_payload(ctx)
+                # Keep the mobile picker identical to Hermes 9120 Dashboard:
+                # same profile, same inventory builder, same default filtering.
+                # Do not overlay stale routing-entry provider/model values and do not
+                # inject unconfigured providers that the Dashboard itself would hide.
+                payload = build_model_options_payload(load_picker_context())
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
             payload["efforts"] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
