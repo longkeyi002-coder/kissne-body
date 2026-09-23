@@ -251,6 +251,8 @@
   /* Long-press a chat message to hand only that message to a temporary web AI. */
   var webAiPressTimer = null;
   var webAiPressTarget = null;
+  var webAiPressStartX = 0;
+  var webAiPressStartY = 0;
   function closeWebAiSheet() {
     var old = document.querySelector('.webai-sheet');
     if (old) old.remove();
@@ -265,7 +267,7 @@
       + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
       + '<div class="webai-sheet__title">发送给…</div>'
       + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>即将支持</span></button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>临时网页 · 不共享上下文</span></button>'
       + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
     sheet.dataset.messageText = text;
     document.body.appendChild(sheet);
@@ -274,6 +276,8 @@
     var msg = e.target.closest && e.target.closest('[data-chat-message]');
     if (!msg) return;
     webAiPressTarget = msg;
+    webAiPressStartX = e.clientX;
+    webAiPressStartY = e.clientY;
     clearTimeout(webAiPressTimer);
     webAiPressTimer = setTimeout(function () {
       nativeTap();
@@ -281,12 +285,21 @@
       webAiPressTimer = null;
     }, 520);
   });
-  ['pointerup','pointercancel','pointermove'].forEach(function (name) {
+  ['pointerup','pointercancel'].forEach(function (name) {
     document.addEventListener(name, function () {
       clearTimeout(webAiPressTimer);
       webAiPressTimer = null;
     }, { passive: true });
   });
+  document.addEventListener('pointermove', function (e) {
+    if (!webAiPressTimer) return;
+    var dx = e.clientX - webAiPressStartX;
+    var dy = e.clientY - webAiPressStartY;
+    if ((dx * dx + dy * dy) > 100) {
+      clearTimeout(webAiPressTimer);
+      webAiPressTimer = null;
+    }
+  }, { passive: true });
 
   document.addEventListener('click', function (e) {
     var webAiClose = e.target.closest('[data-webai-close]');
@@ -296,10 +309,14 @@
       var provider = webAiProvider.getAttribute('data-webai-provider');
       var sheet = webAiProvider.closest('.webai-sheet');
       var text = sheet ? sheet.dataset.messageText || '' : '';
-      if (provider === 'deepseek') {
+      var webAiUrls = {
+        deepseek: 'https://chat.deepseek.com/',
+        chatgpt: 'https://chatgpt.com/'
+      };
+      if (webAiUrls[provider]) {
         try {
           if (window.KissneNativeTransport && typeof window.KissneNativeTransport.openBrowserWithText === 'function') {
-            window.KissneNativeTransport.openBrowserWithText('https://chat.deepseek.com/', text);
+            window.KissneNativeTransport.openBrowserWithText(webAiUrls[provider], text);
           }
         } catch (err) {}
         closeWebAiSheet();
