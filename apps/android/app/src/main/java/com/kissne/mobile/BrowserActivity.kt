@@ -291,7 +291,15 @@ class BrowserActivity : AppCompatActivity() {
                 }
                 return true;
               };
-              window.__kissneDeepSeekAdapter = { findComposer, setText };
+              const browserAgent = {
+                run: (command) => {
+                  if (!window.KissneBrowserAgent?.postMessage) return false;
+                  window.KissneBrowserAgent.postMessage(JSON.stringify(command || {}));
+                  return true;
+                },
+                onResult: (handler) => window.addEventListener('kissne-browser-agent-result', e => handler(e.detail))
+              };
+              window.__kissneDeepSeekAdapter = { findComposer, setText, browserAgent };
               const pending = $payload;
               if (pending) {
                 let tries = 0;
@@ -329,7 +337,15 @@ class BrowserActivity : AppCompatActivity() {
                 }
                 return true;
               };
-              window.__kissneChatGptAdapter = { findComposer, setText };
+              const browserAgent = {
+                run: (command) => {
+                  if (!window.KissneBrowserAgent?.postMessage) return false;
+                  window.KissneBrowserAgent.postMessage(JSON.stringify(command || {}));
+                  return true;
+                },
+                onResult: (handler) => window.addEventListener('kissne-browser-agent-result', e => handler(e.detail))
+              };
+              window.__kissneChatGptAdapter = { findComposer, setText, browserAgent };
               const pending = $payload;
               if (pending) {
                 let tries = 0;
