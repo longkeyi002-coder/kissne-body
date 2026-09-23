@@ -158,6 +158,8 @@ class MainActivity : AppCompatActivity() {
             checkUpdates = { updateManager.checkForUpdates(force = true) },
             startVoiceInput = { requestId -> startVoiceInput(requestId) },
             startAttachmentPicker = { requestId, kind -> startAttachmentPicker(requestId, kind) },
+            openBrowser = { url -> openBrowser(url) },
+            openBrowserWithText = { url, text -> openBrowser(url, text) },
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -166,6 +168,13 @@ class MainActivity : AppCompatActivity() {
             "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
+
+    private fun openBrowser(url: String?, text: String? = null) {
+        startActivity(Intent(this, BrowserActivity::class.java).apply {
+            url?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_URL, it) }
+            text?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_TEXT, it) }
+        })
     }
 
     private fun startAttachmentPicker(requestId: String, rawKind: String) {

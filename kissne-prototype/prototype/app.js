@@ -248,7 +248,65 @@
     } catch (e) {}
   }
 
+  /* Long-press a chat message to hand only that message to a temporary web AI. */
+  var webAiPressTimer = null;
+  var webAiPressTarget = null;
+  function closeWebAiSheet() {
+    var old = document.querySelector('.webai-sheet');
+    if (old) old.remove();
+  }
+  function openWebAiSheet(msg) {
+    closeWebAiSheet();
+    var text = msg && msg.getAttribute('data-message-text') || '';
+    if (!text.trim()) return;
+    var sheet = document.createElement('div');
+    sheet.className = 'webai-sheet';
+    sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
+      + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
+      + '<div class="webai-sheet__title">发送给…</div>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>即将支持</span></button>'
+      + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
+    sheet.dataset.messageText = text;
+    document.body.appendChild(sheet);
+  }
+  document.addEventListener('pointerdown', function (e) {
+    var msg = e.target.closest && e.target.closest('[data-chat-message]');
+    if (!msg) return;
+    webAiPressTarget = msg;
+    clearTimeout(webAiPressTimer);
+    webAiPressTimer = setTimeout(function () {
+      nativeTap();
+      openWebAiSheet(webAiPressTarget);
+      webAiPressTimer = null;
+    }, 520);
+  });
+  ['pointerup','pointercancel','pointermove'].forEach(function (name) {
+    document.addEventListener(name, function () {
+      clearTimeout(webAiPressTimer);
+      webAiPressTimer = null;
+    }, { passive: true });
+  });
+
   document.addEventListener('click', function (e) {
+    var webAiClose = e.target.closest('[data-webai-close]');
+    if (webAiClose) { closeWebAiSheet(); return; }
+    var webAiProvider = e.target.closest('[data-webai-provider]');
+    if (webAiProvider) {
+      var provider = webAiProvider.getAttribute('data-webai-provider');
+      var sheet = webAiProvider.closest('.webai-sheet');
+      var text = sheet ? sheet.dataset.messageText || '' : '';
+      if (provider === 'deepseek') {
+        try {
+          if (window.KissneNativeTransport && typeof window.KissneNativeTransport.openBrowserWithText === 'function') {
+            window.KissneNativeTransport.openBrowserWithText('https://chat.deepseek.com/', text);
+          }
+        } catch (err) {}
+        closeWebAiSheet();
+      }
+      return;
+    }
+
     var navEl = e.target.closest('[data-nav]');
     if (navEl) {
       e.preventDefault();
@@ -265,7 +323,14 @@
       nativeTap();
       var a = actEl.getAttribute('data-action');
       var cur = parseHash();
-      if (a === 'check-update') {
+      if (a === 'open-browser') {
+        try {
+          if (window.KissneNativeTransport && typeof window.KissneNativeTransport.openBrowser === 'function') {
+            window.KissneNativeTransport.openBrowser('https://chat.deepseek.com/');
+          }
+        } catch (e) {}
+      }
+      else if (a === 'check-update') {
         try {
           if (window.KissneNativeTransport && typeof window.KissneNativeTransport.checkForUpdates === 'function') {
             window.KissneNativeTransport.checkForUpdates();
