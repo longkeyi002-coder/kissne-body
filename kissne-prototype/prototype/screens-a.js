@@ -1584,11 +1584,21 @@
           });
         });
 
+        function keepRecoveredLocal(m) {
+          if (!m) return false;
+          var text = String(m.html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
+          return !looksLikeRuntimeControl(text);
+        }
         Object.keys(localByRef).forEach(function (ref) {
-          localByRef[ref].forEach(function (m) { CHAT_LOG.push(m); });
+          localByRef[ref].forEach(function (m) {
+            if (keepRecoveredLocal(m)) CHAT_LOG.push(m);
+          });
         });
-        unboundLocal.forEach(function (m) { CHAT_LOG.push(m); });
+        unboundLocal.forEach(function (m) {
+          if (keepRecoveredLocal(m)) CHAT_LOG.push(m);
+        });
         clientSystem.forEach(function (m) {
+          if (!keepRecoveredLocal(m)) return;
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
         persistChatLog();
