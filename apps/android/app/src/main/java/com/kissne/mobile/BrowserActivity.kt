@@ -26,6 +26,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
 /**
  * Isolated external-web surface for Kissne.
@@ -146,12 +148,28 @@ class BrowserActivity : AppCompatActivity() {
         setContentView(root)
         ViewCompat.requestApplyInsets(root)
 
+        installWebAiCommandBridge()
         val initial = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: DEEPSEEK_URL
         webView.loadUrl(normalizeUrl(initial))
     }
 
-    private fun executeBrowserAgent(action: String, query: String? = null) {
-        val decision = BrowserAgent.decide(action, webView.url, query)
+    private fun installWebAiCommandBridge() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        WebViewCompat.addWebMessageListener(
+            webView,
+            "KissneBrowserAgent",
+            setOf("https://chat.deepseek.com", "https://chatgpt.com")
+        ) { _, message, sourceOrigin, isMainFrame, _ ->
+            if (!isMainFrame) return@addWebMessageListener
+            val command = BrowserAgent.parseCommand(message.data) ?: return@addWebMessageListener
+            val host = sourceOrigin.host?.lowercase()
+            if (host != "chat.deepseek.com" && host != "chatgpt.com") return@addWebMessageListener
+            runOnUiThread { executeBrowserAgent(command.action, command.query, command.url) }
+        }
+    }
+
+    private fun executeBrowserAgent(action: String, query: String? = null, requestedUrl: String? = null) {
+        val decision = BrowserAgent.decide(action, requestedUrl ?: webView.url, query)
         if (decision.requiresConfirmation) {
             AlertDialog.Builder(this)
                 .setTitle("确认网页操作")
