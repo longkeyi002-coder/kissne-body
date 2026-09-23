@@ -795,7 +795,7 @@
   }
   function stickerFromWire(text) {
     var raw = String(text == null ? '' : text).trim();
-    var m = /^\[表情包\s*[:：]\s*([^\]]+)\]$/.exec(raw);
+    var m = /^[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]$/.exec(raw);
     var sticker = m ? stickerMatch(m[1]) : null;
     return sticker
       ? '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>'
@@ -814,7 +814,7 @@
     var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
-    var re = /\[表情包\s*[:：]\s*([^\]]+)\]/g;
+    var re = /[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]/g;
     var out = '';
     var last = 0;
     var matched = false;
@@ -1718,8 +1718,9 @@
         var value = String(text || '');
         box.hidden = !value;
         box.classList.toggle('is-pending', !!pending && !!value);
-        if (pending) box.textContent = value;
-        else box.innerHTML = chatHtmlFromWire(value);
+        /* Drafts can already contain a complete sticker marker. Rendering through the
+           same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
+        box.innerHTML = chatHtmlFromWire(value);
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
