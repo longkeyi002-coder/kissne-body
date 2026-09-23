@@ -269,7 +269,7 @@ def test_bootstrap_preserves_tool_chain_and_final_turn_identity(tmp_path):
                 {"role": "user", "content": "inspect", "platform_message_id": turn_id},
             )
             sessions.append_to_transcript(conversation.session_id, {
-                "role": "assistant", "content": "", "reasoning": "must stay private",
+                "role": "assistant", "content": "", "reasoning": "provider-visible reasoning",
                 "tool_calls": [{"id": "call-1", "type": "function",
                                 "function": {"name": "terminal", "arguments": "{\"cmd\":\"pwd\"}"}}],
             })
@@ -294,7 +294,7 @@ def test_bootstrap_preserves_tool_chain_and_final_turn_identity(tmp_path):
     assert history[2]["tool_call_id"] == "call-1"
     assert history[2]["text"].endswith("…[truncated]")
     assert len(history[2]["text"]) < 4200
-    assert all("reasoning" not in row and "reasoning_content" not in row for row in history)
+    assert history[1]["reasoning"] == "provider-visible reasoning"
     assert truncated is False
 
 

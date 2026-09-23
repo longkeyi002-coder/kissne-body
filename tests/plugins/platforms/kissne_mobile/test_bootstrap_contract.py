@@ -171,3 +171,33 @@ def test_bootstrap_payload_carries_no_credentials(tmp_path):
     assert not offenders, f"the reported Conversation leaked provider truth: {offenders}"
     assert "device_token" not in payload, (
         "bootstrap must not hand back a device token (the device already holds it)")
+
+
+def test_bootstrap_preserves_provider_visible_reasoning(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            store.append_to_transcript(existing.session_id, {
+                "role": "user", "content": "why?", "platform_message_id": "reasoning-user"
+            })
+            store.append_to_transcript(existing.session_id, {
+                "role": "assistant",
+                "content": "because",
+                "reasoning": "provider-visible reasoning",
+            })
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                status, payload, _ = await http(port, "POST", "/bootstrap", token=token)
+            finally:
+                await stop(adapter)
+        return status, payload
+
+    status, payload = run(scenario())
+    assert status == 200
+    assistant = [item for item in (payload.get("history") or []) if item.get("role") == "assistant"]
+    assert assistant and assistant[-1].get("reasoning") == "provider-visible reasoning"
+    assert assistant[-1].get("text") == "because"

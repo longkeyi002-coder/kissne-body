@@ -579,6 +579,28 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
 
+    async def send_reasoning(self, chat_id: str, content: str, *,
+                             draft_id: int = 0) -> SendResult:
+        """Queue provider-visible reasoning on its own transport lane.
+
+        This never enters assistant_text: final answer scrubbing remains unchanged while
+        models/providers that expose reasoning can stream it to capable clients.
+        """
+        text = str(content or "")
+        if not text:
+            return SendResult(success=True, message_id=None)
+        message_id = await self._queue_event(
+            chat_id, EVENT_DELTA, content=text,
+            extra={
+                "draft_id": int(draft_id or 0),
+                "presentation": "reasoning",
+                "interim": True,
+            },
+        )
+        if message_id is None:
+            return SendResult(success=False, error="missing target installation")
+        return SendResult(success=True, message_id=message_id)
+
     async def send_draft(self, chat_id: str, draft_id: int, content: str,
                          metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Separate cumulative assistant text from semantic tool Activity before delivery."""
@@ -1294,8 +1316,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             role = str(row.get("role") or "").strip().lower()
             if role not in {"user", "assistant", "tool"}:
                 continue
-            # Deliberately do not read/copy row["reasoning"].
             text_value = row.get("content", row.get("text"))
+            reasoning_value = row.get("reasoning", row.get("reasoning_content"))
+            reasoning = clipped(reasoning_value, 16384) if reasoning_value is not None else ""
             text = text_value if isinstance(text_value, str) else ""
             stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
 
@@ -1320,6 +1343,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 if not text.strip() and not calls:
                     continue
                 item = {"role": "assistant", "text": text}
+                if reasoning:
+                    item["reasoning"] = reasoning
                 if calls:
                     item["tool_calls"] = calls
                     item["activity_only"] = not bool(text.strip())
