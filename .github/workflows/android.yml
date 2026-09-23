@@ -3,7 +3,7 @@ name: Android
 on:
   workflow_dispatch:
   pull_request:
-    paths: ["apps/android/**", ".github/workflows/android.yml"]
+    paths: ["apps/android/**", "kissne-prototype/**", ".github/workflows/android.yml"]
   push:
     branches: [main]
     paths: ["apps/android/**", ".github/workflows/android.yml"]
