@@ -179,10 +179,10 @@ def test_bootstrap_preserves_provider_visible_reasoning(tmp_path):
             adapter = make_adapter()
             store = build_session_store(home)
             existing = preexisting_conversation(store)
-            store.append_message(existing.session_id, {
-                "role": "user", "content": "why?", "message_id": "reasoning-user"
+            store.append_to_transcript(existing.session_id, {
+                "role": "user", "content": "why?", "platform_message_id": "reasoning-user"
             })
-            store.append_message(existing.session_id, {
+            store.append_to_transcript(existing.session_id, {
                 "role": "assistant",
                 "content": "because",
                 "reasoning": "provider-visible reasoning",
