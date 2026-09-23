@@ -1488,6 +1488,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
         history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
             identity["session_id"])
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
+        from tools.approval import list_gateway_approvals
+        live_approvals = await asyncio.to_thread(
+            list_gateway_approvals, self.mobile_session_key(installation))
+        approvals = [{
+            "approval_id": str(item.get("request_id") or ""),
+            "tool_input": {"command": str(item.get("command") or "")},
+            "summary": str(item.get("description") or "Approval required"),
+            "allow_session": bool(item.get("allow_session", False)),
+            "allow_permanent": bool(item.get("allow_permanent", False)),
+            "status": "pending",
+        } for item in live_approvals]
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
         return _json_response({
@@ -1497,6 +1508,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "history": history,
             "history_truncated": truncated,
             "pending_turn_id": pending,
+            "pending_approvals": approvals,
             "covered_event_seqs": covered,
         })
 
