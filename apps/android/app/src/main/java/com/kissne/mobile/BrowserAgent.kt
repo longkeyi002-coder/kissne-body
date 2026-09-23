@@ -38,6 +38,20 @@ object BrowserAgent {
         }
     }
 
+    fun readOnlyCommandScript(command: Command): String {
+        require(command.risk == Risk.READ_ONLY) { "write commands require explicit confirmation" }
+        return when (command.action.lowercase()) {
+            "read" -> "JSON.stringify(window.__kissneSiteAdapter?.read?.() || null)"
+            "search" -> {
+                val q = org.json.JSONObject.quote(command.query.orEmpty())
+                "JSON.stringify({ok: !!window.__kissneSiteAdapter?.search?.($q)})"
+            }
+            "scroll" -> "window.scrollBy(0, Math.max(240, window.innerHeight * 0.8)); JSON.stringify({ok:true})"
+            "refresh" -> "location.reload(); JSON.stringify({ok:true})"
+            else -> "JSON.stringify({ok:false,error:'unsupported_read_action'})"
+        }
+    }
+
     fun readOnlyBootstrap(site: String): String = when (site) {
         "github" -> """
             (() => {
