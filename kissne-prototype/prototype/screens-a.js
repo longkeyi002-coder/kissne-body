@@ -528,7 +528,7 @@
       var safe = CHAT_LOG.slice(-240).map(function (m) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
-          day: m.day || '', messageRef: m.messageRef || '', turnId: m.turnId || '',
+          day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
           sid: sid
         };
@@ -1608,6 +1608,9 @@
           if (localRows && localRows.length) {
             localRows.forEach(function (m) {
               m.optimistic = false;
+              if (item.created_at != null) m.sortAt = item.created_at;
+              m.day = chatDayKey(item.created_at || m.sortAt || Date.now());
+              m.time = historyClock(item.created_at) || m.time;
               CHAT_LOG.push(m);
             });
             delete localByRef[messageRef];
@@ -1630,6 +1633,7 @@
             activity: activity,
             time: historyClock(item.created_at),
             day: chatDayKey(item.created_at),
+            sortAt: item.created_at,
             messageRef: messageRef,
             turnId: turnId,
             localOwned: false,
