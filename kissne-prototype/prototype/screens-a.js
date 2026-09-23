@@ -1484,7 +1484,16 @@
             return;
           }
           if (historyPresentation === 'commentary') {
-            if (!rawText.trim()) return;
+            if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
+            if (looksLikeToolTranscript(rawText)) {
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: item.tool_call_id || ('history-commentary-tool:' + String(CHAT_LOG.length)),
+                tool_name: item.tool_name || '',
+                detail: rawText,
+                status: 'completed'
+              }, 'result');
+              return;
+            }
             CHAT_LOG.push({
               who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
               time: historyClock(item.created_at), day: chatDayKey(item.created_at),
@@ -1515,8 +1524,9 @@
             return;
           }
           if (role === 'system') {
-            /* Hermes/CLI may persist tool progress as a system row (for example
-               "Reading SELF.md"). It is activity, not a centered chat notice. */
+            /* Persisted Runtime control text is never conversation history. Hermes/CLI may also
+               persist tool progress as a system row; restore that as Activity, not a notice. */
+            if (looksLikeRuntimeControl(rawText)) return;
             if (looksLikeToolTranscript(rawText)) {
               upsertToolActivity(historyTurnId || 'history', {
                 tool_call_id: item.tool_call_id || ('history-system:' + String(CHAT_LOG.length)),
@@ -1530,6 +1540,16 @@
             return;
           }
           if (role !== 'user' && role !== 'assistant') return;
+          if (role === 'assistant' && looksLikeRuntimeControl(rawText)) return;
+          if (role === 'assistant' && looksLikeToolTranscript(rawText)) {
+            upsertToolActivity(historyTurnId || 'history', {
+              tool_call_id: item.tool_call_id || ('history-assistant-tool:' + String(CHAT_LOG.length)),
+              tool_name: item.tool_name || '',
+              detail: rawText,
+              status: 'completed'
+            }, 'result');
+            return;
+          }
 
           var localRows = messageRef && localByRef[messageRef];
           if (localRows && localRows.length) {
