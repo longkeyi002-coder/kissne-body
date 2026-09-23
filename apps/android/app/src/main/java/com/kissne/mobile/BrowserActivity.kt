@@ -20,6 +20,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -90,6 +91,7 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
         top.addView(address, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        top.addView(navButton("⌕") { runBrowserAgentRead() })
         top.addView(navButton("↻") { webView.reload() })
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -145,6 +147,32 @@ class BrowserActivity : AppCompatActivity() {
 
         val initial = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: DEEPSEEK_URL
         webView.loadUrl(normalizeUrl(initial))
+    }
+
+    private fun runBrowserAgentRead() {
+        if (!::webView.isInitialized) return
+        val command = BrowserAgent.Command(action = "read", risk = BrowserAgent.Risk.READ_ONLY)
+        webView.evaluateJavascript(BrowserAgent.readOnlyCommandScript(command)) { raw ->
+            val result = decodeJsResult(raw)
+            if (result.isBlank() || result == "null") {
+                Toast.makeText(this, "当前页面暂无可读取内容", Toast.LENGTH_SHORT).show()
+            } else {
+                val preview = runCatching {
+                    val obj = JSONObject(result)
+                    obj.optString("text").trim().take(120)
+                }.getOrDefault("")
+                Toast.makeText(
+                    this,
+                    if (preview.isBlank()) "BrowserAgent 已读取当前页面" else preview,
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun decodeJsResult(raw: String?): String {
+        if (raw.isNullOrBlank() || raw == "null") return ""
+        return runCatching { org.json.JSONTokener(raw).nextValue() as? String ?: raw }.getOrDefault(raw)
     }
 
     private fun loadInput(raw: String) {
