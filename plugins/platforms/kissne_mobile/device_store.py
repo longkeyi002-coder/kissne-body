@@ -43,6 +43,8 @@ __all__ = [
     "INBOUND_NEW",
     "INBOUND_DUPLICATE",
     "INBOUND_CONFLICT",
+    "EVENT_APPROVAL_REQUIRED",
+    "EVENT_APPROVAL_RESOLVED",
 ]
 
 #: Turn states published to a device. A turn is opened by an accepted inbound message and closed by the
@@ -57,6 +59,8 @@ EVENT_PENDING = TURN_PENDING
 EVENT_DELTA = "delta"
 EVENT_COMPLETED = TURN_COMPLETED
 EVENT_CANCELLED = TURN_CANCELLED
+EVENT_APPROVAL_REQUIRED = "approval_required"
+EVENT_APPROVAL_RESOLVED = "approval_resolved"
 
 #: Outcomes of recording a client ``message_id``: a fresh message, a retry of the same one, or a retry
 #: that tries to rewrite an already accepted payload (which must fail closed).
