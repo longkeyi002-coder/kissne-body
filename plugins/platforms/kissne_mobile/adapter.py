@@ -117,6 +117,8 @@ OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 PAIRING_PATH = "/pair"
 BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+HISTORY_PATH = "/history"
+SEARCH_PATH = "/search"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -315,6 +317,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get(HISTORY_PATH, self._handle_history)
+        app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post("/approval", self._handle_approval)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
@@ -1283,6 +1287,90 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.warning("[kissne_mobile] could not resolve a Conversation's canonical key", exc_info=True)
             return ""
         return str(getattr(entry, "session_key", "") or "")
+
+    def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
+        """Return conversations visible to Mobile, ordered oldest to newest."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        try:
+            entries = list(store.list_sessions() or [])
+        except Exception:
+            logger.warning("[kissne_mobile] could not enumerate history sessions", exc_info=True)
+            return []
+        rows: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in entries:
+            sid = str(getattr(entry, "session_id", "") or "")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            rows.append({"id": sid, "updated_at": getattr(entry, "updated_at", None)})
+        return rows
+
+    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
+        """Flatten Hermes transcripts into one chronological Mobile timeline."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        result: List[Dict[str, Any]] = []
+        for session in self._mobile_history_sessions(installation):
+            sid = str(session.get("id") or "")
+            try:
+                transcript = list(store.load_transcript(sid) or [])
+            except Exception:
+                continue
+            for index, row in enumerate(transcript):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "")
+                if role not in {"user", "assistant"}:
+                    continue
+                text = str(row.get("content") or row.get("text") or "")
+                turn_id = str(row.get("message_id") or row.get("turn_id") or "")
+                message_ref = (
+                    f"turn:{turn_id}:{role}" if turn_id else f"{sid}:{index}"
+                )
+                result.append({
+                    "message_ref": message_ref, "role": role, "text": text,
+                    "created_at": row.get("created_at") or row.get("timestamp") or 0,
+                })
+        result.sort(key=lambda row: (row.get("created_at") or 0, row["message_ref"]))
+        return result
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        try:
+            limit = max(1, min(int(request.query.get("limit", "50")), 200))
+        except ValueError:
+            return _error_response("limit_must_be_an_integer", 400)
+        rows = self._mobile_history_rows(installation)
+        before = str(request.query.get("before") or "")
+        if before:
+            index = next((i for i, row in enumerate(rows)
+                          if row["message_ref"] == before), None)
+            if index is None:
+                return _error_response("unknown_history_cursor", 400)
+            rows = rows[:index]
+        selected = rows[-limit:]
+        return _json_response({
+            "ok": True, "messages": selected, "has_more": len(rows) > len(selected),
+            "next_before": selected[0]["message_ref"] if len(rows) > len(selected) and selected else None,
+        })
+
+    async def _handle_history_search(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            return _error_response("query_required", 400)
+        folded = query.casefold()
+        rows = [row for row in self._mobile_history_rows(installation)
+                if folded in str(row.get("text") or "").casefold()]
+        return _json_response({"ok": True, "results": rows[-100:]})
 
     def _bootstrap_history_snapshot(
         self, session_id: str
