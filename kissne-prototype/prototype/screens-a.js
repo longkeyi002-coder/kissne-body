@@ -604,9 +604,10 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: false, toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { reasoning: false, reasoningText: '', toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
     }
     var state = TURN_ACTIVITY[id];
+    if (typeof state.reasoningText !== 'string') state.reasoningText = '';
     if (!Array.isArray(state.toolOrder)) state.toolOrder = [];
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
@@ -623,6 +624,7 @@
         if (!row || typeof row !== 'object') return;
         var state = activityForTurn(id);
         state.reasoning = !!row.reasoning;
+        state.reasoningText = activityDetailText(row.reasoningText || '');
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
         (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
@@ -690,7 +692,15 @@
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
     if (kind === 'reasoning') {
+      var reasoningText = activityDetailText(value || '');
       state.reasoning = true;
+      if (reasoningText) {
+        /* Reasoning may stream in cumulative snapshots or incremental chunks.
+           Replace cumulative snapshots; append genuinely new chunks. */
+        if (!state.reasoningText) state.reasoningText = reasoningText;
+        else if (reasoningText.indexOf(state.reasoningText) === 0) state.reasoningText = reasoningText;
+        else if (state.reasoningText.indexOf(reasoningText) < 0) state.reasoningText += '\n' + reasoningText;
+      }
       state.updatedAt = Date.now();
       persistTurnActivity();
       return true;
@@ -704,7 +714,7 @@
         + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
         + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(closed ? '已完成这一步处理。' : '正在分析并处理当前请求。') + '</div></div>');
+        + '<div class="activity-detail" hidden>' + esc(state.reasoningText || (closed ? '已完成这一步处理。' : '正在分析并处理当前请求。')) + '</div></div>');
     }
     (state.toolOrder || []).forEach(function (key) {
       var tool = state.toolCalls[key];
