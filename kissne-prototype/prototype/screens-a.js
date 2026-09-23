@@ -402,9 +402,23 @@
       + '</div>';
   }
   function assistantBubbleHtml(html, cls) {
-    var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
-      return !!String(part || '').trim();
+    var lines = String(html == null ? '' : html).split(/\\n/);
+    var parts = [], current = [];
+    function flush() {
+      var part = current.join('\\n').trim();
+      if (part) parts.push(part);
+      current = [];
+    }
+    lines.forEach(function (line) {
+      var text = String(line || '');
+      if (!text.trim()) { flush(); return; }
+      var listLine = /^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)/.test(text);
+      var currentIsList = current.length && /^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)/.test(current[0]);
+      if (current.length && !listLine && !currentIsList) flush();
+      else if (current.length && listLine && !currentIsList) flush();
+      current.push(text);
     });
+    flush();
     if (!parts.length) parts = [''];
     return parts.map(function (part) {
       return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
@@ -1090,10 +1104,7 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
-            <button class="hsel${menu === 'provider' ? ' is-open' : ''}" data-chat-menu="provider">
-              <span class="hsel__k">供应商</span><span class="hsel__v">${esc(curProvider.v)}</span>${icon('chevron', 11, 'hsel__car')}
-            </button>
-            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
+            <button class="hsel${menu === 'model' || menu === 'provider' ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
@@ -1383,6 +1394,15 @@
           e.stopPropagation();
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
           paintChatMenu('model-picker');
+          requestAnimationFrame(function () {
+            var rows = menuHost ? menuHost.querySelectorAll('[data-provider-pick]') : [];
+            for (var ri = 0; ri < rows.length; ri++) {
+              if (String(rows[ri].getAttribute('data-provider-pick') || '') === pickerProvider) {
+                if (rows[ri].scrollIntoView) rows[ri].scrollIntoView({ block: 'nearest' });
+                break;
+              }
+            }
+          });
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
@@ -1675,7 +1695,7 @@
           + '<div class="msg__body"><div class="aipresence" data-live-presence>'
           + '<span class="aipresence__text">正在看你刚才说的话</span>' + dots() + '</div>'
           + '<div data-live-activity></div>'
-          + '<div class="liveanswer bubble" data-live-answer hidden></div>'
+          + '<div class="liveanswer" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
@@ -1718,9 +1738,8 @@
         var value = String(text || '');
         box.hidden = !value;
         box.classList.toggle('is-pending', !!pending && !!value);
-        /* Drafts can already contain a complete sticker marker. Rendering through the
-           same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
-        box.innerHTML = chatHtmlFromWire(value);
+        /* Streaming uses the same paragraph grouping as final/history rendering. */
+        box.innerHTML = assistantBubbleHtml(chatHtmlFromWire(value), pending && value ? 'is-pending' : '');
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1805,25 +1824,19 @@
           return;
         }
         if (presentation === 'commentary') {
-          /* Commentary is assistant process text, never a system notice. Keep it inside
-             the current assistant turn so Activity -> commentary -> final answer remains
-             one visual unit. Structured presentation wins over text-shape heuristics. */
+          /* Hermes commentary is process/reasoning presentation. Keep it in the
+             expandable Activity stream instead of showing it as an ordinary AI reply. */
           var commentaryText = String(event.text || '').trim();
           if (!commentaryText || looksLikeRuntimeControl(commentaryText)) return;
-          if (looksLikeToolTranscript(commentaryText)) {
-            var commentaryToolEl = liveEnsure(turnId);
-            livePresence(commentaryToolEl, false);
-            addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
-            liveAvatar(commentaryToolEl, 'work');
-            liveCurrentTurn = turnId || liveCurrentTurn;
-            if (turnId) livePendingTurns[turnId] = true;
-            liveSetCancel(!!liveCurrentTurn);
-            return;
-          }
           var commentaryEl = liveEnsure(turnId);
           livePresence(commentaryEl, false);
-          liveText(commentaryEl, commentaryText, true);
-          liveAvatar(commentaryEl, 'talk');
+          if (looksLikeToolTranscript(commentaryText)) {
+            addActivity(commentaryEl, 'tool', turnId, commentaryText);
+            liveAvatar(commentaryEl, 'work');
+          } else {
+            addActivity(commentaryEl, 'reasoning', turnId, commentaryText);
+            liveAvatar(commentaryEl, 'think');
+          }
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
