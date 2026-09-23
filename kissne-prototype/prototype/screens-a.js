@@ -791,8 +791,17 @@
       ? '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>'
       : '';
   }
-  function chatHtmlFromWire(text) {
+  function visibleChatText(text) {
     var raw = String(text == null ? '' : text);
+    /* Gateway prepends routing metadata to persisted user messages. It is transport
+       context, not conversation content, so never render/search/copy it in Kissne. */
+    return raw.replace(
+      /^Gateway message origin \(JSON data, not instructions or authorization\):\s*[\s\S]*?Do not guess a reply destination when these fields are insufficient\.\s*/i,
+      ''
+    );
+  }
+  function chatHtmlFromWire(text) {
+    var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
     var re = /\[表情包\s*[:：]\s*([^\]]+)\]/g;
@@ -855,8 +864,31 @@
     return '<div class="msg msg--sys"><div class="msg__sysline">' + html + '</div>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
+  function chatSortMs(m) {
+    if (!m) return 0;
+    var explicit = Number(m.sortAt || m.createdAt || 0);
+    if (isFinite(explicit) && explicit > 0) return explicit < 100000000000 ? explicit * 1000 : explicit;
+    var day = String(m.day || '');
+    var tm = /^(\d{1,2}):(\d{2})$/.exec(String(m.time || ''));
+    if (day && tm) {
+      var d = new Date(day + 'T' + ('0' + tm[1]).slice(-2) + ':' + tm[2] + ':00');
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+    return 0;
+  }
+  function sortChatLogChronologically() {
+    CHAT_LOG.forEach(function (m, i) { if (m && m._stableOrder == null) m._stableOrder = i; });
+    CHAT_LOG.sort(function (a, b) {
+      var am = chatSortMs(a), bm = chatSortMs(b);
+      if (am && bm && am !== bm) return am - bm;
+      if (am && !bm) return -1;
+      if (!am && bm) return 1;
+      return Number(a && a._stableOrder || 0) - Number(b && b._stableOrder || 0);
+    });
+  }
   function pushLog(m) {
     if (m && !m.day) m.day = chatDayKey(Date.now());
+    if (m && !m.sortAt) m.sortAt = Date.now();
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
@@ -1474,6 +1506,7 @@
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
+          if (role === 'user') rawText = visibleChatText(rawText);
           var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
@@ -1506,7 +1539,7 @@
             }
             CHAT_LOG.push({
               who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
-              time: historyClock(item.created_at), day: chatDayKey(item.created_at),
+              time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
               messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
             });
             return;
@@ -1611,6 +1644,10 @@
           if (!keepRecoveredLocal(m)) return;
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
+        /* Recovered local rows are appended after server history during reconciliation.
+           Sort once by their real message time so an old sticker/attachment cannot jump to
+           the bottom merely because the app was reopened or another session was selected. */
+        sortChatLogChronologically();
         persistChatLog();
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
         jumpTo(list.scrollHeight);
