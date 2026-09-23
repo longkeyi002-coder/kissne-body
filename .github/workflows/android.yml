@@ -5,8 +5,8 @@ on:
   pull_request:
     paths: ["apps/android/**", "kissne-prototype/**", ".github/workflows/android.yml"]
   push:
-    branches: [main]
-    paths: ["apps/android/**", ".github/workflows/android.yml"]
+    branches: [main, build/android-0.2.14]
+    paths: ["apps/android/**", "kissne-prototype/**", ".github/workflows/android.yml"]
 
 jobs:
   test:
