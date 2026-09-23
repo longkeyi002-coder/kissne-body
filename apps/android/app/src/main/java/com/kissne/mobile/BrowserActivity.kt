@@ -110,17 +110,15 @@ class BrowserActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val scheme = request.url.scheme?.lowercase()
-                    return if (scheme == "https" || scheme == "http") {
-                        false
-                    } else {
-                        true
-                    }
+                    return scheme != "https"
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
                     address.setText(url)
                     CookieManager.getInstance().flush()
-                    if (isDeepSeek(url)) injectDeepSeekAdapter(view)
+                    val site = BrowserAgent.siteId(url)
+                    view.evaluateJavascript(BrowserAgent.readOnlyBootstrap(site), null)
+                    if (site == "deepseek") injectDeepSeekAdapter(view)
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -146,7 +144,8 @@ class BrowserActivity : AppCompatActivity() {
         val value = raw.trim()
         if (value.isBlank()) return
         val url = when {
-            value.startsWith("https://", true) || value.startsWith("http://", true) -> value
+            value.startsWith("https://", true) -> value
+            value.startsWith("http://", true) -> "https://" + value.substringAfter("://")
             value.contains('.') && !value.contains(' ') -> "https://$value"
             else -> "https://www.google.com/search?q=" + Uri.encode(value)
         }
@@ -201,7 +200,8 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun normalizeUrl(raw: String): String =
-        if (raw.startsWith("https://", true) || raw.startsWith("http://", true)) raw
+        if (raw.startsWith("https://", true)) raw
+        else if (raw.startsWith("http://", true)) "https://" + raw.substringAfter("://")
         else "https://$raw"
 
     @Deprecated("Deprecated in Java")
