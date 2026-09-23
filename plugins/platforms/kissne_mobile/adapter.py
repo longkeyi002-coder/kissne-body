@@ -915,6 +915,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         )
         try:
             await self.handle_message(event)
+            await asyncio.to_thread(
+                store.record_attachment_message,
+                installation, turn_id, marker,
+                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
+            )
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
@@ -1120,7 +1125,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
-        fingerprint = self._payload_fingerprint(text)
+        reply_ref = str(body.get("reply_to") or "").strip()
+        quoted = None
+        if reply_ref:
+            history_rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+            quoted = next((item for item in history_rows if item["message_ref"] == reply_ref), None)
+            if quoted is None:
+                return _error_response("reply_target_not_found", 400)
+            if str(quoted.get("role") or "") == "system":
+                return _error_response("reply_target_not_quotable", 400)
+        fingerprint = hashlib.sha256((text + "\0" + reply_ref).encode("utf-8")).hexdigest()
         if client_message_id:
             existing = await asyncio.to_thread(
                 store.inbound_record, installation, client_message_id)
@@ -1157,7 +1171,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # Runtime identity, so the persisted user row can be reconciled with outbound frames.
             message_id=turn_id,
             user_id=installation,
+            reply_to_message_id=reply_ref or None,
+            reply_to_text=str(quoted.get("text") or "") if quoted else None,
+            reply_to_author_name=(
+                "叶青栩" if quoted and quoted.get("role") == "assistant" else
+                "用户" if quoted else None
+            ),
+            reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
         )
+        if quoted:
+            await asyncio.to_thread(
+                store.record_reply_link, installation, turn_id, reply_ref,
+                str(quoted.get("role") or ""), str(quoted.get("text") or ""),
+            )
         try:
             await self.handle_message(event)
         except Exception:
