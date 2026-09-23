@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import org.json.JSONObject
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -119,6 +120,7 @@ class BrowserActivity : AppCompatActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     address.setText(url)
                     CookieManager.getInstance().flush()
+                    if (isDeepSeek(url)) injectDeepSeekAdapter(view)
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -149,6 +151,53 @@ class BrowserActivity : AppCompatActivity() {
             else -> "https://www.google.com/search?q=" + Uri.encode(value)
         }
         webView.loadUrl(url)
+    }
+
+    private fun isDeepSeek(url: String): Boolean =
+        runCatching { Uri.parse(url).host?.lowercase() == "chat.deepseek.com" }.getOrDefault(false)
+
+    private fun injectDeepSeekAdapter(view: WebView) {
+        val pending = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        val payload = JSONObject.quote(pending ?: "")
+        val script = """
+            (() => {
+              if (window.__kissneDeepSeekAdapter) return;
+              const findComposer = () => {
+                const editable = [...document.querySelectorAll('[contenteditable="true"]')]
+                  .find(el => el.offsetParent !== null);
+                return editable || [...document.querySelectorAll('textarea')]
+                  .find(el => el.offsetParent !== null) || null;
+              };
+              const setText = (text) => {
+                const el = findComposer();
+                if (!el) return false;
+                el.focus();
+                if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+                  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  if (setter) setter.call(el, text); else el.value = text;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                } else {
+                  el.textContent = text;
+                  el.dispatchEvent(new InputEvent('input', {
+                    bubbles: true, inputType: 'insertText', data: text
+                  }));
+                }
+                return true;
+              };
+              window.__kissneDeepSeekAdapter = { findComposer, setText };
+              const pending = $payload;
+              if (pending) {
+                let tries = 0;
+                const timer = setInterval(() => {
+                  tries += 1;
+                  if (setText(pending) || tries >= 40) clearInterval(timer);
+                }, 250);
+              }
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(script, null)
     }
 
     private fun normalizeUrl(raw: String): String =
@@ -183,6 +232,7 @@ class BrowserActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_URL = "url"
+        const val EXTRA_TEXT = "text"
         const val DEEPSEEK_URL = "https://chat.deepseek.com/"
     }
 }
