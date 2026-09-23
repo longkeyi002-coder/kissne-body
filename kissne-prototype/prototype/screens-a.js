@@ -394,6 +394,45 @@
     panic:    '卡住了'
   };
 
+  /* Final assistant emotion is a per-message snapshot. Runtime states (read/think/work)
+     may change while a turn is running, but once the answer completes its avatar must
+     belong to that message forever. Prefer explicit emotional language; otherwise idle. */
+  var ASSISTANT_EMOTIONS = { idle: true, happy: true, sad: true, confused: true };
+  function assistantEmotionEnvelope(value) {
+    var raw = String(value == null ? '' : value);
+    var state = '';
+    /* Machine-only suffix. Keep it out of visible/searchable chat text. Last valid
+       declaration wins so a model can correct itself before completing the turn. */
+    var re = /<emotion\s*:\s*(idle|happy|sad|confused)\s*>/ig;
+    var match;
+    while ((match = re.exec(raw))) state = String(match[1] || '').toLowerCase();
+    var visible = raw.replace(/\s*<emotion\s*:\s*(?:idle|happy|sad|confused)\s*>\s*/ig, '');
+    /* A cumulative stream may stop midway through the machine suffix. If the trailing
+       fragment is a prefix of a valid emotion tag, hide it until the tag is complete. */
+    var lt = visible.lastIndexOf('<');
+    if (lt >= 0) {
+      var tail = visible.slice(lt).replace(/\s+/g, '').toLowerCase();
+      var tags = ['<emotion:idle>', '<emotion:happy>', '<emotion:sad>', '<emotion:confused>'];
+      if (tags.some(function (tag) { return tag.indexOf(tail) === 0; })) visible = visible.slice(0, lt);
+    }
+    return {
+      text: visible.trim(),
+      state: ASSISTANT_EMOTIONS[state] ? state : ''
+    };
+  }
+
+  function assistantEmotionState(value) {
+    var text = String(value == null ? '' : value)
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) return 'idle';
+    if (/(难过|伤心|悲伤|委屈|想哭|哭了|沮丧|失落|心疼|不开心|难受|遗憾|😢|😭|🥺|💔)/i.test(text)) return 'sad';
+    if (/(困惑|疑惑|没看懂|不明白|搞不懂|想不通|怎么回事|有点懵|迷惑|🤔|😕|❓)/i.test(text)) return 'confused';
+    if (/(开心|高兴|好耶|太好了|哈哈|嘿嘿|幸福|激动|兴奋|真棒|太棒|喜欢|笑死|😄|😊|🥰|🎉)/i.test(text)) return 'happy';
+    return 'idle';
+  }
+
   function ava(code, tag, state) {
     /* 头像是**透明底**素材，**不切圆形** —— 狐狸耳朵是尖的，切圆会吃掉耳朵和蝴蝶结。
        直接按素材自己的轮廓显示（圆角/底色由 .ph--img 在 CSS 里清掉）。 */
@@ -528,7 +567,8 @@
       var safe = CHAT_LOG.slice(-240).map(function (m) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
-          day: m.day || '', messageRef: m.messageRef || '', turnId: m.turnId || '',
+          day: m.day || '', sortAt: m.sortAt || '', avatarState: m.avatarState || '', activity: m.activity || '',
+          messageRef: m.messageRef || '', turnId: m.turnId || '',
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
           sid: sid
         };
@@ -811,7 +851,7 @@
     );
   }
   function chatHtmlFromWire(text) {
-    var raw = visibleChatText(text);
+    var raw = assistantEmotionEnvelope(visibleChatText(text)).text;
     var exact = stickerFromWire(raw);
     if (exact) return exact;
     var re = /[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]/g;
@@ -939,7 +979,7 @@
       lastDay = day;
       var row = m.who === 'sys' ? sysMsg(m.html, m.time)
         : (m.who === 'ai'
-          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
+          ? aiMsg(m.html, m.cls || '', m.time, '', m.avatarState || assistantEmotionState(m.html), m.activity || '')
           : meMsg(m.html, m.meta || '', m.time));
       return divider + row;
     }).join('');
@@ -1516,6 +1556,8 @@
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
+          var historyEmotion = role === 'assistant' ? assistantEmotionEnvelope(rawText) : { text: rawText, state: '' };
+          if (role === 'assistant') rawText = historyEmotion.text;
           if (role === 'user') rawText = visibleChatText(rawText);
           var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
@@ -1628,6 +1670,7 @@
             who: role === 'user' ? 'me' : 'ai',
             html: chatHtmlFromWire(rawText),
             activity: activity,
+            avatarState: role === 'assistant' ? (historyEmotion.state || assistantEmotionState(rawText)) : '',
             time: historyClock(item.created_at),
             day: chatDayKey(item.created_at),
             messageRef: messageRef,
@@ -1692,7 +1735,14 @@
         el.classList.toggle('is-awaiting', !!visible);
       }
       function liveAvatar(el, state) {
-        if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
+        if (!el) return;
+        var next = AVA_STATES[state] ? state : 'idle';
+        el.setAttribute('data-avatar-state', next);
+        K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', next);
+      }
+      function liveFailureState(event) {
+        var text = String(event && (event.error || event.message || event.text || event.status) || '').toLowerCase();
+        return /(timeout|timed out|stuck|hang|unresponsive|超时|卡住)/.test(text) ? 'panic' : 'sad';
       }
       function paintActivity(el, turnId, done) {
         if (!el) return;
@@ -1769,6 +1819,18 @@
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
 
+        /* Transport/runtime failures are objective behavior states. */
+        if (/^(error|failed|failure|turn_error|turn_failed|transport_error)$/.test(type)) {
+          var failedEl = liveEnsure(turnId);
+          livePresence(failedEl, false);
+          finishActivities(failedEl, turnId);
+          liveAvatar(failedEl, liveFailureState(event));
+          if (turnId) delete livePendingTurns[turnId];
+          if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          liveSetCancel(!!liveCurrentTurn);
+          return;
+        }
+
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
         if (presentation === 'hidden' || presentation === 'internal_notification') return;
@@ -1808,7 +1870,7 @@
           /* Commentary is assistant process text, never a system notice. Keep it inside
              the current assistant turn so Activity -> commentary -> final answer remains
              one visual unit. Structured presentation wins over text-shape heuristics. */
-          var commentaryText = String(event.text || '').trim();
+          var commentaryText = assistantEmotionEnvelope(String(event.text || '')).text.trim();
           if (!commentaryText || looksLikeRuntimeControl(commentaryText)) return;
           if (looksLikeToolTranscript(commentaryText)) {
             var commentaryToolEl = liveEnsure(turnId);
@@ -1862,7 +1924,7 @@
 
         var el = liveEnsure(turnId);
         if (type === 'delta') {
-          var deltaText = String(event.text || '');
+          var deltaText = assistantEmotionEnvelope(String(event.text || '')).text;
           if (looksLikeRuntimeControl(deltaText)) return;
           if (looksLikeToolTranscript(deltaText)) {
             livePresence(el, false);
@@ -1882,7 +1944,9 @@
         } else if (type === 'completed') {
           livePresence(el, false);
           setSessionStatus('');
-          var finalText = String(event.text || '');
+          var finalWireText = String(event.text || '');
+          var finalEmotion = assistantEmotionEnvelope(finalWireText);
+          var finalText = finalEmotion.text;
           if (looksLikeRuntimeControl(finalText)) {
             finishActivities(el, turnId);
             liveText(el, '', false);
@@ -1899,14 +1963,16 @@
           } else {
             finishActivities(el, turnId);
             var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
+            var finalAvatarState = finalEmotion.state || assistantEmotionState(finalText);
             liveText(el, finalText, false);
-            liveAvatar(el, 'happy');
+            liveAvatar(el, finalAvatarState);
             if (turnId && !liveCompleted[turnId]) {
               liveCompleted[turnId] = true;
               CHAT_LOG.push({
                 who: 'ai',
                 html: chatHtmlFromWire(finalText),
                 activity: finalActivity,
+                avatarState: finalAvatarState,
                 time: clockNow(),
                 day: chatDayKey(Date.now()),
                 messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
