@@ -297,3 +297,33 @@ def test_tool_progress_is_separate_from_visible_draft_text(tmp_path):
     assert len(visible) == 1 and visible[-1].get("text") == "I will check the implementation."
     assert all("grep -n" not in str(event.get("text") or "") for event in visible), (
         f"raw terminal command leaked into assistant text: {visible}")
+
+
+def test_reasoning_uses_a_separate_delta_lane(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="think visibly", message_id="m-reasoning")
+                await adapter.send_reasoning(INSTALLATION, "first reasoning step")
+                await adapter.send(INSTALLATION, "final answer")
+                payload = await _drain(port, token, 0)
+            finally:
+                await stop(adapter)
+        return turn, payload
+
+    turn, payload = run(scenario())
+    events = payload.get("events") or []
+    reasoning = [event for event in events if event.get("presentation") == "reasoning"]
+    assert len(reasoning) == 1, events
+    assert reasoning[0].get("type") == "delta"
+    assert reasoning[0].get("text") == "first reasoning step"
+    assert reasoning[0].get("turn_id") == turn["turn_id"]
+    completed = [event for event in events if event.get("type") == "completed"]
+    assert completed[-1].get("text") == "final answer"
+    assert completed[-1].get("presentation") == "assistant_text"
