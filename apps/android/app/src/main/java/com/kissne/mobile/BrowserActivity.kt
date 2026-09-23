@@ -164,11 +164,24 @@ class BrowserActivity : AppCompatActivity() {
             val command = BrowserAgent.parseCommand(message.data) ?: return@addWebMessageListener
             val host = sourceOrigin.host?.lowercase()
             if (host != "chat.deepseek.com" && host != "chatgpt.com") return@addWebMessageListener
-            runOnUiThread { executeBrowserAgent(command.action, command.query, command.url) }
+            runOnUiThread { executeBrowserAgent(command.action, command.query, command.url, true) }
         }
     }
 
-    private fun executeBrowserAgent(action: String, query: String? = null, requestedUrl: String? = null) {
+    private fun deliverBrowserAgentResult(result: String) {
+        val encoded = JSONObject.quote(result)
+        webView.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('kissne-browser-agent-result',{detail:$encoded}));",
+            null
+        )
+    }
+
+    private fun executeBrowserAgent(
+        action: String,
+        query: String? = null,
+        requestedUrl: String? = null,
+        returnToWebAi: Boolean = false,
+    ) {
         val decision = BrowserAgent.decide(action, requestedUrl ?: webView.url, query)
         if (decision.requiresConfirmation) {
             AlertDialog.Builder(this)
@@ -184,19 +197,25 @@ class BrowserActivity : AppCompatActivity() {
         val command = decision.command
         if (command.action == "open") {
             val target = command.url
-            if (BrowserAgent.isAllowedHttpUrl(target)) webView.loadUrl(target!!)
+            if (BrowserAgent.isAllowedHttpUrl(target)) {
+                webView.loadUrl(target!!)
+                if (returnToWebAi) deliverBrowserAgentResult(BrowserAgent.resultEnvelope(true, command.action))
+            } else if (returnToWebAi) deliverBrowserAgentResult(BrowserAgent.resultEnvelope(false, command.action, error = "invalid_url"))
             return
         }
         if (command.action == "back") {
             if (webView.canGoBack()) webView.goBack()
+            if (returnToWebAi) deliverBrowserAgentResult(BrowserAgent.resultEnvelope(true, command.action))
             return
         }
         if (command.action == "forward") {
             if (webView.canGoForward()) webView.goForward()
+            if (returnToWebAi) deliverBrowserAgentResult(BrowserAgent.resultEnvelope(true, command.action))
             return
         }
         webView.evaluateJavascript(BrowserAgent.readOnlyCommandScript(command)) { raw ->
-            decodeJsResult(raw)
+            val result = decodeJsResult(raw)
+            if (returnToWebAi) deliverBrowserAgentResult(BrowserAgent.resultEnvelope(true, command.action, payload = result))
             Toast.makeText(this, "BrowserAgent 操作完成", Toast.LENGTH_SHORT).show()
         }
     }
