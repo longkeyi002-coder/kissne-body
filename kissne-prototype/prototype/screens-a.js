@@ -412,7 +412,7 @@
     }).join('');
   }
   function aiMsg(html, cls, time, tag, state, activity) {
-    return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
+    return '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">' + (activity || '')
       + assistantBubbleHtml(html, cls)
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
@@ -426,7 +426,7 @@
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
   function meMsg(html, meta, time, state) {
-    return '<div class="msg msg--me">' + ava('USER_AVATAR', '我', state || MY_AVA)
+    return '<div class="msg msg--me" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
