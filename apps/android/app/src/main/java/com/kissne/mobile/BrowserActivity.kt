@@ -125,8 +125,8 @@ class BrowserActivity : AppCompatActivity() {
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progress.progress = newProgress
-                    progress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
+                    this@BrowserActivity.progress.progress = newProgress
+                    this@BrowserActivity.progress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
                     if (view.url != null && !address.hasFocus()) address.setText(view.url)
                 }
             }
