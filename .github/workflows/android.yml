@@ -1,4 +1,5 @@
 name: Android
+# APK rebuild trigger
 
 on:
   workflow_dispatch:
