@@ -114,6 +114,8 @@ OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 PAIRING_PATH = "/pair"
 BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+HISTORY_PATH = "/history"
+SEARCH_PATH = "/search"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -312,6 +314,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get(HISTORY_PATH, self._handle_history)
+        app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
@@ -924,6 +928,144 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "mime_type": mime_type,
             "size": len(file_bytes),
         }, status=202)
+
+    def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
+        """Return all Hermes sessions owned by this Mobile installation, newest first."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        db = store._db_for_key(self.mobile_session_key(installation))
+        if db is None or not hasattr(db, "list_sessions_rich"):
+            return []
+        return db.list_sessions_rich(
+            session_key=self.mobile_session_key(installation),
+            include_archived=True, include_children=True,
+            project_compression_tips=False, order_by_last_active=True,
+            limit=500, offset=0, compact_rows=True,
+        )
+
+    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
+        """Flatten /new-separated transcripts into one Mobile-visible timeline."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        try:
+            saved_attachments = self.device_store().attachment_messages(installation, 500)
+        except Exception:
+            logger.warning("[kissne_mobile] attachment history read failed", exc_info=True)
+            saved_attachments = []
+        attachments_by_turn = {
+            str(item.get("turn_id") or ""): list(item.get("attachments") or [])
+            for item in saved_attachments if str(item.get("turn_id") or "")
+        }
+        try:
+            saved_replies = self.device_store().reply_links(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] reply-link history read failed", exc_info=True)
+            saved_replies = []
+        replies_by_turn = {
+            str(item.get("turn_id") or ""): item
+            for item in saved_replies if str(item.get("turn_id") or "")
+        }
+        rows: List[Dict[str, Any]] = []
+        for session in self._mobile_history_sessions(installation):
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                continue
+            try:
+                transcript = store.load_transcript(session_id) or []
+            except Exception:
+                logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
+                continue
+            active_mobile_turn = ""
+            for index, row in enumerate(transcript):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "").strip().lower()
+                if role not in {"user", "assistant"}:
+                    continue
+                mobile_turn = ""
+                if role == "user":
+                    candidate = str(row.get("message_id") or "").strip()
+                    active_mobile_turn = candidate if candidate.startswith("kbm_turn_") else ""
+                    mobile_turn = active_mobile_turn
+                else:
+                    mobile_turn = active_mobile_turn
+                    active_mobile_turn = ""
+                text = row.get("content", row.get("text"))
+                if not isinstance(text, str):
+                    text = ""
+                attachments = attachments_by_turn.get(mobile_turn, []) if role == "user" else []
+                if not text.strip() and not attachments:
+                    continue
+                stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+                stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
+                message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
+                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
+                if attachments:
+                    item["attachments"] = attachments
+                if role == "user" and mobile_turn:
+                    link = replies_by_turn.get(mobile_turn)
+                    if link:
+                        item["reply_to"] = str(link.get("reply_to") or "")
+                        item["reply_preview"] = {
+                            "role": str(link.get("quoted_role") or ""),
+                            "text": str(link.get("quoted_text") or ""),
+                        }
+                rows.append(item)
+        try:
+            notices = self.device_store().timeline_notices(installation)
+        except Exception:
+            notices = []
+        for notice in notices:
+            notice_id, text = str(notice.get("notice_id") or ""), str(notice.get("text") or "")
+            if notice_id and text:
+                rows.append({
+                    "message_ref": "notice:" + notice_id, "role": "system", "text": text,
+                    "created_at": float(notice.get("created_at") or 0),
+                    "presentation": str(notice.get("presentation") or ""),
+                })
+        rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
+        return rows
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        try:
+            limit = int(request.query.get("limit", "50"))
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 100))
+        before = str(request.query.get("before") or "").strip()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        end = len(rows)
+        if before:
+            positions = [i for i, item in enumerate(rows) if item["message_ref"] == before]
+            if not positions:
+                return _error_response("history_cursor_not_found", 400)
+            end = positions[0]
+        start = max(0, end - limit)
+        page = rows[start:end]
+        return _json_response({"ok": True, "messages": page, "has_more": start > 0,
+                               "next_before": page[0]["message_ref"] if start > 0 and page else None})
+
+    async def _handle_history_search(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            return _error_response("query_required", 400)
+        try:
+            limit = int(request.query.get("limit", "20"))
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 50))
+        needle = query.casefold()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
+        return _json_response({"ok": True, "results": matches[:limit]})
 
     async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
         """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
