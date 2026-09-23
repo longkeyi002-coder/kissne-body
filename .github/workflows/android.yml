@@ -1,4 +1,5 @@
 name: Android
+# Manual rebuild trigger after mobile fix #45.
 
 on:
   workflow_dispatch:
