@@ -401,10 +401,19 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
+  function assistantBubbleHtml(html, cls) {
+    var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
+      return !!String(part || '').trim();
+    });
+    if (!parts.length) parts = [''];
+    return parts.map(function (part) {
+      return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
+    }).join('');
+  }
   function aiMsg(html, cls, time, tag, state, activity) {
     return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">' + (activity || '')
-      + '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
+      + assistantBubbleHtml(html, cls)
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
   }
@@ -447,7 +456,8 @@
     if (/\bgit\s+log\b|commit history|history/.test(low)) return '检查 Git 历史';
     if (/\bgit\s+(status|diff|show)\b/.test(low)) return '检查 Git 状态';
     if (/pytest|gradle|lint|\btests?\b/.test(low)) return '运行相关检查';
-    var file = text.match(/(?:Reading|read|cat|sed[^\n]*|open)\s+([^\s"']+\.(?:py|js|ts|kt|css|html|md))/i);
+    var fileMatches = Array.from(text.matchAll(/(?:Reading|read|cat|sed[^\\n]*|open)\\s+([^\\s"']+\\.(?:py|js|ts|kt|css|html|md))/gi));
+    var file = fileMatches.length ? fileMatches[fileMatches.length - 1] : null;
     if (file && file[1]) return '读取 ' + file[1].split('/').pop();
     var pattern = text.match(/(?:grep|rg)\s+(?:-[^\s]+\s+)*(?:"([^"]+)"|'([^']+)'|([^\s|]+))/i);
     if (pattern) {
