@@ -128,7 +128,7 @@ class PrototypeBridge(
         action in setOf(
             "sessions", "memories", "deleteMemory", "bootstrap", "sendText", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
-            "adminStatus", "adminDeployLog",
+            "adminStatus",
         )
 
     private fun executeAction(action: String, body: JSONObject): JSONObject =
@@ -203,11 +203,6 @@ class PrototypeBridge(
                 result
             }
             "adminStatus" -> client().adminStatusPayload()
-            "adminMerge" -> client().adminMergePayload()
-            "adminRollback" -> client().adminRollbackPayload()
-            "adminDeployLog" -> client().adminDeployLogPayload(
-                body.optInt("lines", 100),
-            )
             else -> throw IllegalArgumentException("unknown_native_action")
         }
 
