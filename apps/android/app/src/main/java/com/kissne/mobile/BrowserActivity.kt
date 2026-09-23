@@ -1,6 +1,7 @@
 package com.kissne.mobile
 
 import android.annotation.SuppressLint
+import androidx.appcompat.app.AlertDialog
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -147,6 +148,39 @@ class BrowserActivity : AppCompatActivity() {
 
         val initial = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: DEEPSEEK_URL
         webView.loadUrl(normalizeUrl(initial))
+    }
+
+    private fun executeBrowserAgent(action: String, query: String? = null) {
+        val decision = BrowserAgent.decide(action, webView.url, query)
+        if (decision.requiresConfirmation) {
+            AlertDialog.Builder(this)
+                .setTitle("确认网页操作")
+                .setMessage("此操作可能修改外部网站内容：" + decision.command.action + "。确认后才会执行。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确认") { _, _ ->
+                    Toast.makeText(this, "该写操作执行器尚未启用", Toast.LENGTH_SHORT).show()
+                }
+                .show()
+            return
+        }
+        val command = decision.command
+        if (command.action == "open") {
+            val target = command.url
+            if (BrowserAgent.isAllowedHttpUrl(target)) webView.loadUrl(target!!)
+            return
+        }
+        if (command.action == "back") {
+            if (webView.canGoBack()) webView.goBack()
+            return
+        }
+        if (command.action == "forward") {
+            if (webView.canGoForward()) webView.goForward()
+            return
+        }
+        webView.evaluateJavascript(BrowserAgent.readOnlyCommandScript(command)) { raw ->
+            decodeJsResult(raw)
+            Toast.makeText(this, "BrowserAgent 操作完成", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun runBrowserAgentRead() {
