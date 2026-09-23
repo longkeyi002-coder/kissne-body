@@ -161,7 +161,7 @@ class BrowserActivity : AppCompatActivity() {
             setOf("https://chat.deepseek.com", "https://chatgpt.com")
         ) { _, message, sourceOrigin, isMainFrame, _ ->
             if (!isMainFrame) return@addWebMessageListener
-            val command = BrowserAgent.parseCommand(message.data) ?: return@addWebMessageListener
+            val command = BrowserAgent.parseCommand(message.data ?: return@addWebMessageListener) ?: return@addWebMessageListener
             val host = sourceOrigin.host?.lowercase()
             if (host != "chat.deepseek.com" && host != "chatgpt.com") return@addWebMessageListener
             runOnUiThread { executeBrowserAgent(command.action, command.query, command.url, true) }
