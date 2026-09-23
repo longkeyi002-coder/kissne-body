@@ -61,6 +61,7 @@
         { t: '关于',     ic: 'info',    to: '#/settings' },
         { t: '返回常用', ic: 'home',    to: '#/home' }
       ] : [
+        { t: '浏览器',   ic: 'search', action: 'open-browser' },
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: 'Skills',   ic: 'box',    to: '#/skills' },
         { t: 'MCP',      ic: 'link',   to: '#/mcp' },
@@ -72,7 +73,7 @@
         { t: '更多',     ic: 'home',   to: '#/home?state=more' }
       ];
       var appgrid = '<div class="appgrid">' + APPS.map(function (a) {
-        return '<a class="appgrid__item" data-nav="' + a.to + '">'
+        return '<a class="appgrid__item"' + (a.action ? ' data-action="' + a.action + '"' : ' data-nav="' + a.to + '"') + '>'
           + '<span class="appgrid__ic">' + icon(a.ic, 21) + '</span>'
           + '<span class="appgrid__label">' + a.t + '</span></a>';
       }).join('') + '</div>';
