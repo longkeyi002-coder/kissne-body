@@ -318,6 +318,7 @@ class PrototypeBridge(
 
     fun uploadPickedAttachment(
         requestId: String,
+        attachmentId: String,
         kind: String,
         fileName: String,
         mimeType: String,
@@ -331,6 +332,7 @@ class PrototypeBridge(
                     messageId, kind, fileName, mimeType, bytes,
                 )
                 invalidateBootstrapCache(clearPersistedMetadata = false)
+                result.put("attachment_id", attachmentId)
                 resolve(requestId, true, result)
             } catch (firstError: Throwable) {
                 var finalError = firstError
@@ -343,6 +345,7 @@ class PrototypeBridge(
                             messageId, kind, fileName, mimeType, bytes,
                         )
                         invalidateBootstrapCache(clearPersistedMetadata = false)
+                        retried.put("attachment_id", attachmentId)
                         resolve(requestId, true, retried)
                         return@execute
                     } catch (retryError: Throwable) {
@@ -355,6 +358,7 @@ class PrototypeBridge(
                     requestId,
                     false,
                     JSONObject().put("status", status)
+                        .put("attachment_id", attachmentId)
                         .put("error", finalError.message ?: "attachment_upload_failed"),
                 )
             }
@@ -366,13 +370,33 @@ class PrototypeBridge(
         kind: String,
         fileName: String,
         mimeType: String,
+        size: Long,
     ) {
         val payload = JSONObject()
             .put("kind", kind)
             .put("file_name", fileName)
             .put("mime_type", mimeType)
+            .put("size", size)
         val script = "window.KissneNativeBridge && window.KissneNativeBridge.attachmentSelected(" +
             JSONObject.quote(requestId) + "," + JSONObject.quote(payload.toString()) + ");"
+        webView.post { webView.evaluateJavascript(script, null) }
+    }
+
+    fun emitAttachmentSelected(
+        attachmentId: String,
+        kind: String,
+        fileName: String,
+        mimeType: String,
+        size: Int,
+    ) {
+        val payload = JSONObject()
+            .put("attachment_id", attachmentId)
+            .put("kind", kind)
+            .put("file_name", fileName)
+            .put("mime_type", mimeType)
+            .put("size", size)
+        val script = "window.dispatchEvent(new CustomEvent('kissne:attachment-selected',{detail:" +
+            payload.toString() + "}));"
         webView.post { webView.evaluateJavascript(script, null) }
     }
 
