@@ -14,8 +14,18 @@ object BrowserAgent {
         val action: String,
         val url: String? = null,
         val query: String? = null,
-        val risk: Risk = Risk.READ_ONLY,
+        val risk: Risk = classify(action),
     )
+
+    data class Decision(
+        val command: Command,
+        val requiresConfirmation: Boolean,
+    )
+
+    fun decide(action: String, url: String? = null, query: String? = null): Decision {
+        val command = Command(action = action, url = url, query = query, risk = classify(action))
+        return Decision(command, command.risk == Risk.WRITE)
+    }
 
     fun classify(action: String): Risk = when (action.lowercase()) {
         "open", "search", "read", "scroll", "back", "forward", "refresh" -> Risk.READ_ONLY
