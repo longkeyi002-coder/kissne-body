@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.OnBackPressedCallback
 import org.json.JSONObject
 import android.view.Gravity
 import android.view.View
@@ -40,6 +41,11 @@ class BrowserActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else finish()
+            }
+        })
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
 
@@ -119,6 +125,7 @@ class BrowserActivity : AppCompatActivity() {
                     val site = BrowserAgent.siteId(url)
                     view.evaluateJavascript(BrowserAgent.readOnlyBootstrap(site), null)
                     if (site == "deepseek") injectDeepSeekAdapter(view)
+                    if (site == "chatgpt") injectChatGptAdapter(view)
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -199,15 +206,48 @@ class BrowserActivity : AppCompatActivity() {
         view.evaluateJavascript(script, null)
     }
 
+    private fun injectChatGptAdapter(view: WebView) {
+        val pending = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        val payload = JSONObject.quote(pending ?: "")
+        val script = """
+            (() => {
+              if (window.__kissneChatGptAdapter) return;
+              const findComposer = () =>
+                document.querySelector('#prompt-textarea') ||
+                [...document.querySelectorAll('[contenteditable="true"], textarea')]
+                  .find(el => el.offsetParent !== null) || null;
+              const setText = (text) => {
+                const el = findComposer();
+                if (!el) return false;
+                el.focus();
+                if (el.tagName === 'TEXTAREA') {
+                  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                  if (setter) setter.call(el, text); else el.value = text;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                  el.textContent = text;
+                  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+                }
+                return true;
+              };
+              window.__kissneChatGptAdapter = { findComposer, setText };
+              const pending = $payload;
+              if (pending) {
+                let tries = 0;
+                const timer = setInterval(() => {
+                  tries += 1;
+                  if (setText(pending) || tries >= 40) clearInterval(timer);
+                }, 250);
+              }
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(script, null)
+    }
+
     private fun normalizeUrl(raw: String): String =
         if (raw.startsWith("https://", true)) raw
         else if (raw.startsWith("http://", true)) "https://" + raw.substringAfter("://")
         else "https://$raw"
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
-    }
 
     override fun onPause() {
         if (::webView.isInitialized) {
