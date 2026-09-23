@@ -81,6 +81,8 @@ from gateway.session import build_session_key
 from .device_store import (
     DEFAULT_PAIRING_TTL_SECONDS,
     EVENT_CANCELLED,
+    EVENT_APPROVAL_REQUIRED,
+    EVENT_APPROVAL_RESOLVED,
     EVENT_COMPLETED,
     EVENT_DELTA,
     EVENT_PENDING,
@@ -312,6 +314,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_post("/approval", self._handle_approval)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
@@ -1475,6 +1478,54 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "pending_turn_id": pending,
             "covered_event_seqs": covered,
         })
+
+    async def _handle_approval(self, request: web.Request) -> web.Response:
+        """Resolve one real, currently-pending Hermes approval by its opaque request id."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        approval_id = str(body.get("approval_id") or "").strip()
+        decision = str(body.get("decision") or "").strip().lower()
+        scope = str(body.get("scope") or "once").strip().lower()
+        reason = str(body.get("reason") or "").strip() or None
+        if not approval_id:
+            return _error_response("approval_id_required", 400)
+        if decision not in {"allow", "deny"}:
+            return _error_response("invalid_approval_decision", 400)
+        if scope not in {"once", "session", "always"}:
+            return _error_response("invalid_approval_scope", 400)
+        session_key = self.mobile_session_key(installation)
+        from tools.approval import list_gateway_approvals, resolve_gateway_approval
+        pending = await asyncio.to_thread(list_gateway_approvals, session_key)
+        current = next((item for item in pending
+                        if str(item.get("request_id") or "") == approval_id), None)
+        if current is None:
+            return _error_response("unknown_approval", 404)
+        if decision == "allow":
+            if scope == "always" and not bool(current.get("allow_permanent", False)):
+                return _error_response("approval_scope_not_allowed", 409)
+            if scope == "session" and not bool(current.get("allow_session", False)):
+                return _error_response("approval_scope_not_allowed", 409)
+            choice = scope
+        else:
+            choice = "deny"
+        resolved = await asyncio.to_thread(
+            resolve_gateway_approval, session_key, choice,
+            False, reason, approval_id)
+        if resolved != 1:
+            return _error_response("approval_no_longer_pending", 409)
+        await asyncio.to_thread(
+            self.device_store().enqueue_event, installation, EVENT_APPROVAL_RESOLVED,
+            {"approval_id": approval_id,
+             "decision": "approved" if decision == "allow" else "denied",
+             "scope": scope if decision == "allow" else None, "reason": reason},
+            None, cap=max(1, self._outbound_cap))
+        return _json_response({"ok": True, "approval_id": approval_id,
+                               "status": "approved" if decision == "allow" else "denied"})
 
     async def _handle_cancel(self, request: web.Request) -> web.Response:
         """``{"turn_id": T}`` -> interrupt that turn's Runtime activity and acknowledge the state."""
