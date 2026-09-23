@@ -265,7 +265,14 @@
       nativeTap();
       var a = actEl.getAttribute('data-action');
       var cur = parseHash();
-      if (a === 'check-update') {
+      if (a === 'open-browser') {
+        try {
+          if (window.KissneNativeTransport && typeof window.KissneNativeTransport.openBrowser === 'function') {
+            window.KissneNativeTransport.openBrowser('https://chat.deepseek.com/');
+          }
+        } catch (e) {}
+      }
+      else if (a === 'check-update') {
         try {
           if (window.KissneNativeTransport && typeof window.KissneNativeTransport.checkForUpdates === 'function') {
             window.KissneNativeTransport.checkForUpdates();
