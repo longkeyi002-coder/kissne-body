@@ -14,6 +14,7 @@ class PrototypeBridge(
     private val startVoiceInput: (String) -> Unit = {},
     private val startAttachmentPicker: (String, String) -> Unit = { _, _ -> },
     private val openBrowser: (String?) -> Unit = {},
+    private val openBrowserWithText: (String?, String?) -> Unit = { _, _ -> },
 ) {
     /*
      * Keep chat transport isolated from slower control-plane calls.
@@ -215,6 +216,11 @@ class PrototypeBridge(
     @JavascriptInterface
     fun openBrowser(url: String?) {
         webView.post { openBrowser.invoke(url) }
+    }
+
+    @JavascriptInterface
+    fun openBrowserWithText(url: String?, text: String?) {
+        webView.post { openBrowserWithText.invoke(url, text) }
     }
 
     @JavascriptInterface
