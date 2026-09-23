@@ -126,7 +126,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "memories", "deleteMemory", "bootstrap", "sendText", "poll", "ack", "cancel",
+            "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus",
         )
@@ -138,12 +138,6 @@ class PrototypeBridge(
                 ensureDeviceToken(body.optBoolean("force", false))
             }
             "sessions" -> client().sessionsPayload()
-            "memories" -> client().memoriesPayload()
-            "deleteMemory" -> {
-                val memoryId = body.optString("memory_id")
-                if (memoryId.isBlank()) throw IllegalArgumentException("memory_id_required")
-                client().deleteMemoryPayload(memoryId)
-            }
             "selectSession" -> {
                 val sessionKey = body.optString("session_key")
                 val sessionId = body.optString("session_id")
