@@ -116,6 +116,9 @@ class TestDegenerateResponseDetector:
 
         monkeypatch.setattr(guard_mod, "MIN_TOTAL_CHARS", 180)
         monkeypatch.setattr(guard_mod, "REPEAT_HITS", 2)
+        # The Chinese fixtures below are ~72 chars each, under the default 80-char
+        # block gate; without lowering it every block is dropped before comparison.
+        monkeypatch.setattr(guard_mod, "MIN_BLOCK_CHARS", 40)
         paragraphs = [
             "我应该先验证本地页面是否正常，再验证本地 websocket 是否正常，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题而没有新的证据。",
             "我应该先验证本地页面是否正常，再检查本地 websocket 是否正常，然后对比公网连接，不能继续反复猜测认证、网络或者配置问题却没有新的证据。",

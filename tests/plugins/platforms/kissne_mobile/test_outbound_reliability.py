@@ -283,7 +283,10 @@ def test_tool_progress_is_separate_from_visible_draft_text(tmp_path):
 
     turn, payload = run(scenario())
     events = payload.get("events") or []
-    activity = [event for event in events if event.get("presentation") == "tool_progress"]
+    activity = [
+        event for event in events
+        if event.get("presentation") in {"tool_progress", "tool_call"}
+    ]
     visible = [
         event for event in events
         if event.get("type") == "delta" and event.get("presentation") == "assistant_text"

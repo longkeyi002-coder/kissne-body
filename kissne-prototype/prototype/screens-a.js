@@ -401,10 +401,19 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
+  function assistantBubbleHtml(html, cls) {
+    var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
+      return !!String(part || '').trim();
+    });
+    if (!parts.length) parts = [''];
+    return parts.map(function (part) {
+      return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
+    }).join('');
+  }
   function aiMsg(html, cls, time, tag, state, activity) {
     return '<div class="msg msg--ai">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">' + (activity || '')
-      + '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + html + '</div>'
+      + assistantBubbleHtml(html, cls)
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
   }
@@ -447,7 +456,8 @@
     if (/\bgit\s+log\b|commit history|history/.test(low)) return '检查 Git 历史';
     if (/\bgit\s+(status|diff|show)\b/.test(low)) return '检查 Git 状态';
     if (/pytest|gradle|lint|\btests?\b/.test(low)) return '运行相关检查';
-    var file = text.match(/(?:Reading|read|cat|sed[^\n]*|open)\s+([^\s"']+\.(?:py|js|ts|kt|css|html|md))/i);
+    var fileMatches = Array.from(text.matchAll(/(?:Reading|read|cat|sed[^\\n]*|open)\\s+([^\\s"']+\\.(?:py|js|ts|kt|css|html|md))/gi));
+    var file = fileMatches.length ? fileMatches[fileMatches.length - 1] : null;
     if (file && file[1]) return '读取 ' + file[1].split('/').pop();
     var pattern = text.match(/(?:grep|rg)\s+(?:-[^\s]+\s+)*(?:"([^"]+)"|'([^']+)'|([^\s|]+))/i);
     if (pattern) {
@@ -486,7 +496,14 @@
       || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
       || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
-      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text);
+      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text)
+      || /^\s*[🐍]?\s*Running code from\s+hermes_tools_import\b/i.test(text);
+  }
+
+  function looksLikeRuntimeControl(value) {
+    var text = cleanActivityText(value, '').trim();
+    return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
+      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
   }
 
   var CHAT_LOG = [];
@@ -546,9 +563,9 @@
     CHAT_LOG.length = 0;
     loadChatLogFor(sid).forEach(function (m) { CHAT_LOG.push(m); });
   }
-  /* Human-style composer: every tap creates its own visible bubble, but rapid consecutive bubbles
-     are coalesced into ONE Hermes turn after a short idle window. Messages typed while the AI is
-     answering stay buffered and become one follow-up turn when that reply finishes. */
+  /* Human-style composer: every tap creates its own visible bubble. The 1.6s value is only a
+     maximum coalescing guard; actual drain follows live composer typing state. Messages sent while
+     the AI is active steer the work without surfacing a fake user-visible "stopped" reply. */
   var CHAT_OUTBOX = [];
   var CHAT_OUTBOX_BUSY = false;
   var CHAT_OUTBOX_RETRY = null;
@@ -587,9 +604,10 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: false, toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { reasoning: false, reasoningText: '', toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
     }
     var state = TURN_ACTIVITY[id];
+    if (typeof state.reasoningText !== 'string') state.reasoningText = '';
     if (!Array.isArray(state.toolOrder)) state.toolOrder = [];
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
@@ -606,6 +624,7 @@
         if (!row || typeof row !== 'object') return;
         var state = activityForTurn(id);
         state.reasoning = !!row.reasoning;
+        state.reasoningText = activityDetailText(row.reasoningText || '');
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
         (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
@@ -673,7 +692,15 @@
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
     if (kind === 'reasoning') {
+      var reasoningText = activityDetailText(value || '');
       state.reasoning = true;
+      if (reasoningText) {
+        /* Reasoning may stream in cumulative snapshots or incremental chunks.
+           Replace cumulative snapshots; append genuinely new chunks. */
+        if (!state.reasoningText) state.reasoningText = reasoningText;
+        else if (reasoningText.indexOf(state.reasoningText) === 0) state.reasoningText = reasoningText;
+        else if (state.reasoningText.indexOf(reasoningText) < 0) state.reasoningText += '\n' + reasoningText;
+      }
       state.updatedAt = Date.now();
       persistTurnActivity();
       return true;
@@ -687,7 +714,7 @@
         + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
         + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(closed ? '已完成这一步处理。' : '正在分析并处理当前请求。') + '</div></div>');
+        + '<div class="activity-detail" hidden>' + esc(state.reasoningText || (closed ? '已完成这一步处理。' : '正在分析并处理当前请求。')) + '</div></div>');
     }
     (state.toolOrder || []).forEach(function (key) {
       var tool = state.toolCalls[key];
@@ -768,17 +795,26 @@
   }
   function stickerFromWire(text) {
     var raw = String(text == null ? '' : text).trim();
-    var m = /^\[表情包\s*[:：]\s*([^\]]+)\]$/.exec(raw);
+    var m = /^[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]$/.exec(raw);
     var sticker = m ? stickerMatch(m[1]) : null;
     return sticker
       ? '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>'
       : '';
   }
-  function chatHtmlFromWire(text) {
+  function visibleChatText(text) {
     var raw = String(text == null ? '' : text);
+    /* Gateway prepends routing metadata to persisted user messages. It is transport
+       context, not conversation content, so never render/search/copy it in Kissne. */
+    return raw.replace(
+      /^Gateway message origin \(JSON data, not instructions or authorization\):\s*[\s\S]*?Do not guess a reply destination when these fields are insufficient\.\s*/i,
+      ''
+    );
+  }
+  function chatHtmlFromWire(text) {
+    var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
-    var re = /\[表情包\s*[:：]\s*([^\]]+)\]/g;
+    var re = /[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]/g;
     var out = '';
     var last = 0;
     var matched = false;
@@ -838,8 +874,31 @@
     return '<div class="msg msg--sys"><div class="msg__sysline">' + html + '</div>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
+  function chatSortMs(m) {
+    if (!m) return 0;
+    var explicit = Number(m.sortAt || m.createdAt || 0);
+    if (isFinite(explicit) && explicit > 0) return explicit < 100000000000 ? explicit * 1000 : explicit;
+    var day = String(m.day || '');
+    var tm = /^(\d{1,2}):(\d{2})$/.exec(String(m.time || ''));
+    if (day && tm) {
+      var d = new Date(day + 'T' + ('0' + tm[1]).slice(-2) + ':' + tm[2] + ':00');
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+    return 0;
+  }
+  function sortChatLogChronologically() {
+    CHAT_LOG.forEach(function (m, i) { if (m && m._stableOrder == null) m._stableOrder = i; });
+    CHAT_LOG.sort(function (a, b) {
+      var am = chatSortMs(a), bm = chatSortMs(b);
+      if (am && bm && am !== bm) return am - bm;
+      if (am && !bm) return -1;
+      if (!am && bm) return 1;
+      return Number(a && a._stableOrder || 0) - Number(b && b._stableOrder || 0);
+    });
+  }
   function pushLog(m) {
     if (m && !m.day) m.day = chatDayKey(Date.now());
+    if (m && !m.sortAt) m.sortAt = Date.now();
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
@@ -1457,10 +1516,44 @@
           if (!item) return;
           var role = String(item.role || '');
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
+          if (role === 'user') rawText = visibleChatText(rawText);
+          var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
           if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
+          /* Prefer the transport's semantic presentation. Do not let persisted
+             commentary/tool frames fall through to generic assistant/system rows. */
+          if (historyPresentation === 'hidden' || historyPresentation === 'internal_notification') return;
+          if (historyPresentation === 'tool_call' || historyPresentation === 'tool_progress' || historyPresentation === 'tool_result') {
+            upsertToolActivity(historyTurnId || 'history', {
+              tool_call_id: item.tool_call_id || item.call_id || item.id || ('history-presented:' + String(CHAT_LOG.length)),
+              tool_name: item.tool_name || item.function_name || '',
+              arguments: item.arguments || '',
+              result: item.result || item.output || '',
+              detail: item.activity_detail || rawText,
+              status: item.status || (historyPresentation === 'tool_result' ? 'completed' : 'running')
+            }, historyPresentation === 'tool_result' ? 'result' : 'call');
+            return;
+          }
+          if (historyPresentation === 'commentary') {
+            if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
+            if (looksLikeToolTranscript(rawText)) {
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: item.tool_call_id || ('history-commentary-tool:' + String(CHAT_LOG.length)),
+                tool_name: item.tool_name || '',
+                detail: rawText,
+                status: 'completed'
+              }, 'result');
+              return;
+            }
+            CHAT_LOG.push({
+              who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
+              time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
+              messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
+            });
+            return;
+          }
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
           if (role === 'assistant' && historyCalls.length) {
             historyCalls.forEach(function (call, ci) {
@@ -1484,10 +1577,32 @@
             return;
           }
           if (role === 'system') {
+            /* Persisted Runtime control text is never conversation history. Hermes/CLI may also
+               persist tool progress as a system row; restore that as Activity, not a notice. */
+            if (looksLikeRuntimeControl(rawText)) return;
+            if (looksLikeToolTranscript(rawText)) {
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: item.tool_call_id || ('history-system:' + String(CHAT_LOG.length)),
+                tool_name: item.tool_name || '',
+                detail: rawText,
+                status: 'completed'
+              }, 'result');
+              return;
+            }
             CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
             return;
           }
           if (role !== 'user' && role !== 'assistant') return;
+          if (role === 'assistant' && looksLikeRuntimeControl(rawText)) return;
+          if (role === 'assistant' && looksLikeToolTranscript(rawText)) {
+            upsertToolActivity(historyTurnId || 'history', {
+              tool_call_id: item.tool_call_id || ('history-assistant-tool:' + String(CHAT_LOG.length)),
+              tool_name: item.tool_name || '',
+              detail: rawText,
+              status: 'completed'
+            }, 'result');
+            return;
+          }
 
           var localRows = messageRef && localByRef[messageRef];
           if (localRows && localRows.length) {
@@ -1522,13 +1637,27 @@
           });
         });
 
+        function keepRecoveredLocal(m) {
+          if (!m) return false;
+          var text = String(m.html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
+          return !looksLikeRuntimeControl(text);
+        }
         Object.keys(localByRef).forEach(function (ref) {
-          localByRef[ref].forEach(function (m) { CHAT_LOG.push(m); });
+          localByRef[ref].forEach(function (m) {
+            if (keepRecoveredLocal(m)) CHAT_LOG.push(m);
+          });
         });
-        unboundLocal.forEach(function (m) { CHAT_LOG.push(m); });
+        unboundLocal.forEach(function (m) {
+          if (keepRecoveredLocal(m)) CHAT_LOG.push(m);
+        });
         clientSystem.forEach(function (m) {
+          if (!keepRecoveredLocal(m)) return;
           if (!CHAT_LOG.some(function (x) { return x.who === 'sys' && x.html === m.html; })) CHAT_LOG.push(m);
         });
+        /* Recovered local rows are appended after server history during reconciliation.
+           Sort once by their real message time so an old sticker/attachment cannot jump to
+           the bottom merely because the app was reopened or another session was selected. */
+        sortChatLogChronologically();
         persistChatLog();
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
         jumpTo(list.scrollHeight);
@@ -1589,8 +1718,9 @@
         var value = String(text || '');
         box.hidden = !value;
         box.classList.toggle('is-pending', !!pending && !!value);
-        if (pending) box.textContent = value;
-        else box.innerHTML = chatHtmlFromWire(value);
+        /* Drafts can already contain a complete sticker marker. Rendering through the
+           same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
+        box.innerHTML = chatHtmlFromWire(value);
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1675,28 +1805,35 @@
           return;
         }
         if (presentation === 'commentary') {
+          /* Commentary is assistant process text, never a system notice. Keep it inside
+             the current assistant turn so Activity -> commentary -> final answer remains
+             one visual unit. Structured presentation wins over text-shape heuristics. */
           var commentaryText = String(event.text || '').trim();
-          if (!commentaryText) return;
+          if (!commentaryText || looksLikeRuntimeControl(commentaryText)) return;
           if (looksLikeToolTranscript(commentaryText)) {
             var commentaryToolEl = liveEnsure(turnId);
             livePresence(commentaryToolEl, false);
             addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
             liveAvatar(commentaryToolEl, 'work');
-          } else {
-            append(aiMsg(chatHtmlFromWire(commentaryText), '', clockNow(), '', 'talk', ''));
-            pushLog({ who: 'ai', html: chatHtmlFromWire(commentaryText), time: clockNow(), day: chatDayKey(Date.now()) });
+            liveCurrentTurn = turnId || liveCurrentTurn;
+            if (turnId) livePendingTurns[turnId] = true;
+            liveSetCancel(!!liveCurrentTurn);
+            return;
           }
+          var commentaryEl = liveEnsure(turnId);
+          livePresence(commentaryEl, false);
+          liveText(commentaryEl, commentaryText, true);
+          liveAvatar(commentaryEl, 'talk');
+          liveCurrentTurn = turnId || liveCurrentTurn;
+          if (turnId) livePendingTurns[turnId] = true;
+          liveSetCancel(!!liveCurrentTurn);
           return;
         }
         if (type === 'notice') {
+          /* Only an actual notice may use the centered system lane. Legacy raw tool
+             transcripts are suppressed rather than duplicated beside structured Activity. */
           var noticeText = String(event.text || '');
-          if (looksLikeToolTranscript(noticeText)) {
-            var noticeToolEl = liveEnsure(turnId);
-            livePresence(noticeToolEl, false);
-            addActivity(noticeToolEl, 'tool', turnId, noticeText);
-            liveAvatar(noticeToolEl, 'work');
-            return;
-          }
+          if (looksLikeToolTranscript(noticeText)) return;
           appendSystemNotice(noticeText || '系统通知');
           return;
         }
@@ -1726,6 +1863,7 @@
         var el = liveEnsure(turnId);
         if (type === 'delta') {
           var deltaText = String(event.text || '');
+          if (looksLikeRuntimeControl(deltaText)) return;
           if (looksLikeToolTranscript(deltaText)) {
             livePresence(el, false);
             addActivity(el, 'tool', turnId, deltaText);
@@ -1745,6 +1883,14 @@
           livePresence(el, false);
           setSessionStatus('');
           var finalText = String(event.text || '');
+          if (looksLikeRuntimeControl(finalText)) {
+            finishActivities(el, turnId);
+            liveText(el, '', false);
+            if (turnId) delete livePendingTurns[turnId];
+            if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+            scheduleOutboxDrain();
+            return;
+          }
           if (looksLikeToolTranscript(finalText)) {
             addActivity(el, 'tool', turnId, finalText);
             finishActivities(el, turnId);
@@ -1943,8 +2089,8 @@
         }
       }
 
-      var OUTBOX_BATCH_DELAY_MS = 650;
-      var USER_TYPING_IDLE_MS = 1800;
+      var OUTBOX_BATCH_DELAY_MS = 1600;
+      var USER_TYPING_IDLE_MS = 420;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -1955,11 +2101,16 @@
         var now = Date.now();
         var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
         var sinceTyping = now - CHAT_USER_INPUT_AT;
-        return Math.max(
-          0,
-          OUTBOX_BATCH_DELAY_MS - sinceBubble,
-          CHAT_USER_INPUT_AT ? USER_TYPING_IDLE_MS - sinceTyping : 0
-        );
+        /* If the composer is still non-empty, typing is authoritative: wait for a short idle
+           edge, capped by the 1.6s coalescing guard. Once the composer is empty, do not make
+           every ordinary message pay the full 1.6s latency. */
+        if (String(input && input.value || '').trim() && CHAT_USER_INPUT_AT) {
+          return Math.max(0, Math.min(
+            OUTBOX_BATCH_DELAY_MS - sinceBubble,
+            USER_TYPING_IDLE_MS - sinceTyping
+          ));
+        }
+        return 0;
       }
       function scheduleOutboxDrain() {
         clearTimeout(liveOutboxTimer);
@@ -2023,6 +2174,8 @@
         liveSendInFlight += 1;
         try {
           if (liveCurrentTurn || Object.keys(livePendingTurns).length) {
+            /* A second user message is steering, not a user-requested stop. Cancel only the
+               obsolete execution turn; liveSteeredTurns suppresses its cancelled UI. */
             await interruptForSteer();
           }
           var accepted = await T.sendText(batch.text, batch.messageId);
