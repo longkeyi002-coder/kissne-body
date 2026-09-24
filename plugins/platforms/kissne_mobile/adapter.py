@@ -581,7 +581,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
         pending_turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
-        turn_id = str(target_turn_id or pending_turn_id or "")
+        explicit_turn_id = str(target_turn_id or "").strip()
+        turn_id = explicit_turn_id or str(pending_turn_id or "")
+        # Explicitly-bound live frames belong to one Runtime turn. Once that turn has
+        # been cancelled/completed, a delayed reasoning/delta/completed callback must
+        # not leak back into the UI. Auxiliary notices without an explicit turn keep
+        # their legacy behavior.
+        if explicit_turn_id and event_type in {EVENT_DELTA, EVENT_COMPLETED}:
+            state = await asyncio.to_thread(store.turn_state, installation, explicit_turn_id)
+            if state != TURN_PENDING:
+                logger.debug(
+                    "[kissne_mobile] dropping late %s for closed turn %s (%s)",
+                    event_type, _fingerprint(explicit_turn_id), state or "missing")
+                return None
         try:
             seq = await asyncio.to_thread(
                 store.enqueue_event, installation, event_type, payload, turn_id or None,
