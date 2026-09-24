@@ -1008,19 +1008,33 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }, status=202)
 
     def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
-        """Return all Hermes sessions owned by this Mobile installation, newest first."""
+        """Return the bound Runtime conversation plus its Mobile-owned continuations.
+
+        Pairing is an alias: it deliberately does not rewrite the canonical Runtime
+        session row session_key. Querying only by the Mobile alias therefore hides
+        the conversation the device just joined.
+        """
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
-        db = store._db_for_key(self.mobile_session_key(installation))
+        mobile_key = self.mobile_session_key(installation)
+        bound = self.bound_conversation(installation)
+        db = store._db_for_key(mobile_key)
         if db is None or not hasattr(db, "list_sessions_rich"):
             return []
-        return db.list_sessions_rich(
-            session_key=self.mobile_session_key(installation),
+        rows = db.list_sessions_rich(
+            session_key=mobile_key,
             include_archived=True, include_children=True,
             project_compression_tips=False, order_by_last_active=True,
             limit=500, offset=0, compact_rows=True,
         )
+        by_id = {str(row.get("id") or ""): row for row in rows if str(row.get("id") or "")}
+        bound_id = str(getattr(bound, "session_id", "") or "")
+        if bound_id and bound_id not in by_id:
+            get_session = getattr(db, "get_session", None)
+            canonical = get_session(bound_id) if callable(get_session) else None
+            by_id[bound_id] = canonical if isinstance(canonical, dict) else {"id": bound_id}
+        return list(by_id.values())
 
     def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
         """Flatten /new-separated transcripts into one Mobile-visible timeline."""
