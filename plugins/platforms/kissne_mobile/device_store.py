@@ -411,6 +411,70 @@ class DeviceStore:
             raise ValueError("installation_id is required")
         return installation
 
+    def enqueue_pending_turn_event(
+        self, installation_id: str, turn_id: str, event_type: str,
+        payload: Dict[str, Any], *, cap: int = 200, close: bool = False,
+    ) -> Optional[int]:
+        """Atomically append an event only while this installation owns a pending turn.
+
+        With close=True the event insert and pending-to-completed transition share one
+        transaction, so cancel cannot slip between the state check and final enqueue.
+        """
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return None
+        body = payload if isinstance(payload, dict) else {"text": str(payload)}
+        now = time.time()
+        with self._lock:
+            conn = self._db()
+            try:
+                row = conn.execute(
+                    "SELECT state FROM turns WHERE installation_id = ? AND turn_id = ?",
+                    (installation, handle),
+                ).fetchone()
+                if row is None or str(row["state"]) != TURN_PENDING:
+                    return None
+                conn.execute(
+                    "INSERT OR IGNORE INTO seq_counters (installation_id, next_seq) "
+                    "SELECT ?, COALESCE(MAX(seq), 0) + 1 FROM outbound_events WHERE installation_id = ?",
+                    (installation, installation),
+                )
+                conn.execute(
+                    "UPDATE seq_counters SET next_seq = next_seq + 1 WHERE installation_id = ?",
+                    (installation,),
+                )
+                seq_row = conn.execute(
+                    "SELECT next_seq FROM seq_counters WHERE installation_id = ?", (installation,)
+                ).fetchone()
+                seq = int(seq_row["next_seq"]) - 1
+                conn.execute(
+                    "INSERT INTO outbound_events "
+                    "(installation_id, seq, turn_id, event_type, payload, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (installation, seq, handle, str(event_type),
+                     json.dumps(body, ensure_ascii=False), now),
+                )
+                if close:
+                    moved = conn.execute(
+                        "UPDATE turns SET state = ?, updated_at = ? "
+                        "WHERE installation_id = ? AND turn_id = ? AND state = ?",
+                        (TURN_COMPLETED, now, installation, handle, TURN_PENDING),
+                    )
+                    if int(moved.rowcount or 0) != 1:
+                        conn.rollback()
+                        return None
+                if int(cap) > 0:
+                    conn.execute(
+                        "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
+                        (installation, seq - int(cap)),
+                    )
+                conn.commit()
+                return seq
+            except Exception:
+                conn.rollback()
+                raise
+
     def enqueue_event(self, installation_id: str, event_type: str, payload: Dict[str, Any],
                       turn_id: Optional[str] = None, *, cap: int = 200) -> int:
         """Append one outbound event; returns its sequence number (the cursor the device acks with)."""
