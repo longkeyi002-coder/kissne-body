@@ -2534,7 +2534,23 @@
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         var routedStickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        if (live) queueOutboundText('[表情包：' + sk.label + ']', routedStickerLog);
+        if (live && T && typeof T.sendSticker === 'function') {
+          T.sendSticker(sk.k, sk.label).then(function (accepted) {
+            var turn = String(accepted && accepted.turn_id || '');
+            if (!turn) return;
+            routedStickerLog.messageRef = 'turn:' + turn + ':user';
+            routedStickerLog.turnId = turn;
+            persistChatLog();
+            livePendingTurns[turn] = true;
+            liveCurrentTurn = turn;
+            liveSetCancel(true);
+            scheduleLivePoll(0);
+          }).catch(function () {
+            setSessionStatus('表情包发送失败，请重试。');
+          });
+        } else if (live) {
+          setSessionStatus('当前版本暂不能发送真实表情包图片。');
+        }
       }
 
       async function onSessionDrawerClick(e) {
