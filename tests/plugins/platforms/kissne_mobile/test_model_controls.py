@@ -133,3 +133,57 @@ def test_real_gateway_runner_wires_canonical_reasoning_resolver(tmp_path):
         assert adapter.gateway_runner is runner
         resolver = getattr(adapter.gateway_runner, "_resolve_session_reasoning_config", None)
         assert callable(resolver), "production GatewayRunner must expose canonical reasoning resolver"
+
+
+
+def test_real_gateway_reasoning_effort_default_session_override_and_fallback(tmp_path, monkeypatch):
+    """Mobile reads the same production resolver used by the next Gateway turn."""
+    from gateway.config import GatewayConfig
+    from gateway.run import GatewayRunner
+
+    with isolated_runtime(tmp_path):
+        runner = GatewayRunner(GatewayConfig())
+        adapter = make_adapter()
+        runner._wire_adapter_handlers(adapter)
+        adapter.gateway_runner = runner
+
+        installation = PAIRED_INSTALLATION
+        session_key = adapter.mobile_session_key(installation)
+
+        # No session override and no configured reasoning value: Gateway's canonical
+        # resolver returns None, which Mobile intentionally renders as the default medium.
+        monkeypatch.setattr(runner, "_load_reasoning_config", lambda _model="": None)
+        assert runner._resolve_session_reasoning_config(
+            source=adapter.source_for_installation(installation),
+            session_key=session_key,
+            model="",
+        ) is None
+        assert adapter._live_reasoning_effort(installation) == "medium"
+
+        # An explicit session override must beat the configured/default value.
+        runner._set_session_reasoning_override(
+            session_key, {"enabled": True, "effort": "high"}
+        )
+        resolved = runner._resolve_session_reasoning_config(
+            source=adapter.source_for_installation(installation),
+            session_key=session_key,
+            model="",
+        )
+        assert resolved == {"enabled": True, "effort": "high"}
+        assert adapter._live_reasoning_effort(installation) == "high"
+
+        # Clearing the session override must expose the normal configured fallback again;
+        # Mobile must not keep a stale session effort.
+        runner._set_session_reasoning_override(session_key, None)
+        monkeypatch.setattr(
+            runner,
+            "_load_reasoning_config",
+            lambda _model="": {"enabled": True, "effort": "low"},
+        )
+        resolved = runner._resolve_session_reasoning_config(
+            source=adapter.source_for_installation(installation),
+            session_key=session_key,
+            model="",
+        )
+        assert resolved == {"enabled": True, "effort": "low"}
+        assert adapter._live_reasoning_effort(installation) == "low"
