@@ -90,8 +90,10 @@ class MobileTransportClient(
         installationId: String,
         sessionKey: String? = null,
         sessionId: String? = null,
+        pairingCode: String? = null,
     ): JSONObject {
         val body = JSONObject().put("installation_id", installationId)
+        pairingCode?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("pairing_code", it) }
         sessionKey?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
         sessionId?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_id", it) }
         return request("POST", "/pair", body, auth = false)
