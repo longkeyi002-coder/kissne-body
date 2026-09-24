@@ -1496,6 +1496,30 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 break
         return model, provider
 
+    def _live_reasoning_effort(self, installation: str, model: str = "") -> str:
+        """Read the effective reasoning effort from the same Gateway resolver used for the next turn."""
+        runner = getattr(self, "gateway_runner", None)
+        resolver = getattr(runner, "_resolve_session_reasoning_config", None)
+        if not callable(resolver):
+            return ""
+        source = self.source_for_installation(installation)
+        try:
+            config = resolver(
+                source=source,
+                session_key=self.mobile_session_key(installation),
+                model=str(model or ""),
+            )
+        except Exception:
+            logger.debug("[kissne_mobile] could not resolve live reasoning effort", exc_info=True)
+            return ""
+        if config is None:
+            return "medium"
+        if isinstance(config, dict) and config.get("enabled") is False:
+            return "none"
+        if isinstance(config, dict):
+            return str(config.get("effort") or "medium")
+        return ""
+
     async def _handle_model_options(self, request: web.Request) -> web.Response:
         """Same provider/model inventory as the Hermes Dashboard picker, under the device's profile."""
         installation = await self._authenticated_installation(request)
@@ -1507,6 +1531,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         source = self.source_for_installation(installation)
         profile = str(getattr(source, "profile", "") or getattr(self, "_owner_profile", "") or "")
         current_model, current_provider = self._live_model_selection(installation)
+        current_effort = self._live_reasoning_effort(installation, current_model)
 
         def _build() -> Dict[str, Any]:
             from contextlib import nullcontext
@@ -1534,6 +1559,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 payload["model"] = current_model
             if current_provider:
                 payload["provider"] = current_provider
+            if current_effort:
+                payload["effort"] = current_effort
+                payload["current_effort"] = current_effort
             return payload
 
         try:
@@ -1602,11 +1630,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("model_control_failed", 503)
 
         current_model, current_provider = self._live_model_selection(installation)
+        current_effort = self._live_reasoning_effort(installation, current_model or model)
         return _json_response({
             "ok": True,
             "model": current_model or model,
             "provider": current_provider or provider,
-            "effort": effort,
+            "effort": current_effort or effort,
             "model_reply": model_reply,
             "reasoning_reply": reasoning_reply,
         })
