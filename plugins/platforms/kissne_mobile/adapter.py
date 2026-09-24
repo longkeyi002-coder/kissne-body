@@ -167,9 +167,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return True
 
     async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", final: bool = False,
+                                stream_id: str = "", turn_id: str = "",
+                                reply_to: Optional[str] = None, final: bool = False,
                                 metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
+        # GatewayStreamConsumer identifies one native stream with its own turn_id.
+        # Accept that standard argument explicitly; otherwise the consumer's first seed
+        # raises TypeError and silently degrades Mobile to buffered send(), which is why
+        # live tool Activity only appeared after reopening the app.
+        stream_key = str(stream_id or turn_id or "mobile")
+        draft_id = abs(hash(stream_key)) % 2147483647 or 1
         return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
