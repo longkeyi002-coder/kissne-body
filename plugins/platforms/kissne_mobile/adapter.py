@@ -1128,12 +1128,80 @@ class KissneMobileAdapter(BasePlatformAdapter):
         retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
         return _json_response({"ok": True, "acked": retired, "cursor": cursor})
 
+    def _materialize_attachments(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Decode bounded JSON attachments once and return temporary media paths."""
+        from plugins.plugin_storage import plugin_data_dir
+
+        upload_dir = plugin_data_dir(PLATFORM_NAME) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        materialized: List[Dict[str, Any]] = []
+        try:
+            for item in items:
+                kind = str(item.get("type") or "").strip().lower()
+                mime_type = str(item.get("mime_type") or "").strip().lower()
+                encoded = item.get("data")
+                if kind not in {"image", "sticker", "file"} or not mime_type:
+                    raise ValueError("invalid_attachment")
+                if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+                    raise ValueError("invalid_attachment")
+                if not isinstance(encoded, str) or not encoded:
+                    raise ValueError("attachment_required")
+                file_bytes = base64.b64decode(encoded, validate=True)
+                if not file_bytes or len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
+                    raise ValueError("attachment_too_large")
+                label = self._safe_upload_name(str(item.get("label") or "upload.bin"))
+                path = upload_dir / f"kissne_in_{secrets.token_hex(8)}_{label}"
+                path.write_bytes(file_bytes)
+                materialized.append({
+                    "path": str(path), "bytes": len(file_bytes), "kind": kind,
+                    "mime_type": mime_type, "label": str(item.get("label") or ""),
+                })
+        except Exception:
+            for row in materialized:
+                try:
+                    _Path(row["path"]).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+        return materialized
+
+    def _set_inbound_attachment_metadata(
+        self, event: MessageEvent, installation: str, turn_id: str,
+        marker: str, attachments: List[Dict[str, Any]], paths: List[str],
+    ) -> None:
+        setattr(event, "_kissne_attachment_metadata", {
+            "installation": installation, "turn_id": turn_id, "marker": marker,
+            "attachments": attachments, "paths": paths, "persisted": False,
+        })
+
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        """Persist attachment presentation metadata when the Runtime admits a turn."""
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict) or metadata.get("persisted"):
+            return
+        await asyncio.to_thread(
+            self.device_store().record_attachment_message,
+            str(metadata.get("installation") or ""),
+            str(metadata.get("turn_id") or ""),
+            str(metadata.get("marker") or ""),
+            list(metadata.get("attachments") or []),
+        )
+        metadata["persisted"] = True
+
+    def _cleanup_inbound_media(self, event: MessageEvent) -> None:
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        for raw_path in metadata.get("paths") or []:
+            try:
+                _Path(str(raw_path)).unlink(missing_ok=True)
+            except Exception:
+                logger.debug("[kissne_mobile] could not remove temporary inbound media", exc_info=True)
+
     async def _handle_json_attachment_inbound(
         self, body: Dict[str, Any], installation: str
     ) -> web.Response:
         """JSON attachment -> a real media MessageEvent; text is optional."""
-        from plugins.plugin_storage import plugin_data_dir
-
         attachments = body.get("attachments")
         if not isinstance(attachments, list) or len(attachments) != 1:
             return _error_response("attachments_must_be_a_single_item_list", 400)
@@ -1142,11 +1210,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("invalid_attachment", 400)
         kind = str(item.get("type") or "").strip().lower()
         mime_type = str(item.get("mime_type") or "").strip().lower()
+        encoded = item.get("data")
         if kind not in {"image", "sticker", "file"} or not mime_type:
             return _error_response("invalid_attachment", 400)
         if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
             return _error_response("invalid_attachment", 400)
-        encoded = item.get("data")
         if not isinstance(encoded, str) or not encoded:
             return _error_response("attachment_required", 400)
         try:
@@ -1158,13 +1226,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if self.bound_conversation(installation) is None:
             return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
 
-        label = self._safe_upload_name(str(item.get("label") or "upload.bin"))
         client_message_id = str(body.get("message_id") or "").strip()
         fingerprint = hashlib.sha256(
-            json.dumps(
-                {"type": kind, "mime_type": mime_type, "data": encoded},
-                sort_keys=True, ensure_ascii=False,
-            ).encode("utf-8")
+            json.dumps({"type": kind, "mime_type": mime_type, "data": encoded},
+                       sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest()
         store = self.device_store()
         if client_message_id:
@@ -1186,11 +1251,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if outcome == INBOUND_CONFLICT:
                 return _error_response("message_id_conflict", 409)
 
-        upload_dir = plugin_data_dir(PLATFORM_NAME) / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        file_name = label
-        disk_path = upload_dir / f"{turn_id}_{file_name}"
-        await asyncio.to_thread(disk_path.write_bytes, file_bytes)
+        try:
+            materialized = self._materialize_attachments([item])
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
+        except Exception:
+            logger.exception("[kissne_mobile] failed to materialize inbound attachment")
+            return _error_response("attachment_store_failed", 503)
+        row = materialized[0]
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1201,25 +1269,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
             else MessageType.PHOTO if kind == "image"
             else MessageType.DOCUMENT
         )
+        safe_attachment = {
+            "type": kind, "mime_type": mime_type,
+            "label": str(item.get("label") or ""),
+        }
+        marker = str(body.get("text") or "")
         event = MessageEvent(
-            text=str(body.get("text") or ""),
-            message_type=message_type,
-            source=self.source_for_installation(installation),
-            raw_message=body,
-            message_id=turn_id,
-            user_id=installation,
-            media_urls=[str(disk_path)],
-            media_types=[mime_type],
-            media_text_inlined=[False],
+            text=marker, message_type=message_type, source=self.source_for_installation(installation),
+            raw_message=body, message_id=turn_id, user_id=installation,
+            media_urls=[row["path"]], media_types=[mime_type], media_text_inlined=[False],
+        )
+        self._set_inbound_attachment_metadata(
+            event, installation, turn_id, marker, [safe_attachment], [row["path"]],
         )
         try:
             await self.handle_message(event)
-            await asyncio.to_thread(
-                store.record_attachment_message, installation, turn_id,
-                str(body.get("text") or ""),
-                [{"type": kind, "mime_type": mime_type, "label": str(item.get("label") or "")}],
-            )
         except Exception:
+            self._cleanup_inbound_media(event)
             logger.exception("[kissne_mobile] failed to inject JSON attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
         return _json_response({
