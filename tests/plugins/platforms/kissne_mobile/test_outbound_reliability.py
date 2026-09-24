@@ -363,3 +363,39 @@ def test_native_stream_bridge_preserves_typed_tool_activity(tmp_path):
     assert activity, f"native stream must expose typed tool activity: {events}"
     assert activity[-1].get("turn_id") == turn["turn_id"]
     assert visible and visible[-1].get("text") == "Checking transport."
+
+
+def test_native_stream_accepts_gateway_consumer_turn_identity(tmp_path):
+    """GatewayStreamConsumer passes turn_id/reply_to to every native frame.
+
+    Mobile must accept that contract or native streaming degrades before tool Activity can
+    reach the device in real time.
+    """
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="stream live", message_id="m-native-contract")
+                result = await adapter.send_stream_frame(
+                    INSTALLATION,
+                    "",
+                    turn_id="gateway-consumer-turn",
+                    reply_to="reply-anchor",
+                    final=False,
+                )
+                payload = await _drain(port, token, 0)
+                return turn, result, payload
+            finally:
+                await stop(adapter)
+
+    turn, result, payload = run(scenario())
+    assert result.success is True
+    assert any(
+        event.get("type") == "pending" and event.get("turn_id") == turn["turn_id"]
+        for event in (payload.get("events") or [])
+    )
