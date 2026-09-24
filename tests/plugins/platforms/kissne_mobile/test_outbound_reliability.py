@@ -415,12 +415,14 @@ def test_cancelled_turn_drops_explicit_late_reasoning_and_completion(tmp_path):
                 token = await pair(port, adapter, conversation=existing)
                 turn = await _open_turn(port, token, text="stop me", message_id="m-late-cancel")
                 turn_id = turn["turn_id"]
-                await _cancel(port, token, turn_id)
+                status, cancel_payload, _ = await http(
+                    port, "POST", "/cancel", token=token, body={"turn_id": turn_id})
+                assert status == 200, cancel_payload
                 before = await _drain(port, token, 0)
                 reasoning = await adapter.send_reasoning(
                     INSTALLATION, "late reasoning", turn_id=turn_id)
                 completed_id = await adapter._queue_event(
-                    INSTALLATION, EVENT_COMPLETED, content="late answer",
+                    INSTALLATION, "completed", content="late answer",
                     target_turn_id=turn_id)
                 after = await _drain(port, token, 0)
                 return turn_id, reasoning, completed_id, before, after
