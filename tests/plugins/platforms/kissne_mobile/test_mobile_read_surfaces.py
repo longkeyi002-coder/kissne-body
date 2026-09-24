@@ -106,3 +106,29 @@ def test_pair_endpoint_rejects_installation_only_token_mint(tmp_path):
     result = run(scenario())
     assert result[0] == 400, result
     assert result[1]["error"] == "pairing_code_and_installation_id_required"
+
+
+def test_connected_adapter_registers_mobile_read_routes(tmp_path):
+    """Boot the real adapter listener and prove the deployed read routes exist, not just handlers."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                session_result = await http(port, "GET", "/admin/sessions", token=token)
+                history_result = await http(port, "GET", "/history?limit=10", token=token)
+                search_result = await http(port, "GET", "/search?q=definitely-no-match", token=token)
+                return session_result, history_result, search_result
+            finally:
+                await stop(adapter)
+
+    session_result, history_result, search_result = run(scenario())
+    assert session_result[0] == 200, session_result
+    assert history_result[0] == 200, history_result
+    assert "messages" in history_result[1]
+    assert search_result[0] == 200, search_result
+    assert "results" in search_result[1]
