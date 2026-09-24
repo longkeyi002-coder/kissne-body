@@ -1383,7 +1383,13 @@
           e.preventDefault();
           e.stopPropagation();
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
+          /* Repainting the whole two-column picker resets both scroll containers to 0.
+             Preserve the provider column position while switching only the selected provider. */
+          var providerList = menuHost && menuHost.querySelector('.modelpick__providers .modelpick__list');
+          var providerScrollTop = providerList ? providerList.scrollTop : 0;
           paintChatMenu('model-picker');
+          var nextProviderList = menuHost && menuHost.querySelector('.modelpick__providers .modelpick__list');
+          if (nextProviderList) nextProviderList.scrollTop = providerScrollTop;
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
