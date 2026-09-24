@@ -1869,7 +1869,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             history.append({
                 "role": "user",
                 "text": str(record.get("text") or ""),
-                "turn_id": turn_id,
+                "_turn_id": turn_id,
                 "message_ref": f"turn:{turn_id}:user",
                 "attachments": list(record.get("attachments") or []),
                 "created_at": float(record.get("created_at") or 0),
