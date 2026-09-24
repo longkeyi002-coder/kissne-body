@@ -526,11 +526,12 @@
       var sid = String(CHAT_LOG_SESSION || '');
       var key = chatLogStorageKeyFor(sid);
       if (!key) return; /* 未绑定会话时不落盘，避免写进错误会话 */
-      var safe = CHAT_LOG.slice(-240).map(function (m) {
+      var safe = CHAT_LOG.slice(-240).map(function (m, index) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
+          stableOrder: Number(m._stableOrder != null ? m._stableOrder : index),
           sid: sid
         };
       });
@@ -549,6 +550,7 @@
       parsed.forEach(function (m) {
         if (!m || !/^(me|ai|sys)$/.test(String(m.who || ''))) return;
         if (m.sid && String(m.sid) !== sid) return; /* 行必须属于该会话 */
+        if (m._stableOrder == null && m.stableOrder != null) m._stableOrder = Number(m.stableOrder);
         rows.push(m);
       });
       rows = rows.slice(-240);
@@ -560,9 +562,13 @@
   function bindChatLogSession(sessionId) {
     var sid = String(sessionId || '');
     if (sid === CHAT_LOG_SESSION) return;
+    /* Flush the old namespace before replacing the in-memory array. UI rerenders
+       must never turn a route/menu tap into an implicit history clear. */
+    if (CHAT_LOG_SESSION) persistChatLog();
     CHAT_LOG_SESSION = sid;
     CHAT_LOG.length = 0;
     loadChatLogFor(sid).forEach(function (m) { CHAT_LOG.push(m); });
+    sortChatLogChronologically();
   }
   /* Human-style composer: every tap creates its own visible bubble. The 1.6s value is only a
      maximum coalescing guard; actual drain follows live composer typing state. Messages sent while
@@ -888,7 +894,12 @@
     return 0;
   }
   function sortChatLogChronologically() {
-    CHAT_LOG.forEach(function (m, i) { if (m && m._stableOrder == null) m._stableOrder = i; });
+    CHAT_LOG.forEach(function (m, i) {
+      if (m && m._stableOrder == null) {
+        var saved = Number(m.stableOrder);
+        m._stableOrder = isFinite(saved) ? saved : i;
+      }
+    });
     CHAT_LOG.sort(function (a, b) {
       var am = chatSortMs(a), bm = chatSortMs(b);
       if (am && bm && am !== bm) return am - bm;
