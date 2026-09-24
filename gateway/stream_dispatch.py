@@ -12,7 +12,8 @@ import logging
 from typing import Any, Callable, Optional
 
 from gateway.stream_events import (
-    Commentary, GatewayNotice, LongToolHint, MessageChunk, MessageStop, StreamEvent, ToolCallChunk,
+    Commentary, GatewayNotice, LongToolHint, MessageChunk, MessageStop, StreamEvent,
+    ToolCallChunk, ToolCallFinished,
 )
 
 logger = logging.getLogger("gateway.stream_events")
