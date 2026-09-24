@@ -108,6 +108,7 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
+      deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
           session_key: String(sessionKey || ''),
@@ -292,6 +293,11 @@
       base: adminBase()
     });
   }
+  function deleteSession(sessionId) {
+    var id = String(sessionId || '').trim();
+    if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
+    return request('/admin/sessions', { method: 'DELETE', body: { session_id: id }, base: adminBase() });
+  }
   function memories() {
     return request('/admin/memory', { method: 'GET', base: adminBase() });
   }
@@ -409,6 +415,7 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
