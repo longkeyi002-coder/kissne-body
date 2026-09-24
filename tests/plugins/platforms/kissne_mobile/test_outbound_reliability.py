@@ -400,3 +400,43 @@ def test_native_stream_accepts_gateway_consumer_turn_identity(tmp_path):
         event.get("type") == "pending" and event.get("turn_id") == turn["turn_id"]
         for event in (payload.get("events") or [])
     )
+
+
+def test_cancelled_turn_drops_explicit_late_reasoning_and_completion(tmp_path):
+    """A cancelled turn is terminal: delayed Runtime callbacks cannot reappear on device."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="stop me", message_id="m-late-cancel")
+                turn_id = turn["turn_id"]
+                await _cancel(port, token, turn_id)
+                before = await _drain(port, token, 0)
+                reasoning = await adapter.send_reasoning(
+                    INSTALLATION, "late reasoning", turn_id=turn_id)
+                completed_id = await adapter._queue_event(
+                    INSTALLATION, EVENT_COMPLETED, content="late answer",
+                    target_turn_id=turn_id)
+                after = await _drain(port, token, 0)
+                return turn_id, reasoning, completed_id, before, after
+            finally:
+                await stop(adapter)
+
+    turn_id, reasoning, completed_id, before, after = run(scenario())
+    assert reasoning.success is False
+    assert completed_id is None
+    assert any(
+        event.get("type") == "cancelled" and event.get("turn_id") == turn_id
+        for event in (before.get("events") or [])
+    )
+    leaked = [
+        event for event in (after.get("events") or [])
+        if event.get("turn_id") == turn_id
+        and (event.get("text") in {"late reasoning", "late answer"})
+    ]
+    assert leaked == []
