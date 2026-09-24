@@ -132,3 +132,79 @@ def test_connected_adapter_registers_mobile_read_routes(tmp_path):
     assert "messages" in history_result[1]
     assert search_result[0] == 200, search_result
     assert "results" in search_result[1]
+
+
+def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path):
+    """Production assembly: GatewayRunner -> _create_adapter -> wiring -> real HTTP listener."""
+    from gateway.config import GatewayConfig, Platform, PlatformConfig
+    from gateway.run import GatewayRunner
+    from _transport_harness import seed_transcript
+
+    async def scenario():
+        with isolated_runtime(tmp_path):
+            platform = Platform("kissne_mobile")
+            platform_config = PlatformConfig(
+                enabled=True, extra={"enabled": True, "host": "127.0.0.1", "port": 0}
+            )
+            runner = GatewayRunner(GatewayConfig(platforms={platform: platform_config}))
+            sessions = runner.session_store
+            conversation = preexisting_conversation(sessions)
+            seed_transcript(sessions, conversation.session_id, 2)
+
+            aborted, enabled, skipped, pending = await runner._start_prefilter_platforms()
+            assert aborted is False
+            assert enabled == 1
+            assert skipped == []
+            assert len(pending) == 1
+            actual_platform, actual_config, adapter = pending[0]
+            assert actual_platform == platform
+            assert actual_config is platform_config
+            assert adapter.gateway_runner is runner
+            assert getattr(adapter, "_session_store", None) is runner.session_store
+
+            raw = await runner._start_connect_pending(pending)
+            assert raw is not None
+            connected = await runner._start_aggregate_connect_results(raw, [], [])
+            assert connected == 1
+            assert runner.adapters[platform] is adapter
+            port = adapter.bound_port
+            assert isinstance(port, int) and port > 0
+
+            try:
+                unauth = await http(port, "GET", "/admin/sessions")
+                assert unauth[0] == 401, unauth
+
+                token = await pair(port, adapter, conversation=conversation)
+                sessions_result = await http(port, "GET", "/admin/sessions", token=token)
+                history_result = await http(port, "GET", "/history?limit=10", token=token)
+                search_result = await http(port, "GET", "/search?q=seeded", token=token)
+
+                assert sessions_result[0] == 200, sessions_result
+                assert sessions_result[1]["active_session_id"] == conversation.session_id
+                assert any(
+                    row["session_id"] == conversation.session_id
+                    for row in sessions_result[1]["sessions"]
+                )
+                assert history_result[0] == 200, history_result
+                history_text = " ".join(
+                    str(item.get("text") or item.get("content") or "")
+                    for item in history_result[1]["messages"]
+                )
+                assert "seeded question" in history_text
+                assert "seeded answer" in history_text
+                assert search_result[0] == 200, search_result
+                assert search_result[1]["results"], search_result
+
+                revoked = await http(port, "POST", "/revoke", token=token, body={})
+                assert revoked[0] == 200, revoked
+                expired_auth = await http(port, "GET", "/history?limit=10", token=token)
+                assert expired_auth[0] == 401, expired_auth
+                repaired_token = await pair(port, adapter, conversation=conversation)
+                repaired = await http(port, "GET", "/admin/sessions", token=repaired_token)
+                assert repaired[0] == 200, repaired
+                return adapter, runner
+            finally:
+                await adapter.disconnect()
+
+    adapter, runner = run(scenario())
+    assert adapter.gateway_runner is runner
