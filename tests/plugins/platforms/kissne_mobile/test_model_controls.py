@@ -22,10 +22,10 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
             return self
 
     monkeypatch.setattr(inventory, "load_picker_context", lambda: Ctx())
-    monkeypatch.setattr(
-        inventory,
-        "build_model_options_payload",
-        lambda _ctx, **_kwargs: {
+    build_kwargs = {}
+    def fake_build(_ctx, **kwargs):
+        build_kwargs.update(kwargs)
+        return {
             "providers": [
                 {
                     "slug": "openrouter",
@@ -36,8 +36,9 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
             ],
             "model": "anthropic/claude-sonnet-4.5",
             "provider": "openrouter",
-        },
-    )
+        }
+
+    monkeypatch.setattr(inventory, "build_model_options_payload", fake_build)
 
     async def scenario():
         with isolated_runtime(tmp_path) as home:
@@ -57,6 +58,8 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     assert [row["slug"] for row in payload["providers"]] == ["openrouter", "nous"]
     assert payload["providers"][0]["models"][0] == "anthropic/claude-sonnet-4.5"
     assert payload.get("efforts"), payload
+    assert build_kwargs.get("include_unconfigured") is True
+    assert build_kwargs.get("refresh") is True
 
 
 def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
