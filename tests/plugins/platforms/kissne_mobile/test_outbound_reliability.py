@@ -442,3 +442,47 @@ def test_cancelled_turn_drops_explicit_late_reasoning_and_completion(tmp_path):
         and (event.get("text") in {"late reasoning", "late answer"})
     ]
     assert leaked == []
+
+
+def test_cancelled_native_stream_cannot_attach_draft_to_new_turn(tmp_path):
+    """A stale native stream keeps the original inbound turn id after a new turn opens."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                old_turn = await _open_turn(
+                    port, token, text="old", message_id="m-old-native")
+                status, payload, _ = await http(
+                    port, "POST", "/cancel", token=token,
+                    body={"turn_id": old_turn["turn_id"]})
+                assert status == 200, payload
+                new_turn = await _open_turn(
+                    port, token, text="new", message_id="m-new-native")
+                stale = await adapter.send_stream_frame(
+                    INSTALLATION, "late old draft",
+                    turn_id="consumer-stream-old",
+                    reply_to=old_turn["turn_id"],
+                    final=False,
+                )
+                events = (await _drain(port, token, 0)).get("events") or []
+                return old_turn, new_turn, stale, events
+            finally:
+                await stop(adapter)
+
+    old_turn, new_turn, stale, events = run(scenario())
+    assert stale.success is False
+    assert not any(
+        event.get("text") == "late old draft"
+        and event.get("turn_id") == new_turn["turn_id"]
+        for event in events
+    ), events
+    assert not any(
+        event.get("text") == "late old draft"
+        and event.get("turn_id") == old_turn["turn_id"]
+        for event in events
+    ), events
