@@ -108,10 +108,6 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
-      memories: function () { return nativeCall('memories', {}); },
-      deleteMemory: function (memoryId) {
-        return nativeCall('deleteMemory', { memory_id: String(memoryId || '') });
-      },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
           session_key: String(sessionKey || ''),
@@ -153,11 +149,6 @@
         });
       },
       adminStatus: function () { return nativeCall('adminStatus', {}); },
-      adminMerge: function () { return nativeCall('adminMerge', {}); },
-      adminRollback: function () { return nativeCall('adminRollback', {}); },
-      adminDeployLog: function (lines) {
-        return nativeCall('adminDeployLog', { lines: Number(lines) || 100 });
-      },
       revoke: function () { return nativeCall('revoke', {}); }
     };
     return;
@@ -382,20 +373,6 @@
   function adminStatus() {
     return request('/admin/status', { method: 'GET', base: adminBase(), clearAuthOn401: false });
   }
-  function adminMerge() {
-    return request('/admin/merge', { method: 'POST', base: adminBase(), clearAuthOn401: false });
-  }
-  function adminRollback() {
-    return request('/admin/rollback', { method: 'POST', base: adminBase(), clearAuthOn401: false });
-  }
-  function adminDeployLog(lines) {
-    var n = Math.max(1, Math.min(500, Number(lines) || 100));
-    return request('/admin/deploy-log?lines=' + encodeURIComponent(n), {
-      method: 'GET',
-      base: adminBase(),
-      clearAuthOn401: false
-    });
-  }
 
   window.KissneTransport = {
     ApiError: ApiError,
@@ -411,8 +388,6 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
-    memories: memories,
-    deleteMemory: deleteMemory,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
@@ -423,9 +398,6 @@
     modelOptions: modelOptions,
     setModel: setModel,
     respondApproval: respondApproval,
-    adminStatus: adminStatus,
-    adminMerge: adminMerge,
-    adminRollback: adminRollback,
-    adminDeployLog: adminDeployLog
+    adminStatus: adminStatus
   };
 })();
