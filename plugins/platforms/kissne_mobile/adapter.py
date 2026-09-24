@@ -158,6 +158,24 @@ class KissneMobileAdapter(BasePlatformAdapter):
     supports_code_blocks = True
     typed_command_prefix = "/"
 
+    # Mobile uses send_draft as its typed event transport.  The generic gateway only
+    # routes tool progress into a StreamConsumer when the adapter advertises native
+    # streaming; draft streaming otherwise receives assistant text but tool progress
+    # falls back to the legacy progress queue and loses the typed Activity markers.
+    # Treat Mobile's durable event stream as native so reasoning/tool/answer stay on
+    # distinct lanes all the way to /messages.
+    SUPPORTS_NATIVE_STREAMING = True
+
+    def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
+        return True
+
+    async def send_stream_frame(self, chat_id: str, content: str, *,
+                                stream_id: str = "", final: bool = False,
+                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        """Bridge native Gateway stream frames onto Mobile's typed draft transport."""
+        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
+        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
         extra = config.extra or {}
