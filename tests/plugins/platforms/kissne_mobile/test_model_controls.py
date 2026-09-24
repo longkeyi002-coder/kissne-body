@@ -118,3 +118,18 @@ def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
     assert seen[1] == ("reasoning", "/reasoning high")
     assert payload["provider"] == "openrouter"
     assert payload["model"] == "anthropic/claude-sonnet-4.5"
+
+
+def test_real_gateway_runner_wires_canonical_reasoning_resolver(tmp_path):
+    """Integration contract: the production GatewayRunner, not a fake, is attached to Mobile."""
+    from gateway.run import GatewayRunner
+    from gateway.config import GatewayConfig
+
+    with isolated_runtime(tmp_path):
+        runner = GatewayRunner(GatewayConfig())
+        adapter = make_adapter()
+        runner._wire_adapter_handlers(adapter)
+        adapter.gateway_runner = runner
+        assert adapter.gateway_runner is runner
+        resolver = getattr(adapter.gateway_runner, "_resolve_session_reasoning_config", None)
+        assert callable(resolver), "production GatewayRunner must expose canonical reasoning resolver"
