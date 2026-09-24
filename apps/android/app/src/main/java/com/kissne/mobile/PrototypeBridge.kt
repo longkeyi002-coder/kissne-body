@@ -127,7 +127,17 @@ class PrototypeBridge(
 
     private fun executeAction(action: String, body: JSONObject): JSONObject =
         when (action) {
-            "pair", "ensureToken" -> {
+            "pair" -> {
+                body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
+                val code = body.optString("pairing_code").trim()
+                if (code.isBlank()) throw MobileTransportException(401, "pairing_code_required")
+                val paired = client().pairPayload(store.installationId(), pairingCode = code)
+                val token = paired.optString("device_token")
+                if (token.isBlank()) throw IllegalStateException("device_token_missing")
+                store.saveToken(token)
+                paired
+            }
+            "ensureToken" -> {
                 body.optString("api_base").takeIf { it.isNotBlank() }?.let { store.apiBase = it }
                 ensureDeviceToken(body.optBoolean("force", false))
             }
