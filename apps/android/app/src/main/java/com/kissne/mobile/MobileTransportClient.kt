@@ -62,6 +62,25 @@ class MobileTransportClient(
     fun deleteSessionPayload(sessionId: String): JSONObject =
         request("DELETE", "/admin/sessions", JSONObject().put("session_id", sessionId))
 
+    fun selectSessionPayload(sessionKey: String?, sessionId: String?): JSONObject {
+        val body = JSONObject()
+        sessionKey?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
+        sessionId?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_id", it) }
+        return request("POST", "/admin/sessions", body)
+    }
+
+    fun historyPayload(limit: Int = 50, before: String? = null): JSONObject {
+        val query = StringBuilder("/history?limit=").append(limit.coerceIn(1, 100))
+        before?.takeIf { it.isNotBlank() }?.let {
+            query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        return request("GET", query.toString())
+    }
+
+    fun searchPayload(queryText: String, limit: Int = 20): JSONObject =
+        request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
+            "&limit=" + limit.coerceIn(1, 50))
+
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
@@ -79,12 +98,11 @@ class MobileTransportClient(
     }
 
 
-    fun sendPayload(messageId: String, text: String): JSONObject =
-        request(
-            "POST",
-            "/messages",
-            JSONObject().put("message_id", messageId).put("text", text),
-        )
+    fun sendPayload(messageId: String, text: String, replyTo: String? = null): JSONObject {
+        val body = JSONObject().put("message_id", messageId).put("text", text)
+        replyTo?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("reply_to", it) }
+        return request("POST", "/messages", body)
+    }
 
 
     fun pollPayload(cursor: Long): JSONObject = request("GET", "/messages?cursor=$cursor")
