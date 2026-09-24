@@ -18,6 +18,7 @@ class TransportContractTest {
 
     @Test fun interactive_send_is_not_blocked_by_background_reads() {
         assertEquals(BridgeLane.TRANSPORT, bridgeLane("sendText"))
+        assertEquals(BridgeLane.TRANSPORT, bridgeLane("sendSticker"))
         assertEquals(BridgeLane.TRANSPORT, bridgeLane("selectSession"))
         assertEquals(BridgeLane.BACKGROUND, bridgeLane("bootstrap"))
         assertEquals(BridgeLane.BACKGROUND, bridgeLane("poll"))
