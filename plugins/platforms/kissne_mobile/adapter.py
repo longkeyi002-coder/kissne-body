@@ -183,6 +183,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
         self._session_reset_pending: set[str] = set()
         self._session_reset_turns: Dict[str, str] = {}
+        # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
+        self._inbound_turns: set[str] = set()
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -567,6 +569,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # The reply closes the turn it answers — but only from ``pending``: a late reply must not
                 # resurrect a turn the user already cancelled.
                 await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
+                self._inbound_turns.discard(turn_id)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
                              event_type, _fingerprint(installation))
@@ -589,22 +592,31 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 target_turn_id=reset_turn,
                 extra={"presentation": "session_reset", "notice_id": notice_id,
                        "message_ref": "notice:" + notice_id})
+            await asyncio.to_thread(
+                self.device_store().record_timeline_notice,
+                installation, notice_id, "session_reset", content,
+            )
             self._session_reset_pending.discard(installation)
             self._session_reset_turns.pop(installation, None)
         elif bool((metadata or {}).get("_interim_send")):
             message_id = await self._queue_event(
                 installation, EVENT_DELTA, content=content, reply_to=reply_to,
                 extra={"presentation": "commentary", "interim": True})
-        elif reply_to is None and (await asyncio.to_thread(
-                self.device_store().pending_turn_id, installation)):
-            message_id = await self._queue_event(
-                installation, "notice", content=content, reply_to=None,
-                extra={"presentation": "notice"})
         else:
-            self._clear_draft_state(installation)
-            message_id = await self._queue_event(
-                installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
-                extra={"presentation": "assistant_text"})
+            pending_turn = await asyncio.to_thread(
+                self.device_store().pending_turn_id, installation)
+            # A normal Runtime reply closes an HTTP-admitted turn. A turn opened directly in the
+            # device store has no Runtime admission marker and remains an auxiliary notice.
+            if reply_to is None and pending_turn and pending_turn not in self._inbound_turns:
+                message_id = await self._queue_event(
+                    installation, "notice", content=content, reply_to=None,
+                    extra={"presentation": "notice"})
+            else:
+                self._clear_draft_state(installation)
+                final_extra = {"presentation": "assistant_text"} if reply_to is None else None
+                message_id = await self._queue_event(
+                    installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                    extra=final_extra)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
@@ -913,6 +925,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_store_failed", 503)
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -1260,6 +1273,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_store_failed", 503)
         row = materialized[0]
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap)
@@ -1365,6 +1379,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -1386,6 +1401,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 "用户" if quoted else None
             ),
             reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
+            allow_gateway_control=text.strip().lower() in {"/new", "/reset"},
         )
         if quoted:
             await asyncio.to_thread(
@@ -1839,6 +1855,27 @@ class KissneMobileAdapter(BasePlatformAdapter):
             })
         history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
             identity["session_id"])
+        # Attachment-only turns may not yet exist in the Hermes transcript during a cold start;
+        # restore their durable presentation metadata so the device can render them.
+        try:
+            saved_attachments = await asyncio.to_thread(
+                self.device_store().attachment_messages, installation, 500)
+        except Exception:
+            saved_attachments = []
+        for record in saved_attachments:
+            turn_id = str(record.get("turn_id") or "").strip()
+            if not turn_id or turn_id in represented_turn_ids:
+                continue
+            history.append({
+                "role": "user",
+                "text": str(record.get("text") or ""),
+                "turn_id": turn_id,
+                "message_ref": f"turn:{turn_id}:user",
+                "attachments": list(record.get("attachments") or []),
+                "created_at": float(record.get("created_at") or 0),
+            })
+            represented_turn_ids.add(turn_id)
+        history.sort(key=lambda item: (float(item.get("created_at") or 0), str(item.get("message_ref") or "")))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
@@ -1879,6 +1916,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
         if not moved:
             return _error_response("turn_not_cancellable", 409)
+        self._inbound_turns.discard(turn_id)
         self._clear_draft_state(installation)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_CANCELLED,
