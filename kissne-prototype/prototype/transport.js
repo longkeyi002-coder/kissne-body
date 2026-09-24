@@ -298,6 +298,16 @@
       base: adminBase()
     });
   }
+  function history(limit, before) {
+    var path = '/mobile/history?limit=' + encodeURIComponent(Number(limit) || 50);
+    if (before) path += '&before=' + encodeURIComponent(String(before));
+    return request(path, { method: 'GET' });
+  }
+  function searchHistory(q, limit) {
+    var query = String(q || '').trim();
+    if (!query) throw new ApiError(400, { error: 'query_required' }, 'query_required');
+    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 20), { method: 'GET' });
+  }
   function deleteSession(sessionId) {
     var id = String(sessionId || '').trim();
     if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
@@ -351,8 +361,9 @@
     if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
     return 'web-' + r;
   }
-  function sendText(text, messageId) {
+  function sendText(text, messageId, replyTo) {
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
+    if (replyTo) body.reply_to = String(replyTo);
     return request('/mobile/messages', { method: 'POST', body: body });
   }
 
@@ -412,6 +423,8 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    history: history,
+    search: searchHistory,
     deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
