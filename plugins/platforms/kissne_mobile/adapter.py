@@ -644,7 +644,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=message_id)
 
     async def send_reasoning(self, chat_id: str, content: str, *,
-                             draft_id: int = 0) -> SendResult:
+                             draft_id: int = 0, turn_id: str = "") -> SendResult:
         """Queue provider-visible reasoning on its own transport lane.
 
         This never enters assistant_text: final answer scrubbing remains unchanged while
@@ -655,6 +655,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=None)
         message_id = await self._queue_event(
             chat_id, EVENT_DELTA, content=text,
+            target_turn_id=str(turn_id or "").strip() or None,
             extra={
                 "draft_id": int(draft_id or 0),
                 "presentation": "reasoning",
