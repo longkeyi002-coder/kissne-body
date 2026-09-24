@@ -176,7 +176,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # live tool Activity only appeared after reopening the app.
         stream_key = str(stream_id or turn_id or "mobile")
         draft_id = abs(hash(stream_key)) % 2147483647 or 1
-        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+        frame_metadata = dict(metadata or {})
+        # Gateway's native-stream turn_id is a stream key, while reply_to is the
+        # inbound Mobile event id. Preserve that server turn identity separately so
+        # a stale stream can never attach its draft frames to a newer pending turn.
+        if reply_to:
+            frame_metadata["_mobile_turn_id"] = str(reply_to)
+        return await self.send_draft(
+            chat_id, draft_id, content, metadata=frame_metadata or None)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -687,6 +694,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Separate cumulative assistant text from semantic tool Activity before delivery."""
         installation = str(chat_id or "").strip()
         key = (installation, int(draft_id))
+        explicit_turn_id = str((metadata or {}).get("_mobile_turn_id") or "").strip()
         visible, activities = self._split_draft_frame(content)
         seen = self._draft_activity_seen.setdefault(key, set())
         labels = self._draft_tool_labels.setdefault(key, {})
