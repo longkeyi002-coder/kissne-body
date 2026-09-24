@@ -583,26 +583,30 @@ class KissneMobileAdapter(BasePlatformAdapter):
         pending_turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
         explicit_turn_id = str(target_turn_id or "").strip()
         turn_id = explicit_turn_id or str(pending_turn_id or "")
-        # Explicitly-bound live frames belong to one Runtime turn. Once that turn has
-        # been cancelled/completed, a delayed reasoning/delta/completed callback must
-        # not leak back into the UI. Auxiliary notices without an explicit turn keep
-        # their legacy behavior.
-        if explicit_turn_id and event_type in {EVENT_DELTA, EVENT_COMPLETED}:
-            state = await asyncio.to_thread(store.turn_state, installation, explicit_turn_id)
-            if state != TURN_PENDING:
-                logger.debug(
-                    "[kissne_mobile] dropping late %s for closed turn %s (%s)",
-                    event_type, _fingerprint(explicit_turn_id), state or "missing")
-                return None
+        # Explicitly-bound live frames are admitted atomically with the durable turn
+        # state. This closes the check/enqueue race with cancel; completed also changes
+        # pending->completed in the same transaction as its final event.
         try:
-            seq = await asyncio.to_thread(
-                store.enqueue_event, installation, event_type, payload, turn_id or None,
-                cap=max(1, self._outbound_cap),
-            )
+            if explicit_turn_id and event_type in {EVENT_DELTA, EVENT_COMPLETED}:
+                seq = await asyncio.to_thread(
+                    store.enqueue_pending_turn_event,
+                    installation, explicit_turn_id, event_type, payload,
+                    cap=max(1, self._outbound_cap),
+                    close=event_type == EVENT_COMPLETED,
+                )
+                if seq is None:
+                    logger.debug(
+                        "[kissne_mobile] dropping late %s for closed turn %s",
+                        event_type, _fingerprint(explicit_turn_id))
+                    return None
+            else:
+                seq = await asyncio.to_thread(
+                    store.enqueue_event, installation, event_type, payload, turn_id or None,
+                    cap=max(1, self._outbound_cap),
+                )
+                if event_type == EVENT_COMPLETED and turn_id:
+                    await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
             if event_type == EVENT_COMPLETED and turn_id:
-                # The reply closes the turn it answers — but only from ``pending``: a late reply must not
-                # resurrect a turn the user already cancelled.
-                await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
                 self._inbound_turns.discard(turn_id)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
