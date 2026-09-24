@@ -310,7 +310,8 @@ def test_reasoning_uses_a_separate_delta_lane(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=existing)
                 turn = await _open_turn(port, token, text="think visibly", message_id="m-reasoning")
-                await adapter.send_reasoning(INSTALLATION, "first reasoning step")
+                await adapter.send_reasoning(
+                    INSTALLATION, "first reasoning step", turn_id=turn["turn_id"])
                 await adapter.send(INSTALLATION, "final answer")
                 payload = await _drain(port, token, 0)
             finally:
