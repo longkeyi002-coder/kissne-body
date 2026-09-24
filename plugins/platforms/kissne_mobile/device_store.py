@@ -574,6 +574,19 @@ class DeviceStore:
                 conn.rollback()
                 raise
 
+    def turn_state(self, installation_id: str, turn_id: str) -> Optional[str]:
+        """Return one installation's durable turn state, or None when it does not own the turn."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return None
+        with self._lock:
+            row = self._db().execute(
+                "SELECT state FROM turns WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            ).fetchone()
+        return str(row["state"]) if row is not None else None
+
     def pending_turn_id(self, installation_id: str) -> Optional[str]:
         """The newest still-pending turn of one installation."""
         installation = self._installation(installation_id)
