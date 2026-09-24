@@ -1533,10 +1533,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not callable(resolver):
             return ""
         source = self.source_for_installation(installation)
+        # Reasoning overrides live on the canonical Runtime conversation. The mobile
+        # installation key is only a routing alias; resolving against that alias made
+        # the picker report "none" even while the selected conversation had an effort.
+        identity = self._conversation_identity(installation) or {}
+        canonical_key = str(identity.get("session_key") or "").strip()
+        session_key = canonical_key or self.mobile_session_key(installation)
         try:
             config = resolver(
                 source=source,
-                session_key=self.mobile_session_key(installation),
+                session_key=session_key,
                 model=str(model or ""),
             )
         except Exception:
