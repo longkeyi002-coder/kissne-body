@@ -1102,10 +1102,7 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
-            <button class="hsel${menu === 'provider' ? ' is-open' : ''}" data-chat-menu="provider">
-              <span class="hsel__k">供应商</span><span class="hsel__v">${esc(curProvider.v)}</span>${icon('chevron', 11, 'hsel__car')}
-            </button>
-            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
+            <button class="hsel${(menu === 'provider' || menu === 'model') ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
@@ -1393,8 +1390,12 @@
         if (providerPick && root.contains(providerPick)) {
           e.preventDefault();
           e.stopPropagation();
+          var providerList = providerPick.closest('.modelpick__list');
+          var providerScrollTop = providerList ? providerList.scrollTop : 0;
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
           paintChatMenu('model-picker');
+          var restoredProviderList = root.querySelector('.modelpick__providers .modelpick__list');
+          if (restoredProviderList) restoredProviderList.scrollTop = providerScrollTop;
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
