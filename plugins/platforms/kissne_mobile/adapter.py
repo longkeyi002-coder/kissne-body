@@ -158,6 +158,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
     supports_code_blocks = True
     typed_command_prefix = "/"
 
+    # Mobile's durable draft/event transport is a native stream consumer: this is
+    # what makes Gateway tool progress reach send_draft as typed Activity instead
+    # of falling back to the legacy progress path.
+    SUPPORTS_NATIVE_STREAMING = True
+
+    def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
+        return True
+
+    async def send_stream_frame(self, chat_id: str, content: str, *,
+                                stream_id: str = "", final: bool = False,
+                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
+        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
         extra = config.extra or {}
