@@ -1396,7 +1396,9 @@
             pickerProvider = PROVIDER_CURRENT || (PROVIDERS[0] && PROVIDERS[0].k) || '';
           }
           paintChatMenu(openMenu === target ? null : target);
-          if (kind) refreshHermesModelControls(false);
+          /* Picker truth must be live: opening model/provider controls always re-reads
+             Hermes' canonical inventory instead of trusting the 30s background cache. */
+          if (kind) refreshHermesModelControls(true);
           return;
         }
         var close = e.target && e.target.closest ? e.target.closest('[data-chat-menu-close]') : null;
@@ -1425,22 +1427,42 @@
         var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
         var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
         T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
-          .then(function () {
-            if (kind === 'model') {
-              MODEL_CURRENT = modelKey || value;
-              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
+          .then(function (result) {
+            result = result || {};
+            /* Never paint the requested value optimistically. The command response is
+               only an acknowledgement; the following /model-options read is the source
+               of truth for the active Runtime Conversation. */
+            if (result.ok === false) {
+              var rejected = new Error(String(result.error || 'Hermes 切换失败'));
+              rejected.payload = result;
+              throw rejected;
             }
-            if (kind === 'effort') EFFORT_CURRENT = value;
             MODEL_OPTIONS_LOADED_AT = 0;
+            return T.modelOptions();
+          })
+          .then(function (payload) {
+            applyHermesModelOptions(payload);
+            var confirmed = true;
+            if (kind === 'model') {
+              var active = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
+              confirmed = !!active && active.raw === modelValue
+                && (!providerValue || active.p === providerValue);
+            } else if (kind === 'effort') {
+              confirmed = EFFORT_CURRENT === value;
+            }
+            if (!confirmed) {
+              throw new Error('Hermes 已响应，但实际会话状态未切换到所选项');
+            }
             paintChatMenu(null);
             updateHeaderControls();
-            refreshHermesModelControls(true);
           })
           .catch(function (err) {
             el.disabled = false;
+            MODEL_OPTIONS_LOADED_AT = 0;
+            refreshHermesModelControls(true);
             var msg = err && err.payload && err.payload.error
               ? String(err.payload.error)
-              : 'Hermes 切换失败';
+              : String((err && err.message) || 'Hermes 切换失败');
             appendSystemNotice(msg);
           });
       }
