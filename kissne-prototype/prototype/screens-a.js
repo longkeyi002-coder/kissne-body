@@ -2368,9 +2368,27 @@
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         var stickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
-           先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) queueOutboundText('[表情包：' + s2.label + ']', stickerLog);
+        /* Sticker media must use the same real attachment lane as photos/files.
+           Never turn it into "[表情包：…]" text: that loses the actual pixels and makes
+           Hermes treat a visual reaction as a caption. Until a bundled sticker asset is
+           resolved to bytes by the native bridge, keep the local bubble but do not fake-send it. */
+        if (live && T && typeof T.sendSticker === 'function') {
+          T.sendSticker(s2.k, s2.label).then(function (accepted) {
+            var turn = String(accepted && accepted.turn_id || '');
+            if (!turn) return;
+            stickerLog.messageRef = 'turn:' + turn + ':user';
+            stickerLog.turnId = turn;
+            persistChatLog();
+            livePendingTurns[turn] = true;
+            liveCurrentTurn = turn;
+            liveSetCancel(true);
+            scheduleLivePoll(0);
+          }).catch(function () {
+            setSessionStatus('表情包发送失败，请重试。');
+          });
+        } else if (live) {
+          setSessionStatus('当前版本暂不能发送真实表情包图片。');
+        }
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         setStickerPanel(false);
