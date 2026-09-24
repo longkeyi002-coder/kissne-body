@@ -59,6 +59,9 @@ class MobileTransportClient(
     fun sessionsPayload(): JSONObject =
         request("GET", "/admin/sessions")
 
+    fun deleteSessionPayload(sessionId: String): JSONObject =
+        request("DELETE", "/admin/sessions", JSONObject().put("session_id", sessionId))
+
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
