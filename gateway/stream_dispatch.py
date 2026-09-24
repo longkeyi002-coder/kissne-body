@@ -57,8 +57,8 @@ class GatewayEventDispatcher:
             logger.debug("stream-event dispatch error", exc_info=True)
 
     def _dispatch(self, event: StreamEvent) -> None:
-        # ToolCallFinished: no chrome on completion (only "started" is rendered);
-        # completion only drives onboarding hints (LongToolHint).
+        # Native/rich adapters may render completion to settle an existing Activity;
+        # the base adapter still returns no chrome for ToolCallFinished.
         if isinstance(event, (MessageChunk, MessageStop, Commentary)):
             if self.sink is not None:
                 self.adapter.render_message_event(event, self.sink)
