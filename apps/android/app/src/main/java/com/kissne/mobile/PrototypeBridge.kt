@@ -100,16 +100,7 @@ class PrototypeBridge(
                 .put("installation_id", store.installationId())
                 .put("existing", true)
         }
-        // auto_pair contract: only installation_id is required. No pairing code,
-        // no legacy rotate flag. The server returns a fresh device_token.
-        val paired = client().pairPayload(store.installationId())
-        val token = paired.optString("device_token")
-        if (token.isBlank()) throw IllegalStateException("device_token_missing")
-        store.saveToken(token)
-        return JSONObject()
-            .put("ok", paired.optBoolean("ok", true))
-            .put("installation_id", paired.optString("installation_id", store.installationId()))
-            .put("existing", false)
+        throw MobileTransportException(401, "pairing_required")
     }
 
 
@@ -124,12 +115,12 @@ class PrototypeBridge(
         }
         invalidateBootstrapCache()
         store.invalidateToken()
-        return ensureDeviceToken(force = true)
+        throw MobileTransportException(401, "pairing_required")
     }
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
+            "sessions", "history", "search", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus",
         )
@@ -141,6 +132,15 @@ class PrototypeBridge(
                 ensureDeviceToken(body.optBoolean("force", false))
             }
             "sessions" -> client().sessionsPayload()
+            "history" -> client().historyPayload(
+                limit = body.optInt("limit", 50),
+                before = body.optString("before").takeIf { it.isNotBlank() },
+            )
+            "search" -> {
+                val query = body.optString("q").trim()
+                if (query.isBlank()) throw IllegalArgumentException("query_required")
+                client().searchPayload(query, body.optInt("limit", 20))
+            }
             "deleteSession" -> {
                 val sessionId = body.optString("session_id").trim()
                 if (sessionId.isBlank()) throw IllegalArgumentException("session_id_required")
@@ -152,8 +152,7 @@ class PrototypeBridge(
                 if (sessionKey.isBlank() && sessionId.isBlank()) {
                     throw IllegalArgumentException("session_identity_required")
                 }
-                val selected = client().pairPayload(
-                    installationId = store.installationId(),
+                val selected = client().selectSessionPayload(
                     sessionKey = sessionKey.takeIf { it.isNotBlank() },
                     sessionId = sessionId.takeIf { it.isNotBlank() },
                 )
@@ -176,6 +175,7 @@ class PrototypeBridge(
             "sendText" -> client().sendPayload(
                 messageId = body.optString("message_id"),
                 text = body.optString("text"),
+                replyTo = body.optString("reply_to").takeIf { it.isNotBlank() },
             ).also {
                 invalidateBootstrapCache(clearPersistedMetadata = false)
             }
