@@ -1272,11 +1272,14 @@
         }
         host.innerHTML = sessions.map(function (s) {
           var active = sessionIsCurrent(s);
-          return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-            + ((s.key || s.id) ? '' : ' disabled')
-            + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+          return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+            + '<button type="button" class="sessiondrawer__select" data-session-select'
+            + ((s.key || s.id) ? '' : ' disabled') + '>'
+            + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+            + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
+            + '</div>';
         }).join('');
       }
       function setSessionDrawer(open) {
