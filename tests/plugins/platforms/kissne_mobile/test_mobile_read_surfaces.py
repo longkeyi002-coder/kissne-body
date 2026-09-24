@@ -134,11 +134,17 @@ def test_connected_adapter_registers_mobile_read_routes(tmp_path):
     assert "results" in search_result[1]
 
 
-def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path):
-    """Production assembly: GatewayRunner -> _create_adapter -> wiring -> real HTTP listener."""
+def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, monkeypatch):
+    """Full production start(): create -> wire -> connect -> publish -> real HTTP listener."""
     from gateway.config import GatewayConfig, Platform, PlatformConfig
     from gateway.run import GatewayRunner
     from _transport_harness import seed_transcript
+
+    async def _no_async(*_args, **_kwargs):
+        return None
+
+    async def _no_secondary(self, connected_count, _skipped):
+        return False, connected_count
 
     async def scenario():
         with isolated_runtime(tmp_path):
@@ -151,22 +157,25 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path):
             conversation = preexisting_conversation(sessions)
             seed_transcript(sessions, conversation.session_id, 2)
 
-            aborted, enabled, skipped, pending = await runner._start_prefilter_platforms()
-            assert aborted is False
-            assert enabled == 1
-            assert skipped == []
-            assert len(pending) == 1
-            actual_platform, actual_config, adapter = pending[0]
-            assert actual_platform == platform
-            assert actual_config is platform_config
+            # Keep GatewayRunner.start() itself real. Suppress only unrelated boot work
+            # (recovery/free-tier/warmup/watchers) so this test cannot touch network or
+            # leave background tasks behind; adapter creation, wiring, connect, publish,
+            # route registration and HTTP remain the production implementations.
+            monkeypatch.setattr(runner, "_start_recover_previous_run", _no_async)
+            monkeypatch.setattr(runner, "_start_free_tier_bootstrap", lambda: None)
+            monkeypatch.setattr(runner, "_start_startup_warmup", lambda: None)
+            monkeypatch.setattr(runner, "_start_secondary_profiles", _no_secondary.__get__(runner))
+            monkeypatch.setattr(runner, "_start_finish_wiring", _no_async)
+            monkeypatch.setattr(runner, "_start_spawn_background_watchers", lambda: None)
+
+            started = await runner.start()
+            assert started is True
+            assert runner._running is True
+            adapter = runner.adapters[platform]
             assert adapter.gateway_runner is runner
             assert getattr(adapter, "_session_store", None) is runner.session_store
-
-            raw = await runner._start_connect_pending(pending)
-            assert raw is not None
-            connected = await runner._start_aggregate_connect_results(raw, [], [])
-            assert connected == 1
-            assert runner.adapters[platform] is adapter
+            resolver = getattr(adapter.gateway_runner, "_resolve_session_reasoning_config", None)
+            assert callable(resolver), "production-started Mobile adapter must expose the real reasoning resolver"
             port = adapter.bound_port
             assert isinstance(port, int) and port > 0
 
@@ -204,7 +213,9 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path):
                 assert repaired[0] == 200, repaired
                 return adapter, runner
             finally:
+                runner._running = False
                 await adapter.disconnect()
 
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
+
