@@ -100,6 +100,37 @@ def test_new_mode_dedups_same_tool():
     assert len(lines) == 2  # terminal once, read_file once
 
 
+def test_tool_completion_reaches_adapter_progress_queue():
+    """Native adapters need the finish event to settle running Activity."""
+    lines = []
+    adapter = MagicMock()
+    adapter.format_tool_event.side_effect = lambda event, **_: (
+        f"finish:{event.tool_name}:{event.index}" if isinstance(event, ToolCallFinished)
+        else f"start:{event.tool_name}:{event.index}"
+    )
+    d = GatewayEventDispatcher(
+        adapter, _FakeSink(),
+        enqueue_tool_line=lines.append, tool_mode="all",
+    )
+    d.dispatch(ToolCallChunk(tool_name="terminal", preview="ls", index=3))
+    d.dispatch(ToolCallFinished(tool_name="terminal", duration=0.2, ok=True, index=3))
+    assert lines == ["start:terminal:3", "finish:terminal:3"]
+
+
+def test_new_mode_still_dispatches_tool_completion():
+    lines = []
+    adapter = MagicMock()
+    adapter.format_tool_event.side_effect = lambda event, **_: type(event).__name__
+    d = GatewayEventDispatcher(
+        adapter, _FakeSink(),
+        enqueue_tool_line=lines.append, tool_mode="new",
+    )
+    d.dispatch(ToolCallChunk(tool_name="terminal", preview="a", index=0))
+    d.dispatch(ToolCallChunk(tool_name="terminal", preview="b", index=1))
+    d.dispatch(ToolCallFinished(tool_name="terminal", duration=0.1, ok=True, index=0))
+    assert lines == ["ToolCallChunk", "ToolCallFinished"]
+
+
 # ── Control events → gateway-owned hooks ─────────────────────────────────────
 
 
