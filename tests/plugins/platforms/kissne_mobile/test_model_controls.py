@@ -25,7 +25,7 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     monkeypatch.setattr(
         inventory,
         "build_model_options_payload",
-        lambda _ctx, **_kw: {
+        lambda _ctx, **_kwargs: {
             "providers": [
                 {
                     "slug": "openrouter",

@@ -158,6 +158,8 @@ class MainActivity : AppCompatActivity() {
             checkUpdates = { updateManager.checkForUpdates(force = true) },
             startVoiceInput = { requestId -> startVoiceInput(requestId) },
             startAttachmentPicker = { requestId, kind -> startAttachmentPicker(requestId, kind) },
+            openBrowser = { url -> openBrowser(url) },
+            openBrowserWithText = { url, text -> openBrowser(url, text) },
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -166,6 +168,13 @@ class MainActivity : AppCompatActivity() {
             "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}"
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
+    }
+
+    private fun openBrowser(url: String?, text: String? = null) {
+        startActivity(Intent(this, BrowserActivity::class.java).apply {
+            url?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_URL, it) }
+            text?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_TEXT, it) }
+        })
     }
 
     private fun startAttachmentPicker(requestId: String, rawKind: String) {
@@ -191,12 +200,15 @@ class MainActivity : AppCompatActivity() {
                     ?: if (kind == "photo") "photo" else "file"
                 val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
                     ?: "application/octet-stream"
+                val size = queryAttachmentSize(uri)
                 if (::bridge.isInitialized) {
-                    bridge.notifyAttachmentSelected(requestId, kind, name, mime)
+                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size)
                 }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
                 if (::bridge.isInitialized) {
-                    bridge.uploadPickedAttachment(requestId, kind, name, mime, bytes)
+                    val attachmentId = "local-attachment-" + java.util.UUID.randomUUID().toString()
+                    bridge.emitAttachmentSelected(attachmentId, kind, name, mime, bytes.size)
+                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes)
                 }
             } catch (error: Throwable) {
                 if (::bridge.isInitialized) {
@@ -220,6 +232,19 @@ class MainActivity : AppCompatActivity() {
             }.orEmpty()
         } catch (_: Throwable) {
             ""
+        }
+    }
+
+    private fun queryAttachmentSize(uri: Uri): Long {
+        return try {
+            contentResolver.query(
+                uri, arrayOf(OpenableColumns.SIZE), null, null, null,
+            )?.use { cursor ->
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) cursor.getLong(index) else -1L
+            } ?: -1L
+        } catch (_: Throwable) {
+            -1L
         }
     }
 

@@ -621,6 +621,28 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
 
+    async def send_reasoning(self, chat_id: str, content: str, *,
+                             draft_id: int = 0) -> SendResult:
+        """Queue provider-visible reasoning on its own transport lane.
+
+        This never enters assistant_text: final answer scrubbing remains unchanged while
+        models/providers that expose reasoning can stream it to capable clients.
+        """
+        text = str(content or "")
+        if not text:
+            return SendResult(success=True, message_id=None)
+        message_id = await self._queue_event(
+            chat_id, EVENT_DELTA, content=text,
+            extra={
+                "draft_id": int(draft_id or 0),
+                "presentation": "reasoning",
+                "interim": True,
+            },
+        )
+        if message_id is None:
+            return SendResult(success=False, error="missing target installation")
+        return SendResult(success=True, message_id=message_id)
+
     async def send_draft(self, chat_id: str, draft_id: int, content: str,
                          metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Separate cumulative assistant text from semantic tool Activity before delivery."""

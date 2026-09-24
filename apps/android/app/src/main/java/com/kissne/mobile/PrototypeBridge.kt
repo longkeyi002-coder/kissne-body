@@ -13,6 +13,8 @@ class PrototypeBridge(
     private val checkUpdates: () -> Unit = {},
     private val startVoiceInput: (String) -> Unit = {},
     private val startAttachmentPicker: (String, String) -> Unit = { _, _ -> },
+    private val openBrowser: (String?) -> Unit = {},
+    private val openBrowserWithText: (String?, String?) -> Unit = { _, _ -> },
 ) {
     /*
      * Keep chat transport isolated from slower control-plane calls.
@@ -126,9 +128,9 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "memories", "deleteMemory", "bootstrap", "sendText", "poll", "ack", "cancel",
+            "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
-            "adminStatus", "adminDeployLog",
+            "adminStatus",
         )
 
     private fun executeAction(action: String, body: JSONObject): JSONObject =
@@ -138,12 +140,6 @@ class PrototypeBridge(
                 ensureDeviceToken(body.optBoolean("force", false))
             }
             "sessions" -> client().sessionsPayload()
-            "memories" -> client().memoriesPayload()
-            "deleteMemory" -> {
-                val memoryId = body.optString("memory_id")
-                if (memoryId.isBlank()) throw IllegalArgumentException("memory_id_required")
-                client().deleteMemoryPayload(memoryId)
-            }
             "selectSession" -> {
                 val sessionKey = body.optString("session_key")
                 val sessionId = body.optString("session_id")
@@ -203,13 +199,18 @@ class PrototypeBridge(
                 result
             }
             "adminStatus" -> client().adminStatusPayload()
-            "adminMerge" -> client().adminMergePayload()
-            "adminRollback" -> client().adminRollbackPayload()
-            "adminDeployLog" -> client().adminDeployLogPayload(
-                body.optInt("lines", 100),
-            )
             else -> throw IllegalArgumentException("unknown_native_action")
         }
+
+    @JavascriptInterface
+    fun openBrowser(url: String?) {
+        webView.post { openBrowser.invoke(url) }
+    }
+
+    @JavascriptInterface
+    fun openBrowserWithText(url: String?, text: String?) {
+        webView.post { openBrowserWithText.invoke(url, text) }
+    }
 
     @JavascriptInterface
     fun checkForUpdates() {
@@ -306,6 +307,7 @@ class PrototypeBridge(
 
     fun uploadPickedAttachment(
         requestId: String,
+        attachmentId: String,
         kind: String,
         fileName: String,
         mimeType: String,
@@ -319,6 +321,7 @@ class PrototypeBridge(
                     messageId, kind, fileName, mimeType, bytes,
                 )
                 invalidateBootstrapCache(clearPersistedMetadata = false)
+                result.put("attachment_id", attachmentId)
                 resolve(requestId, true, result)
             } catch (firstError: Throwable) {
                 var finalError = firstError
@@ -331,6 +334,7 @@ class PrototypeBridge(
                             messageId, kind, fileName, mimeType, bytes,
                         )
                         invalidateBootstrapCache(clearPersistedMetadata = false)
+                        retried.put("attachment_id", attachmentId)
                         resolve(requestId, true, retried)
                         return@execute
                     } catch (retryError: Throwable) {
@@ -343,6 +347,7 @@ class PrototypeBridge(
                     requestId,
                     false,
                     JSONObject().put("status", status)
+                        .put("attachment_id", attachmentId)
                         .put("error", finalError.message ?: "attachment_upload_failed"),
                 )
             }
@@ -354,13 +359,33 @@ class PrototypeBridge(
         kind: String,
         fileName: String,
         mimeType: String,
+        size: Long,
     ) {
         val payload = JSONObject()
             .put("kind", kind)
             .put("file_name", fileName)
             .put("mime_type", mimeType)
+            .put("size", size)
         val script = "window.KissneNativeBridge && window.KissneNativeBridge.attachmentSelected(" +
             JSONObject.quote(requestId) + "," + JSONObject.quote(payload.toString()) + ");"
+        webView.post { webView.evaluateJavascript(script, null) }
+    }
+
+    fun emitAttachmentSelected(
+        attachmentId: String,
+        kind: String,
+        fileName: String,
+        mimeType: String,
+        size: Int,
+    ) {
+        val payload = JSONObject()
+            .put("attachment_id", attachmentId)
+            .put("kind", kind)
+            .put("file_name", fileName)
+            .put("mime_type", mimeType)
+            .put("size", size)
+        val script = "window.dispatchEvent(new CustomEvent('kissne:attachment-selected',{detail:" +
+            payload.toString() + "}));"
         webView.post { webView.evaluateJavascript(script, null) }
     }
 

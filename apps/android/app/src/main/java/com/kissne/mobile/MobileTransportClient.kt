@@ -59,11 +59,6 @@ class MobileTransportClient(
     fun sessionsPayload(): JSONObject =
         request("GET", "/admin/sessions")
 
-    fun memoriesPayload(): JSONObject =
-        request("GET", "/admin/memory")
-
-    fun deleteMemoryPayload(memoryId: String): JSONObject =
-        request("DELETE", "/admin/memory/$memoryId")
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
@@ -191,16 +186,6 @@ class MobileTransportClient(
     fun adminStatusPayload(): JSONObject =
         request("GET", "/admin/status")
 
-    fun adminMergePayload(): JSONObject =
-        request("POST", "/admin/merge")
-
-    fun adminRollbackPayload(): JSONObject =
-        request("POST", "/admin/rollback")
-
-    fun adminDeployLogPayload(lines: Int = 100): JSONObject {
-        val safeLines = lines.coerceIn(1, 500)
-        return request("GET", "/admin/deploy-log?lines=$safeLines")
-    }
 
 }
 
