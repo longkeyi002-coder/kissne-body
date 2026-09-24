@@ -1525,7 +1525,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # include_unconfigured mirrors the Dashboard's opt-in so the
                 # full provider universe is visible (same as #56974 on web).
                 payload = build_model_options_payload(
-                    load_picker_context(), include_unconfigured=True
+                    load_picker_context(),
+                    include_unconfigured=True,
+                    # Match Dashboard's explicit Refresh Models path. Mobile has no
+                    # separate refresh button, so a picker read must not be trapped
+                    # behind a stale provider model-id cache.
+                    refresh=True,
                 )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
