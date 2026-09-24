@@ -141,11 +141,14 @@
     } else {
       body = sessions.map(function (s) {
         var active = sessionIsCurrent(s);
-        return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-          + ((s.key || s.id) ? '' : ' disabled')
-          + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+        return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+          + '<button type="button" class="sessiondrawer__select" data-session-select'
+          + ((s.key || s.id) ? '' : ' disabled') + '>'
+          + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+          + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
+          + '</div>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -2551,6 +2554,28 @@
         e.preventDefault();
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
+        var deleteButton = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
+        if (deleteButton) {
+          e.stopPropagation();
+          if (!id || !T || typeof T.deleteSession !== 'function') {
+            setSessionStatus('当前版本暂不支持删除服务器会话。');
+            return;
+          }
+          deleteButton.disabled = true;
+          setSessionStatus('正在删除会话…');
+          try {
+            await T.deleteSession(id);
+            await refreshSessions();
+            setSessionStatus('');
+          } catch (err) {
+            var code = String(err && err.payload && err.payload.error || '');
+            setSessionStatus(code === 'active_session_delete_forbidden'
+              ? '当前会话不能直接删除，请先切换到其他会话。'
+              : '删除会话失败，请稍后重试。');
+            deleteButton.disabled = false;
+          }
+          return;
+        }
         if (!key && !id) return;
         var alreadyCurrent = CURRENT_SESSION_ID
           ? (id && id === CURRENT_SESSION_ID)
