@@ -217,8 +217,10 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
                 assert repaired[0] == 200, repaired
                 return adapter, runner
             finally:
-                runner._running = False
-                await adapter.disconnect()
+                # Exercise the production GatewayRunner teardown as well.  Calling only
+                # adapter.disconnect() leaves runner-owned liveness guards/background
+                # resources alive and can keep the pytest process from exiting.
+                await runner.stop()
 
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
