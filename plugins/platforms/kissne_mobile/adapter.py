@@ -340,6 +340,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
         app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
         app.router.add_get(ADMIN_SESSIONS_PATH, self._handle_admin_sessions)
+        app.router.add_post(ADMIN_SESSIONS_PATH, self._handle_select_admin_session)
         app.router.add_delete(ADMIN_SESSIONS_PATH, self._handle_delete_admin_session)
         app.router.add_get(ADMIN_STATUS_PATH, self._handle_admin_status)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
@@ -2048,6 +2049,36 @@ class KissneMobileAdapter(BasePlatformAdapter):
         rows = list(by_id.values())
         rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
+
+    async def _handle_select_admin_session(self, request: web.Request) -> web.Response:
+        """Rebind this paired installation to an existing Runtime conversation."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return _error_response("session_store_unavailable", 503)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        session_id = str(body.get("session_id") or "").strip()
+        session_key = str(body.get("session_key") or "").strip()
+        if not session_id and not session_key:
+            return _error_response("session_identity_required", 400)
+        try:
+            target = (await asyncio.to_thread(store.lookup_by_session_id, session_id)
+                      if session_id else await asyncio.to_thread(store.lookup_by_session_key, session_key))
+        except Exception:
+            logger.warning("[kissne_mobile] could not resolve selected session", exc_info=True)
+            return _error_response("session_select_unavailable", 503)
+        if target is None:
+            return _error_response("session_not_found", 404)
+        bound = await asyncio.to_thread(self.bind_conversation, installation, str(target.session_key or ""))
+        if not bound:
+            return _error_response("session_select_failed", 409)
+        identity = self._conversation_identity(installation) or {}
+        return _json_response({"ok": True, "conversation": identity})
 
     async def _handle_delete_admin_session(self, request: web.Request) -> web.Response:
         """Delete one inactive canonical Hermes conversation selected by the paired device."""
