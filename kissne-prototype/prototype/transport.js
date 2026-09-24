@@ -108,6 +108,8 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
+      history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
+      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
@@ -121,10 +123,11 @@
           force: !!force
         });
       },
-      sendText: function (text, messageId) {
+      sendText: function (text, messageId, replyTo) {
         return nativeCall('sendText', {
           text: String(text || ''),
-          message_id: messageId || nativeMessageId()
+          message_id: messageId || nativeMessageId(),
+          reply_to: String(replyTo || '')
         });
       },
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
