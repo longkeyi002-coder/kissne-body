@@ -2074,7 +2074,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("session_select_unavailable", 503)
         if target is None:
             return _error_response("session_not_found", 404)
-        bound = await asyncio.to_thread(self.bind_conversation, installation, str(target.session_key or ""))
+        mobile_key = self.mobile_session_key(installation)
+        try:
+            current = await asyncio.to_thread(store.lookup_by_session_key, mobile_key)
+            if current is None:
+                bound = await asyncio.to_thread(
+                    self.bind_conversation, installation, str(target.session_key or "")
+                )
+            else:
+                switched = await asyncio.to_thread(store.switch_session, mobile_key, target.session_id)
+                bound = switched is not None and switched.session_id == target.session_id
+        except Exception:
+            logger.warning("[kissne_mobile] failed to switch installation %s to %s",
+                           _fingerprint(installation), target.session_id, exc_info=True)
+            bound = False
         if not bound:
             return _error_response("session_select_failed", 409)
         identity = self._conversation_identity(installation) or {}
