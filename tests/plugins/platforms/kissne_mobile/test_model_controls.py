@@ -21,6 +21,12 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
         def with_overrides(self, **kwargs):
             return self
 
+    class Runner:
+        _session_model_overrides = {}
+
+        def _resolve_session_reasoning_config(self, *, source, session_key, model):
+            return {"enabled": True, "effort": "high"}
+
     monkeypatch.setattr(inventory, "load_picker_context", lambda: Ctx())
     monkeypatch.setattr(
         inventory,
@@ -42,6 +48,7 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
+            adapter.gateway_runner = Runner()
             sessions = build_session_store(home)
             conversation = preexisting_conversation(sessions)
             adapter.set_session_store(sessions)
@@ -57,6 +64,8 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     assert [row["slug"] for row in payload["providers"]] == ["openrouter", "nous"]
     assert payload["providers"][0]["models"][0] == "anthropic/claude-sonnet-4.5"
     assert payload.get("efforts"), payload
+    assert payload["effort"] == "high"
+    assert payload["current_effort"] == "high"
 
 
 def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
