@@ -2120,13 +2120,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # inactive conversation from the active routing index and end its durable
             # session row through the same lifecycle primitive used by resets/switches.
             target_key = str(target.session_key or "")
-            with store._lock:
-                store._ensure_loaded_locked()
-                routed = store._entries.get(target_key)
-                if routed is None or routed.session_id != session_id:
-                    return _error_response("session_not_found", 404)
-                store._entries.pop(target_key, None)
-                store._save()
             db = store._db_for_key(target_key)
             if db is not None:
                 promote = getattr(db, "promote_to_session_reset", None)
@@ -2134,6 +2127,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     promote(session_id, "session_deleted")
                 else:
                     db.end_session(session_id, "session_deleted")
+            with store._lock:
+                store._ensure_loaded_locked()
+                routed = store._entries.get(target_key)
+                if routed is None or routed.session_id != session_id:
+                    return _error_response("session_not_found", 404)
+                store._entries.pop(target_key, None)
+                store._save()
         except Exception:
             logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
             return _error_response("session_delete_unavailable", 503)
