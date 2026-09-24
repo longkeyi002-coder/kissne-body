@@ -884,7 +884,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     if field == "message_id":
                         message_id = value
                     elif field == "kind":
-                        kind = "photo" if value == "photo" else "file"
+                        kind = value if value in {"photo", "sticker"} else "file"
                     elif field == "file_name":
                         file_name = value
                     elif field == "mime_type":
@@ -899,7 +899,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_required", 400)
         file_name = _Path(file_name or ("photo" if kind == "photo" else "file")).name
         mime_type = (mime_type or "application/octet-stream").strip()
-        if mime_type.startswith("image/"):
+        if mime_type.startswith("image/") and kind != "sticker":
             kind = "photo"
 
         store = self.device_store()

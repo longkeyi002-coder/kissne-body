@@ -1940,12 +1940,8 @@
           livePresence(el, false);
           setSessionStatus('');
           finishActivities(el, turnId);
-          if (liveSteeredTurns[turnId]) {
-            liveText(el, '', false);
-            delete liveSteeredTurns[turnId];
-          } else {
-            liveText(el, '已停止回复', false);
-          }
+          liveText(el, '', false);
+          if (liveSteeredTurns[turnId]) delete liveSteeredTurns[turnId];
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }

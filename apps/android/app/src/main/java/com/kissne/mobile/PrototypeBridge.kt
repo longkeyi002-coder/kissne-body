@@ -189,7 +189,7 @@ class PrototypeBridge(
                 if (bytes.isEmpty()) throw IllegalArgumentException("sticker_payload_required")
                 client().sendAttachmentPayload(
                     messageId = "android-sticker-" + UUID.randomUUID().toString(),
-                    kind = "photo",
+                    kind = "sticker",
                     fileName = key + ".webp",
                     mimeType = body.optString("mime_type").ifBlank { "image/webp" },
                     bytes = bytes,
