@@ -114,6 +114,8 @@ OPT_IN_ENV = "KISSNE_MOBILE_ENABLED"
 PAIRING_PATH = "/pair"
 BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
+HISTORY_PATH = "/history"
+SEARCH_PATH = "/search"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -179,6 +181,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
+        self._session_reset_pending: set[str] = set()
+        self._session_reset_turns: Dict[str, str] = {}
+        # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
+        self._inbound_turns: set[str] = set()
         self.bound_port: Optional[int] = None
 
     # -- device credentials (delegated to the plugin's own persistent layer) -----------------------
@@ -312,6 +318,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get(HISTORY_PATH, self._handle_history)
+        app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
@@ -525,7 +533,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
-                           extra: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                           extra: Optional[Dict[str, Any]] = None,
+                           target_turn_id: Optional[str] = None) -> Optional[str]:
         """Append one typed event to the installation's durable stream; returns its transport message id.
 
         The row is committed *before* the device is told anything, so nothing between "reply produced"
@@ -549,16 +558,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
-        turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
+        pending_turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
+        turn_id = str(target_turn_id or pending_turn_id or "")
         try:
             seq = await asyncio.to_thread(
-                store.enqueue_event, installation, event_type, payload, turn_id,
+                store.enqueue_event, installation, event_type, payload, turn_id or None,
                 cap=max(1, self._outbound_cap),
             )
             if event_type == EVENT_COMPLETED and turn_id:
                 # The reply closes the turn it answers — but only from ``pending``: a late reply must not
                 # resurrect a turn the user already cancelled.
                 await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
+                self._inbound_turns.discard(turn_id)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
                              event_type, _fingerprint(installation))
@@ -569,16 +580,43 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Queue final text; Gateway commentary remains an interim presentation event."""
-        if bool((metadata or {}).get("_interim_send")):
+        """Queue final text, reset notices, or auxiliary notices without closing unrelated turns."""
+        installation = str(chat_id or "").strip()
+        reset_turn = self._session_reset_turns.get(installation)
+        if installation in self._session_reset_pending and reset_turn and (
+            reply_to == reset_turn or reply_to is None
+        ):
+            notice_id = f"kbn_{secrets.token_hex(8)}"
             message_id = await self._queue_event(
-                chat_id, EVENT_DELTA, content=content, reply_to=reply_to,
+                installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                target_turn_id=reset_turn,
+                extra={"presentation": "session_reset", "notice_id": notice_id,
+                       "message_ref": "notice:" + notice_id})
+            await asyncio.to_thread(
+                self.device_store().record_timeline_notice,
+                installation, notice_id, "session_reset", content,
+            )
+            self._session_reset_pending.discard(installation)
+            self._session_reset_turns.pop(installation, None)
+        elif bool((metadata or {}).get("_interim_send")):
+            message_id = await self._queue_event(
+                installation, EVENT_DELTA, content=content, reply_to=reply_to,
                 extra={"presentation": "commentary", "interim": True})
         else:
-            self._clear_draft_state(chat_id)
-            message_id = await self._queue_event(
-                chat_id, EVENT_COMPLETED, content=content, reply_to=reply_to,
-                extra={"presentation": "assistant_text"})
+            pending_turn = await asyncio.to_thread(
+                self.device_store().pending_turn_id, installation)
+            # A normal Runtime reply closes an HTTP-admitted turn. A turn opened directly in the
+            # device store has no Runtime admission marker and remains an auxiliary notice.
+            if reply_to is None and pending_turn and pending_turn not in self._inbound_turns:
+                message_id = await self._queue_event(
+                    installation, "notice", content=content, reply_to=None,
+                    extra={"presentation": "notice"})
+            else:
+                self._clear_draft_state(installation)
+                final_extra = {"presentation": "assistant_text"} if reply_to is None else None
+                message_id = await self._queue_event(
+                    installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                    extra=final_extra)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
@@ -909,6 +947,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_store_failed", 503)
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -933,6 +972,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         )
         try:
             await self.handle_message(event)
+            await asyncio.to_thread(
+                store.record_attachment_message,
+                installation, turn_id, marker,
+                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
+            )
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
@@ -946,6 +990,161 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "mime_type": mime_type,
             "size": len(file_bytes),
         }, status=202)
+
+    def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
+        """Return all Hermes sessions owned by this Mobile installation, newest first."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        db = store._db_for_key(self.mobile_session_key(installation))
+        if db is None or not hasattr(db, "list_sessions_rich"):
+            return []
+        return db.list_sessions_rich(
+            session_key=self.mobile_session_key(installation),
+            include_archived=True, include_children=True,
+            project_compression_tips=False, order_by_last_active=True,
+            limit=500, offset=0, compact_rows=True,
+        )
+
+    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
+        """Flatten /new-separated transcripts into one Mobile-visible timeline."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return []
+        try:
+            saved_attachments = self.device_store().attachment_messages(installation, 500)
+        except Exception:
+            logger.warning("[kissne_mobile] attachment history read failed", exc_info=True)
+            saved_attachments = []
+        attachments_by_turn = {
+            str(item.get("turn_id") or ""): list(item.get("attachments") or [])
+            for item in saved_attachments if str(item.get("turn_id") or "")
+        }
+        try:
+            saved_replies = self.device_store().reply_links(installation)
+        except Exception:
+            logger.warning("[kissne_mobile] reply-link history read failed", exc_info=True)
+            saved_replies = []
+        replies_by_turn = {
+            str(item.get("turn_id") or ""): item
+            for item in saved_replies if str(item.get("turn_id") or "")
+        }
+        rows: List[Dict[str, Any]] = []
+        for session in self._mobile_history_sessions(installation):
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                continue
+            try:
+                transcript = store.load_transcript(session_id) or []
+            except Exception:
+                logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
+                continue
+            active_mobile_turn = ""
+            for index, row in enumerate(transcript):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "").strip().lower()
+                if role not in {"user", "assistant"}:
+                    continue
+                mobile_turn = ""
+                if role == "user":
+                    candidate = str(row.get("message_id") or "").strip()
+                    active_mobile_turn = candidate if candidate.startswith("kbm_turn_") else ""
+                    mobile_turn = active_mobile_turn
+                else:
+                    mobile_turn = active_mobile_turn
+                    active_mobile_turn = ""
+                text = row.get("content", row.get("text"))
+                if not isinstance(text, str):
+                    text = ""
+                attachments = attachments_by_turn.get(mobile_turn, []) if role == "user" else []
+                if not text.strip() and not attachments:
+                    continue
+                stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+                stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
+                message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
+                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
+                if mobile_turn:
+                    item["_turn_id"] = mobile_turn
+                if attachments:
+                    item["attachments"] = attachments
+                if role == "user" and mobile_turn:
+                    link = replies_by_turn.get(mobile_turn)
+                    if link:
+                        item["reply_to"] = str(link.get("reply_to") or "")
+                        item["reply_preview"] = {
+                            "role": str(link.get("quoted_role") or ""),
+                            "text": str(link.get("quoted_text") or ""),
+                        }
+                rows.append(item)
+        seen_attachment_turns = {
+            str(row.get("_turn_id") or "") for row in rows if row.get("_turn_id")
+        }
+        for turn_id, attachment_list in attachments_by_turn.items():
+            if turn_id and turn_id not in seen_attachment_turns:
+                record = next((item for item in saved_attachments
+                               if str(item.get("turn_id") or "") == turn_id), {})
+                rows.append({
+                    "message_ref": f"turn:{turn_id}:user",
+                    "_turn_id": turn_id,
+                    "role": "user",
+                    "text": str(record.get("text") or ""),
+                    "created_at": float(record.get("created_at") or 0),
+                    "attachments": attachment_list,
+                })
+        try:
+            notices = self.device_store().timeline_notices(installation)
+        except Exception:
+            notices = []
+        for notice in notices:
+            notice_id, text = str(notice.get("notice_id") or ""), str(notice.get("text") or "")
+            if notice_id and text:
+                rows.append({
+                    "message_ref": "notice:" + notice_id, "role": "system", "text": text,
+                    "created_at": float(notice.get("created_at") or 0),
+                    "presentation": str(notice.get("presentation") or ""),
+                })
+        rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
+        return rows
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        try:
+            limit = int(request.query.get("limit", "50"))
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 100))
+        before = str(request.query.get("before") or "").strip()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        end = len(rows)
+        if before:
+            positions = [i for i, item in enumerate(rows) if item["message_ref"] == before]
+            if not positions:
+                return _error_response("history_cursor_not_found", 400)
+            end = positions[0]
+        start = max(0, end - limit)
+        page = rows[start:end]
+        return _json_response({"ok": True, "messages": page, "has_more": start > 0,
+                               "next_before": page[0]["message_ref"] if start > 0 and page else None})
+
+    async def _handle_history_search(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        query = str(request.query.get("q") or "").strip()
+        if not query:
+            return _error_response("query_required", 400)
+        try:
+            limit = int(request.query.get("limit", "20"))
+        except (TypeError, ValueError):
+            return _error_response("limit_must_be_an_integer", 400)
+        limit = max(1, min(limit, 50))
+        needle = query.casefold()
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
+        return _json_response({"ok": True, "results": matches[:limit]})
 
     async def _handle_ack(self, installation: str, body: Dict[str, Any]) -> web.Response:
         """``{"ack": {"cursor": N}}`` — retire what the device has durably received."""
@@ -963,6 +1162,172 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("ack_cursor_must_not_be_negative", 400)
         retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
         return _json_response({"ok": True, "acked": retired, "cursor": cursor})
+
+    def _materialize_attachments(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Decode bounded JSON attachments once and return temporary media paths."""
+        from plugins.plugin_storage import plugin_data_dir
+
+        upload_dir = plugin_data_dir(PLATFORM_NAME) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        materialized: List[Dict[str, Any]] = []
+        try:
+            for item in items:
+                kind = str(item.get("type") or "").strip().lower()
+                mime_type = str(item.get("mime_type") or "").strip().lower()
+                encoded = item.get("data")
+                if kind not in {"image", "sticker", "file"} or not mime_type:
+                    raise ValueError("invalid_attachment")
+                if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+                    raise ValueError("invalid_attachment")
+                if not isinstance(encoded, str) or not encoded:
+                    raise ValueError("attachment_required")
+                file_bytes = base64.b64decode(encoded, validate=True)
+                if not file_bytes or len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
+                    raise ValueError("attachment_too_large")
+                label = self._safe_upload_name(str(item.get("label") or "upload.bin"))
+                path = upload_dir / f"kissne_in_{secrets.token_hex(8)}_{label}"
+                path.write_bytes(file_bytes)
+                materialized.append({
+                    "path": str(path), "bytes": len(file_bytes), "kind": kind,
+                    "mime_type": mime_type, "label": str(item.get("label") or ""),
+                })
+        except Exception:
+            for row in materialized:
+                try:
+                    _Path(row["path"]).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+        return materialized
+
+    def _set_inbound_attachment_metadata(
+        self, event: MessageEvent, installation: str, turn_id: str,
+        marker: str, attachments: List[Dict[str, Any]], paths: List[str],
+    ) -> None:
+        setattr(event, "_kissne_attachment_metadata", {
+            "installation": installation, "turn_id": turn_id, "marker": marker,
+            "attachments": attachments, "paths": paths, "persisted": False,
+        })
+
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        """Persist attachment presentation metadata when the Runtime admits a turn."""
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict) or metadata.get("persisted"):
+            return
+        await asyncio.to_thread(
+            self.device_store().record_attachment_message,
+            str(metadata.get("installation") or ""),
+            str(metadata.get("turn_id") or ""),
+            str(metadata.get("marker") or ""),
+            list(metadata.get("attachments") or []),
+        )
+        metadata["persisted"] = True
+
+    def _cleanup_inbound_media(self, event: MessageEvent) -> None:
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        for raw_path in metadata.get("paths") or []:
+            try:
+                _Path(str(raw_path)).unlink(missing_ok=True)
+            except Exception:
+                logger.debug("[kissne_mobile] could not remove temporary inbound media", exc_info=True)
+
+    async def _handle_json_attachment_inbound(
+        self, body: Dict[str, Any], installation: str
+    ) -> web.Response:
+        """JSON attachment -> a real media MessageEvent; text is optional."""
+        attachments = body.get("attachments")
+        if not isinstance(attachments, list) or len(attachments) != 1:
+            return _error_response("attachments_must_be_a_single_item_list", 400)
+        item = attachments[0]
+        if not isinstance(item, dict):
+            return _error_response("invalid_attachment", 400)
+        kind = str(item.get("type") or "").strip().lower()
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        encoded = item.get("data")
+        if kind not in {"image", "sticker", "file"} or not mime_type:
+            return _error_response("invalid_attachment", 400)
+        if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+            return _error_response("invalid_attachment", 400)
+        if not isinstance(encoded, str) or not encoded:
+            return _error_response("attachment_required", 400)
+        try:
+            file_bytes = base64.b64decode(encoded, validate=True)
+        except Exception:
+            return _error_response("invalid_attachment", 400)
+        if not file_bytes or len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
+            return _error_response("attachment_too_large", 413)
+        if self.bound_conversation(installation) is None:
+            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+
+        client_message_id = str(body.get("message_id") or "").strip()
+        fingerprint = hashlib.sha256(
+            json.dumps({"type": kind, "mime_type": mime_type, "data": encoded},
+                       sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        store = self.device_store()
+        if client_message_id:
+            existing = await asyncio.to_thread(store.inbound_record, installation, client_message_id)
+            if existing is not None:
+                if str(existing.get("payload_hash") or "") == fingerprint:
+                    return self._duplicate_response(client_message_id, str(existing.get("turn_id") or ""))
+                return _error_response("message_id_conflict", 409)
+
+        message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
+        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        if client_message_id:
+            outcome = await asyncio.to_thread(
+                store.record_inbound, installation, client_message_id, fingerprint, turn_id
+            )
+            if outcome == INBOUND_DUPLICATE:
+                record = await asyncio.to_thread(store.inbound_record, installation, client_message_id) or {}
+                return self._duplicate_response(client_message_id, str(record.get("turn_id") or ""))
+            if outcome == INBOUND_CONFLICT:
+                return _error_response("message_id_conflict", 409)
+
+        try:
+            materialized = self._materialize_attachments([item])
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
+        except Exception:
+            logger.exception("[kissne_mobile] failed to materialize inbound attachment")
+            return _error_response("attachment_store_failed", 503)
+        row = materialized[0]
+        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
+        await asyncio.to_thread(
+            store.enqueue_event, installation, EVENT_PENDING,
+            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap)
+        )
+        message_type = (
+            MessageType.STICKER if kind == "sticker"
+            else MessageType.PHOTO if kind == "image"
+            else MessageType.DOCUMENT
+        )
+        safe_attachment = {
+            "type": kind, "mime_type": mime_type,
+            "label": str(item.get("label") or ""),
+        }
+        marker = str(body.get("text") or "")
+        event = MessageEvent(
+            text=marker, message_type=message_type, source=self.source_for_installation(installation),
+            raw_message=body, message_id=turn_id, user_id=installation,
+            media_urls=[row["path"]], media_types=[mime_type], media_text_inlined=[False],
+        )
+        self._set_inbound_attachment_metadata(
+            event, installation, turn_id, marker, [safe_attachment], [row["path"]],
+        )
+        try:
+            await self.handle_message(event)
+        except Exception:
+            self._cleanup_inbound_media(event)
+            logger.exception("[kissne_mobile] failed to inject JSON attachment %s", message_id)
+            return _error_response("inbound_injection_failed", 503)
+        return _json_response({
+            "ok": True, "message_id": message_id, "turn_id": turn_id,
+            "kind": kind, "mime_type": mime_type, "size": len(file_bytes),
+        }, status=202)
 
     async def _handle_inbound(self, request: web.Request) -> web.Response:
         """Authenticated text in -> the Runtime's normal inbound path.
@@ -985,6 +1350,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("text_and_ack_are_mutually_exclusive", 400)
             return await self._handle_ack(installation, body)
         text = str(body.get("text") or "")
+        if "attachments" in body:
+            if isinstance(body.get("attachments"), list):
+                return await self._handle_json_attachment_inbound(body, installation)
+            return _error_response("invalid_attachment", 400)
         if not text.strip():
             return _error_response("text_required", 400)
 
@@ -1000,7 +1369,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
-        fingerprint = self._payload_fingerprint(text)
+        reply_ref = str(body.get("reply_to") or "").strip()
+        quoted = None
+        if reply_ref:
+            history_rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+            quoted = next((item for item in history_rows if item["message_ref"] == reply_ref), None)
+            if quoted is None:
+                return _error_response("reply_target_not_found", 400)
+            if str(quoted.get("role") or "") == "system":
+                return _error_response("reply_target_not_quotable", 400)
+        fingerprint = hashlib.sha256((text + "\0" + reply_ref).encode("utf-8")).hexdigest()
         if client_message_id:
             existing = await asyncio.to_thread(
                 store.inbound_record, installation, client_message_id)
@@ -1023,6 +1401,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
@@ -1037,7 +1416,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # Runtime identity, so the persisted user row can be reconciled with outbound frames.
             message_id=turn_id,
             user_id=installation,
+            reply_to_message_id=reply_ref or None,
+            reply_to_text=str(quoted.get("text") or "") if quoted else None,
+            reply_to_author_name=(
+                "叶青栩" if quoted and quoted.get("role") == "assistant" else
+                "用户" if quoted else None
+            ),
+            reply_to_is_own_message=bool(quoted and quoted.get("role") == "assistant"),
+            allow_gateway_control=text.strip().lower() in {"/new", "/reset"},
         )
+        if quoted:
+            await asyncio.to_thread(
+                store.record_reply_link, installation, turn_id, reply_ref,
+                str(quoted.get("role") or ""), str(quoted.get("text") or ""),
+            )
         try:
             await self.handle_message(event)
         except Exception:
@@ -1485,6 +1877,27 @@ class KissneMobileAdapter(BasePlatformAdapter):
             })
         history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
             identity["session_id"])
+        # Attachment-only turns may not yet exist in the Hermes transcript during a cold start;
+        # restore their durable presentation metadata so the device can render them.
+        try:
+            saved_attachments = await asyncio.to_thread(
+                self.device_store().attachment_messages, installation, 500)
+        except Exception:
+            saved_attachments = []
+        for record in saved_attachments:
+            turn_id = str(record.get("turn_id") or "").strip()
+            if not turn_id or turn_id in represented_turn_ids:
+                continue
+            history.append({
+                "role": "user",
+                "text": str(record.get("text") or ""),
+                "_turn_id": turn_id,
+                "message_ref": f"turn:{turn_id}:user",
+                "attachments": list(record.get("attachments") or []),
+                "created_at": float(record.get("created_at") or 0),
+            })
+            represented_turn_ids.add(turn_id)
+        history.sort(key=lambda item: (float(item.get("created_at") or 0), str(item.get("message_ref") or "")))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
@@ -1525,6 +1938,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.close_turn, turn_id, TURN_CANCELLED, from_state=TURN_PENDING)
         if not moved:
             return _error_response("turn_not_cancellable", 409)
+        self._inbound_turns.discard(turn_id)
         self._clear_draft_state(installation)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_CANCELLED,
