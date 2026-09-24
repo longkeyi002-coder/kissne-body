@@ -3,6 +3,7 @@ package com.kissne.mobile
 import android.view.HapticFeedbackConstants
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.util.Base64
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -128,7 +129,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "bootstrap", "sendText", "poll", "ack", "cancel",
+            "sessions", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus",
         )
@@ -172,6 +173,29 @@ class PrototypeBridge(
                 text = body.optString("text"),
             ).also {
                 invalidateBootstrapCache(clearPersistedMetadata = false)
+            }
+            "sendSticker" -> {
+                val key = body.optString("key").trim()
+                val label = body.optString("label").trim().ifBlank { key }
+                val encoded = body.optString("bytes_base64")
+                if (key.isBlank() || encoded.isBlank()) {
+                    throw IllegalArgumentException("sticker_payload_required")
+                }
+                val bytes = try {
+                    Base64.decode(encoded, Base64.DEFAULT)
+                } catch (_: IllegalArgumentException) {
+                    throw IllegalArgumentException("invalid_sticker_payload")
+                }
+                if (bytes.isEmpty()) throw IllegalArgumentException("sticker_payload_required")
+                client().sendAttachmentPayload(
+                    messageId = "android-sticker-" + UUID.randomUUID().toString(),
+                    kind = "photo",
+                    fileName = key + ".webp",
+                    mimeType = body.optString("mime_type").ifBlank { "image/webp" },
+                    bytes = bytes,
+                ).also {
+                    invalidateBootstrapCache(clearPersistedMetadata = false)
+                }
             }
             "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
             "ack" -> {
