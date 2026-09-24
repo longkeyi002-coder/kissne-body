@@ -2116,7 +2116,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
             if target is None:
                 return _error_response("session_not_found", 404)
-            # SessionStore intentionally has no destructive delete API.  Remove the
+            # SessionStore intentionally has no destructive delete API. Remove the
             # inactive conversation from the active routing index and end its durable
             # session row through the same lifecycle primitive used by resets/switches.
             target_key = str(target.session_key or "")
@@ -2127,11 +2127,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     return _error_response("session_not_found", 404)
                 store._entries.pop(target_key, None)
                 store._save()
-            store._promote_session_reset(
-                target_key, session_id, "session_deleted",
-                log=lambda exc: (_ for _ in ()).throw(exc),
-            )
-            deleted = True
+            db = store._db_for_key(target_key)
+            if db is not None:
+                promote = getattr(db, "promote_to_session_reset", None)
+                if callable(promote):
+                    promote(session_id, "session_deleted")
+                else:
+                    db.end_session(session_id, "session_deleted")
         except Exception:
             logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
             return _error_response("session_delete_unavailable", 503)
