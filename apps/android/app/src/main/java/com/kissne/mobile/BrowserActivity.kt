@@ -77,8 +77,7 @@ class BrowserActivity : AppCompatActivity() {
             setPadding(12, 8, 12, 8)
             setOnClickListener { action() }
         }
-        top.addView(navButton("‹") { if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else finish() })
-        top.addView(navButton("›") { if (::webView.isInitialized && webView.canGoForward()) webView.goForward() })
+        top.addView(navButton("‹") { if (webView.canGoBack()) webView.goBack() else finish() })
 
         address = EditText(this).apply {
             isSingleLine = true
@@ -96,7 +95,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         top.addView(address, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         top.addView(navButton("⌕") { runBrowserAgentRead() })
-        top.addView(navButton("↻") { if (::webView.isInitialized) webView.reload() })
+        top.addView(navButton("↻") { webView.reload() })
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100

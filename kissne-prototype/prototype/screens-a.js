@@ -141,14 +141,11 @@
     } else {
       body = sessions.map(function (s) {
         var active = sessionIsCurrent(s);
-        return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
-          + '<button type="button" class="sessiondrawer__select" data-session-select'
-          + ((s.key || s.id) ? '' : ' disabled') + '>'
-          + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
-          + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
-          + '</div>';
+        return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
+          + ((s.key || s.id) ? '' : ' disabled')
+          + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -1386,13 +1383,7 @@
           e.preventDefault();
           e.stopPropagation();
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
-          /* Repainting the whole two-column picker resets both scroll containers to 0.
-             Preserve the provider column position while switching only the selected provider. */
-          var providerList = menuHost && menuHost.querySelector('.modelpick__providers .modelpick__list');
-          var providerScrollTop = providerList ? providerList.scrollTop : 0;
           paintChatMenu('model-picker');
-          var nextProviderList = menuHost && menuHost.querySelector('.modelpick__providers .modelpick__list');
-          if (nextProviderList) nextProviderList.scrollTop = providerScrollTop;
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
@@ -1405,9 +1396,7 @@
             pickerProvider = PROVIDER_CURRENT || (PROVIDERS[0] && PROVIDERS[0].k) || '';
           }
           paintChatMenu(openMenu === target ? null : target);
-          /* Picker truth must be live: opening model/provider controls always re-reads
-             Hermes' canonical inventory instead of trusting the 30s background cache. */
-          if (kind) refreshHermesModelControls(true);
+          if (kind) refreshHermesModelControls(false);
           return;
         }
         var close = e.target && e.target.closest ? e.target.closest('[data-chat-menu-close]') : null;
@@ -1436,42 +1425,22 @@
         var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
         var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
         T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
-          .then(function (result) {
-            result = result || {};
-            /* Never paint the requested value optimistically. The command response is
-               only an acknowledgement; the following /model-options read is the source
-               of truth for the active Runtime Conversation. */
-            if (result.ok === false) {
-              var rejected = new Error(String(result.error || 'Hermes 切换失败'));
-              rejected.payload = result;
-              throw rejected;
-            }
-            MODEL_OPTIONS_LOADED_AT = 0;
-            return T.modelOptions();
-          })
-          .then(function (payload) {
-            applyHermesModelOptions(payload);
-            var confirmed = true;
+          .then(function () {
             if (kind === 'model') {
-              var active = pick(MODELS, MODEL_CURRENT, MODEL_CURRENT);
-              confirmed = !!active && active.raw === modelValue
-                && (!providerValue || active.p === providerValue);
-            } else if (kind === 'effort') {
-              confirmed = EFFORT_CURRENT === value;
+              MODEL_CURRENT = modelKey || value;
+              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
             }
-            if (!confirmed) {
-              throw new Error('Hermes 已响应，但实际会话状态未切换到所选项');
-            }
+            if (kind === 'effort') EFFORT_CURRENT = value;
+            MODEL_OPTIONS_LOADED_AT = 0;
             paintChatMenu(null);
             updateHeaderControls();
+            refreshHermesModelControls(true);
           })
           .catch(function (err) {
             el.disabled = false;
-            MODEL_OPTIONS_LOADED_AT = 0;
-            refreshHermesModelControls(true);
             var msg = err && err.payload && err.payload.error
               ? String(err.payload.error)
-              : String((err && err.message) || 'Hermes 切换失败');
+              : 'Hermes 切换失败';
             appendSystemNotice(msg);
           });
       }
@@ -2399,9 +2368,27 @@
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         var stickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
-           先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) queueOutboundText('[表情包：' + s2.label + ']', stickerLog);
+        /* Sticker media must use the same real attachment lane as photos/files.
+           Never turn it into "[表情包：…]" text: that loses the actual pixels and makes
+           Hermes treat a visual reaction as a caption. Until a bundled sticker asset is
+           resolved to bytes by the native bridge, keep the local bubble but do not fake-send it. */
+        if (live && T && typeof T.sendSticker === 'function') {
+          T.sendSticker(s2.k, s2.label).then(function (accepted) {
+            var turn = String(accepted && accepted.turn_id || '');
+            if (!turn) return;
+            stickerLog.messageRef = 'turn:' + turn + ':user';
+            stickerLog.turnId = turn;
+            persistChatLog();
+            livePendingTurns[turn] = true;
+            liveCurrentTurn = turn;
+            liveSetCancel(true);
+            scheduleLivePoll(0);
+          }).catch(function () {
+            setSessionStatus('表情包发送失败，请重试。');
+          });
+        } else if (live) {
+          setSessionStatus('当前版本暂不能发送真实表情包图片。');
+        }
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         setStickerPanel(false);
@@ -2556,28 +2543,6 @@
         e.preventDefault();
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
-        var deleteButton = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
-        if (deleteButton) {
-          e.stopPropagation();
-          if (!id || !T || typeof T.deleteSession !== 'function') {
-            setSessionStatus('当前版本暂不支持删除服务器会话。');
-            return;
-          }
-          deleteButton.disabled = true;
-          setSessionStatus('正在删除会话…');
-          try {
-            await T.deleteSession(id);
-            await refreshSessions();
-            setSessionStatus('');
-          } catch (err) {
-            var code = String(err && err.payload && err.payload.error || '');
-            setSessionStatus(code === 'active_session_delete_forbidden'
-              ? '当前会话不能直接删除，请先切换到其他会话。'
-              : '删除会话失败，请稍后重试。');
-            deleteButton.disabled = false;
-          }
-          return;
-        }
         if (!key && !id) return;
         var alreadyCurrent = CURRENT_SESSION_ID
           ? (id && id === CURRENT_SESSION_ID)

@@ -158,24 +158,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
     supports_code_blocks = True
     typed_command_prefix = "/"
 
-    # Mobile uses send_draft as its typed event transport.  The generic gateway only
-    # routes tool progress into a StreamConsumer when the adapter advertises native
-    # streaming; draft streaming otherwise receives assistant text but tool progress
-    # falls back to the legacy progress queue and loses the typed Activity markers.
-    # Treat Mobile's durable event stream as native so reasoning/tool/answer stay on
-    # distinct lanes all the way to /messages.
-    SUPPORTS_NATIVE_STREAMING = True
-
-    def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
-        return True
-
-    async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", final: bool = False,
-                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Bridge native Gateway stream frames onto Mobile's typed draft transport."""
-        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
-        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
-
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
         extra = config.extra or {}
@@ -344,7 +326,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
         app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
         app.router.add_get(ADMIN_SESSIONS_PATH, self._handle_admin_sessions)
-        app.router.add_delete(ADMIN_SESSIONS_PATH, self._handle_delete_admin_session)
         app.router.add_get(ADMIN_STATUS_PATH, self._handle_admin_status)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
@@ -1544,12 +1525,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # include_unconfigured mirrors the Dashboard's opt-in so the
                 # full provider universe is visible (same as #56974 on web).
                 payload = build_model_options_payload(
-                    load_picker_context(),
-                    include_unconfigured=True,
-                    # Match Dashboard's explicit Refresh Models path. Mobile has no
-                    # separate refresh button, so a picker read must not be trapped
-                    # behind a stale provider model-id cache.
-                    refresh=True,
+                    load_picker_context(), include_unconfigured=True
                 )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
@@ -2028,39 +2004,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
         rows = list(by_id.values())
         rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
-
-    async def _handle_delete_admin_session(self, request: web.Request) -> web.Response:
-        """Delete one canonical Hermes conversation selected by the paired device."""
-        installation = await self._authenticated_installation(request)
-        if not installation:
-            return _error_response("unauthorized", 401)
-        store = getattr(self, "_session_store", None)
-        if store is None:
-            return _error_response("session_store_unavailable", 503)
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        session_id = str((body or {}).get("session_id") or "").strip()
-        if not session_id:
-            return _error_response("session_id_required", 400)
-
-        current = self._conversation_identity(installation)
-        current_id = str((current or {}).get("session_id") or "")
-        if session_id == current_id:
-            return _error_response("active_session_delete_forbidden", 409)
-        try:
-            target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
-            if target is None:
-                return _error_response("session_not_found", 404)
-            deleted = await asyncio.to_thread(store.delete_session, session_id)
-        except Exception:
-            logger.warning("[kissne_mobile] could not delete session %s",
-                           _fingerprint(session_id), exc_info=True)
-            return _error_response("session_delete_unavailable", 503)
-        if not deleted:
-            return _error_response("session_not_found", 404)
-        return _json_response({"ok": True, "deleted": True, "session_id": session_id})
 
     async def _handle_admin_status(self, request: web.Request) -> web.Response:
         """Small read-only operational snapshot safe for a paired device token."""

@@ -108,9 +108,6 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
-      deleteSession: function (sessionId) {
-        return nativeCall('deleteSession', { session_id: String(sessionId || '') });
-      },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
           session_key: String(sessionKey || ''),
@@ -135,6 +132,27 @@
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
       pickAttachment: function (kind, hooks) {
         return nativeCall('pickAttachment', { kind: String(kind || 'file') }, 120000, hooks || null);
+      },
+      sendSticker: async function (key, label) {
+        var assets = window.KSN && window.KSN.ASSETS;
+        var rel = assets && assets.stickers && assets.stickers[String(key || '')];
+        if (!rel) throw new Error('sticker_asset_not_found');
+        var url = new URL('assets/' + rel, location.href).toString();
+        var response = await fetch(url, { cache: 'force-cache' });
+        if (!response.ok) throw new Error('sticker_asset_read_failed');
+        var blob = await response.blob();
+        var buffer = await blob.arrayBuffer();
+        var bytes = new Uint8Array(buffer);
+        var chunk = 0x8000, binary = '';
+        for (var i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+        }
+        return nativeCall('sendSticker', {
+          key: String(key || ''),
+          label: String(label || key || ''),
+          mime_type: blob.type || 'image/webp',
+          bytes_base64: btoa(binary)
+        }, 120000);
       },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort, provider) {
@@ -274,11 +292,6 @@
       base: adminBase()
     });
   }
-  function deleteSession(sessionId) {
-    var id = String(sessionId || '').trim();
-    if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
-    return request('/admin/sessions', { method: 'DELETE', body: { session_id: id }, base: adminBase() });
-  }
   function memories() {
     return request('/admin/memory', { method: 'GET', base: adminBase() });
   }
@@ -396,7 +409,6 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
-    deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,

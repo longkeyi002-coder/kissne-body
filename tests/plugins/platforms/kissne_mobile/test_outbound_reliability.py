@@ -299,53 +299,6 @@ def test_tool_progress_is_separate_from_visible_draft_text(tmp_path):
         f"raw terminal command leaked into assistant text: {visible}")
 
 
-def test_native_stream_bridge_preserves_typed_tool_activity(tmp_path):
-    async def scenario():
-        from gateway.stream_events import ToolCallChunk
-
-        with isolated_runtime(tmp_path) as home:
-            adapter = make_adapter()
-            store = build_session_store(home)
-            existing = preexisting_conversation(store)
-            adapter.set_session_store(store)
-            port = await start(adapter)
-            try:
-                token = await pair(port, adapter, conversation=existing)
-                turn = await _open_turn(
-                    port, token, text="inspect transport", message_id="m-native-tool")
-                assert adapter.supports_native_streaming() is True
-                marker = adapter.format_tool_event(ToolCallChunk(
-                    tool_name="terminal",
-                    args={"command": "printf transport"},
-                    preview="inspect transport",
-                    index=1,
-                ))
-                await adapter.send_stream_frame(
-                    INSTALLATION,
-                    "Checking transport.\n\n---\n" + str(marker),
-                    stream_id="native-tool-stream",
-                )
-                payload = await _drain(port, token, 0)
-            finally:
-                await stop(adapter)
-        return turn, payload
-
-    turn, payload = run(scenario())
-    events = payload.get("events") or []
-    activity = [
-        event for event in events
-        if event.get("presentation") in {"tool_progress", "tool_call"}
-    ]
-    visible = [
-        event for event in events
-        if event.get("type") == "delta" and event.get("presentation") == "assistant_text"
-    ]
-    assert activity, f"native stream must expose typed tool activity: {events}"
-    assert activity[-1].get("turn_id") == turn["turn_id"]
-    assert visible and visible[-1].get("text") == "Checking transport."
-    assert all("printf transport" not in str(event.get("text") or "") for event in visible)
-
-
 def test_reasoning_uses_a_separate_delta_lane(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:

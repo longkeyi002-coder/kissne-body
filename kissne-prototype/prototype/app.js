@@ -265,8 +265,7 @@
     sheet.className = 'webai-sheet';
     sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
       + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
-      + '<div class="webai-sheet__title">处理这条消息</div>'
-      + '<button class="webai-sheet__item" type="button" data-webai-copy>复制<span>复制当前消息文本</span></button>'
+      + '<div class="webai-sheet__title">发送给…</div>'
       + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
       + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>临时网页 · 不共享上下文</span></button>'
       + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
@@ -305,30 +304,6 @@
   document.addEventListener('click', function (e) {
     var webAiClose = e.target.closest('[data-webai-close]');
     if (webAiClose) { closeWebAiSheet(); return; }
-    var webAiCopy = e.target.closest('[data-webai-copy]');
-    if (webAiCopy) {
-      var copySheet = webAiCopy.closest('.webai-sheet');
-      var copyText = copySheet ? copySheet.dataset.messageText || '' : '';
-      if (copyText) {
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(copyText).catch(function () {});
-          } else {
-            var ta = document.createElement('textarea');
-            ta.value = copyText;
-            ta.setAttribute('readonly', '');
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            ta.remove();
-          }
-        } catch (err) {}
-      }
-      closeWebAiSheet();
-      return;
-    }
     var webAiProvider = e.target.closest('[data-webai-provider]');
     if (webAiProvider) {
       var provider = webAiProvider.getAttribute('data-webai-provider');
