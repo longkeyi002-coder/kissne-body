@@ -38,14 +38,16 @@ def test_paired_device_can_delete_inactive_session_but_not_active_session(tmp_pa
             adapter = make_adapter()
             sessions = build_session_store(home)
             active = preexisting_conversation(sessions)
-            inactive = sessions.resolve_or_create("telegram:delete-me", display_name="delete me")
+            inactive = preexisting_conversation(
+                sessions, chat_id="delete-me", user_id="user-delete-me"
+            )
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter, conversation=active)
-                deleted = await http(port, "DELETE", "/admin/sessions", token=token, json={"session_id": inactive.session_id})
+                deleted = await http(port, "DELETE", "/admin/sessions", token=token, body={"session_id": inactive.session_id})
                 listed = await http(port, "GET", "/admin/sessions", token=token)
-                protected = await http(port, "DELETE", "/admin/sessions", token=token, json={"session_id": active.session_id})
+                protected = await http(port, "DELETE", "/admin/sessions", token=token, body={"session_id": active.session_id})
                 return inactive.session_id, deleted, listed, protected
             finally:
                 await stop(adapter)
@@ -64,19 +66,21 @@ def test_session_select_by_id_uses_authenticated_route_and_preserves_token(tmp_p
             adapter = make_adapter()
             sessions = build_session_store(home)
             first = preexisting_conversation(sessions)
-            second = sessions.resolve_or_create("telegram:select-me", display_name="select me")
+            second = preexisting_conversation(
+                sessions, chat_id="select-me", user_id="user-select-me"
+            )
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter, conversation=first)
                 selected = await http(
                     port, "POST", "/admin/sessions", token=token,
-                    json={"session_id": second.session_id},
+                    body={"session_id": second.session_id},
                 )
-                bootstrap = await http(port, "POST", "/bootstrap", token=token, json={"cursor": 0})
+                bootstrap = await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
                 unauth = await http(
                     port, "POST", "/admin/sessions",
-                    json={"session_id": first.session_id},
+                    body={"session_id": first.session_id},
                 )
                 return second, selected, bootstrap, unauth
             finally:
@@ -98,7 +102,7 @@ def test_pair_endpoint_rejects_installation_only_token_mint(tmp_path):
             try:
                 return await http(
                     port, "POST", "/pair",
-                    json={"installation_id": "untrusted-installation"},
+                    body={"installation_id": "untrusted-installation"},
                 )
             finally:
                 await stop(adapter)
