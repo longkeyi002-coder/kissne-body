@@ -122,7 +122,7 @@ class MobileTransportClient(
         return try {
             DataOutputStream(connection.outputStream).use { out ->
                 out.field("message_id", messageId)
-                out.field("kind", if (kind == "photo") "photo" else "file")
+                out.field("kind", normalizeAttachmentKind(kind))
                 out.field("file_name", fileName)
                 out.field("mime_type", mimeType)
                 out.writeBytes("--$boundary$crlf")
@@ -192,3 +192,10 @@ class MobileTransportClient(
 
 internal fun resolveMobileRequestUrl(baseUrl: String, path: String): String =
     baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+
+
+internal fun normalizeAttachmentKind(kind: String): String = when (kind.trim().lowercase()) {
+    "photo" -> "photo"
+    "sticker" -> "sticker"
+    else -> "file"
+}
