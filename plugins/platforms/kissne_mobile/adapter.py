@@ -158,6 +158,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
     supports_code_blocks = True
     typed_command_prefix = "/"
 
+    # Mobile's durable draft/event transport is a native stream consumer: this is
+    # what makes Gateway tool progress reach send_draft as typed Activity instead
+    # of falling back to the legacy progress path.
+    SUPPORTS_NATIVE_STREAMING = True
+
+    def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
+        return True
+
+    async def send_stream_frame(self, chat_id: str, content: str, *,
+                                stream_id: str = "", final: bool = False,
+                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
+        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
         extra = config.extra or {}
@@ -326,6 +340,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MODEL_OPTIONS_PATH, self._handle_model_options)
         app.router.add_post(SET_MODEL_PATH, self._handle_set_model)
         app.router.add_get(ADMIN_SESSIONS_PATH, self._handle_admin_sessions)
+        app.router.add_post(ADMIN_SESSIONS_PATH, self._handle_select_admin_session)
+        app.router.add_delete(ADMIN_SESSIONS_PATH, self._handle_delete_admin_session)
         app.router.add_get(ADMIN_STATUS_PATH, self._handle_admin_status)
         # Plugin-registered routes must be wired before ``AppRunner.setup()`` freezes the router
         # (same lifecycle point as ``plugins/platforms/line/adapter.py``). The aiohttp application
@@ -992,19 +1008,33 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }, status=202)
 
     def _mobile_history_sessions(self, installation: str) -> List[Dict[str, Any]]:
-        """Return all Hermes sessions owned by this Mobile installation, newest first."""
+        """Return the bound Runtime conversation plus its Mobile-owned continuations.
+
+        Pairing is an alias: it deliberately does not rewrite the canonical Runtime
+        session row session_key. Querying only by the Mobile alias therefore hides
+        the conversation the device just joined.
+        """
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
-        db = store._db_for_key(self.mobile_session_key(installation))
+        mobile_key = self.mobile_session_key(installation)
+        bound = self.bound_conversation(installation)
+        db = store._db_for_key(mobile_key)
         if db is None or not hasattr(db, "list_sessions_rich"):
             return []
-        return db.list_sessions_rich(
-            session_key=self.mobile_session_key(installation),
+        rows = db.list_sessions_rich(
+            session_key=mobile_key,
             include_archived=True, include_children=True,
             project_compression_tips=False, order_by_last_active=True,
             limit=500, offset=0, compact_rows=True,
         )
+        by_id = {str(row.get("id") or ""): row for row in rows if str(row.get("id") or "")}
+        bound_id = str(getattr(bound, "session_id", "") or "")
+        if bound_id and bound_id not in by_id:
+            get_session = getattr(db, "get_session", None)
+            canonical = get_session(bound_id) if callable(get_session) else None
+            by_id[bound_id] = canonical if isinstance(canonical, dict) else {"id": bound_id}
+        return list(by_id.values())
 
     def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
         """Flatten /new-separated transcripts into one Mobile-visible timeline."""
@@ -1496,6 +1526,30 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 break
         return model, provider
 
+    def _live_reasoning_effort(self, installation: str, model: str = "") -> str:
+        """Read the effective reasoning effort from the same Gateway resolver used for the next turn."""
+        runner = getattr(self, "gateway_runner", None)
+        resolver = getattr(runner, "_resolve_session_reasoning_config", None)
+        if not callable(resolver):
+            return ""
+        source = self.source_for_installation(installation)
+        try:
+            config = resolver(
+                source=source,
+                session_key=self.mobile_session_key(installation),
+                model=str(model or ""),
+            )
+        except Exception:
+            logger.debug("[kissne_mobile] could not resolve live reasoning effort", exc_info=True)
+            return ""
+        if config is None:
+            return "medium"
+        if isinstance(config, dict) and config.get("enabled") is False:
+            return "none"
+        if isinstance(config, dict):
+            return str(config.get("effort") or "medium")
+        return ""
+
     async def _handle_model_options(self, request: web.Request) -> web.Response:
         """Same provider/model inventory as the Hermes Dashboard picker, under the device's profile."""
         installation = await self._authenticated_installation(request)
@@ -1507,6 +1561,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         source = self.source_for_installation(installation)
         profile = str(getattr(source, "profile", "") or getattr(self, "_owner_profile", "") or "")
         current_model, current_provider = self._live_model_selection(installation)
+        current_effort = self._live_reasoning_effort(installation, current_model)
 
         def _build() -> Dict[str, Any]:
             from contextlib import nullcontext
@@ -1534,6 +1589,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 payload["model"] = current_model
             if current_provider:
                 payload["provider"] = current_provider
+            if current_effort:
+                payload["effort"] = current_effort
+                payload["current_effort"] = current_effort
             return payload
 
         try:
@@ -1602,11 +1660,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("model_control_failed", 503)
 
         current_model, current_provider = self._live_model_selection(installation)
+        current_effort = self._live_reasoning_effort(installation, current_model or model)
         return _json_response({
             "ok": True,
             "model": current_model or model,
             "provider": current_provider or provider,
-            "effort": effort,
+            "effort": current_effort or effort,
             "model_reply": model_reply,
             "reasoning_reply": reasoning_reply,
         })
@@ -2004,6 +2063,95 @@ class KissneMobileAdapter(BasePlatformAdapter):
         rows = list(by_id.values())
         rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
+
+    async def _handle_select_admin_session(self, request: web.Request) -> web.Response:
+        """Rebind this paired installation to an existing Runtime conversation."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return _error_response("session_store_unavailable", 503)
+        payload, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = payload or {}
+        session_id = str(body.get("session_id") or "").strip()
+        session_key = str(body.get("session_key") or "").strip()
+        if not session_id and not session_key:
+            return _error_response("session_identity_required", 400)
+        try:
+            target = (await asyncio.to_thread(store.lookup_by_session_id, session_id)
+                      if session_id else await asyncio.to_thread(store.lookup_by_session_key, session_key))
+        except Exception:
+            logger.warning("[kissne_mobile] could not resolve selected session", exc_info=True)
+            return _error_response("session_select_unavailable", 503)
+        if target is None:
+            return _error_response("session_not_found", 404)
+        mobile_key = self.mobile_session_key(installation)
+        try:
+            current = await asyncio.to_thread(store.lookup_by_session_key, mobile_key)
+            if current is None:
+                bound = await asyncio.to_thread(
+                    self.bind_conversation, installation, str(target.session_key or "")
+                )
+            else:
+                switched = await asyncio.to_thread(store.switch_session, mobile_key, target.session_id)
+                bound = switched is not None and switched.session_id == target.session_id
+        except Exception:
+            logger.warning("[kissne_mobile] failed to switch installation %s to %s",
+                           _fingerprint(installation), target.session_id, exc_info=True)
+            bound = False
+        if not bound:
+            return _error_response("session_select_failed", 409)
+        identity = self._conversation_identity(installation) or {}
+        return _json_response({"ok": True, "conversation": identity})
+
+    async def _handle_delete_admin_session(self, request: web.Request) -> web.Response:
+        """Delete one inactive canonical Hermes conversation selected by the paired device."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return _error_response("session_store_unavailable", 503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        session_id = str((body or {}).get("session_id") or "").strip()
+        if not session_id:
+            return _error_response("session_id_required", 400)
+        current = self._conversation_identity(installation)
+        current_id = str((current or {}).get("session_id") or "")
+        if session_id == current_id:
+            return _error_response("active_session_delete_forbidden", 409)
+        try:
+            target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
+            if target is None:
+                return _error_response("session_not_found", 404)
+            # SessionStore intentionally has no destructive delete API. Remove the
+            # inactive conversation from the active routing index and end its durable
+            # session row through the same lifecycle primitive used by resets/switches.
+            target_key = str(target.session_key or "")
+            db = store._db_for_key(target_key)
+            if db is not None:
+                promote = getattr(db, "promote_to_session_reset", None)
+                if callable(promote):
+                    promote(session_id, "session_deleted")
+                else:
+                    db.end_session(session_id, "session_deleted")
+            with store._lock:
+                store._ensure_loaded_locked()
+                routed = store._entries.get(target_key)
+                if routed is None or routed.session_id != session_id:
+                    return _error_response("session_not_found", 404)
+                store._entries.pop(target_key, None)
+                store._save()
+        except Exception:
+            logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
+            return _error_response("session_delete_unavailable", 503)
+        return _json_response({"ok": True, "deleted": True, "session_id": session_id})
 
     async def _handle_admin_status(self, request: web.Request) -> web.Response:
         """Small read-only operational snapshot safe for a paired device token."""

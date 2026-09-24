@@ -59,6 +59,28 @@ class MobileTransportClient(
     fun sessionsPayload(): JSONObject =
         request("GET", "/admin/sessions")
 
+    fun deleteSessionPayload(sessionId: String): JSONObject =
+        request("DELETE", "/admin/sessions", JSONObject().put("session_id", sessionId))
+
+    fun selectSessionPayload(sessionKey: String?, sessionId: String?): JSONObject {
+        val body = JSONObject()
+        sessionKey?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
+        sessionId?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_id", it) }
+        return request("POST", "/admin/sessions", body)
+    }
+
+    fun historyPayload(limit: Int = 50, before: String? = null): JSONObject {
+        val query = StringBuilder("/history?limit=").append(limit.coerceIn(1, 100))
+        before?.takeIf { it.isNotBlank() }?.let {
+            query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        return request("GET", query.toString())
+    }
+
+    fun searchPayload(queryText: String, limit: Int = 20): JSONObject =
+        request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
+            "&limit=" + limit.coerceIn(1, 50))
+
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
@@ -68,20 +90,21 @@ class MobileTransportClient(
         installationId: String,
         sessionKey: String? = null,
         sessionId: String? = null,
+        pairingCode: String? = null,
     ): JSONObject {
         val body = JSONObject().put("installation_id", installationId)
+        pairingCode?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("pairing_code", it) }
         sessionKey?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_key", it) }
         sessionId?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("session_id", it) }
         return request("POST", "/pair", body, auth = false)
     }
 
 
-    fun sendPayload(messageId: String, text: String): JSONObject =
-        request(
-            "POST",
-            "/messages",
-            JSONObject().put("message_id", messageId).put("text", text),
-        )
+    fun sendPayload(messageId: String, text: String, replyTo: String? = null): JSONObject {
+        val body = JSONObject().put("message_id", messageId).put("text", text)
+        replyTo?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("reply_to", it) }
+        return request("POST", "/messages", body)
+    }
 
 
     fun pollPayload(cursor: Long): JSONObject = request("GET", "/messages?cursor=$cursor")
@@ -122,7 +145,7 @@ class MobileTransportClient(
         return try {
             DataOutputStream(connection.outputStream).use { out ->
                 out.field("message_id", messageId)
-                out.field("kind", if (kind == "photo") "photo" else "file")
+                out.field("kind", normalizeAttachmentKind(kind))
                 out.field("file_name", fileName)
                 out.field("mime_type", mimeType)
                 out.writeBytes("--$boundary$crlf")
@@ -192,3 +215,10 @@ class MobileTransportClient(
 
 internal fun resolveMobileRequestUrl(baseUrl: String, path: String): String =
     baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+
+
+internal fun normalizeAttachmentKind(kind: String): String = when (kind.trim().lowercase()) {
+    "photo" -> "photo"
+    "sticker" -> "sticker"
+    else -> "file"
+}

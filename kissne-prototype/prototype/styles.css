@@ -1861,12 +1861,19 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   padding:7px
 }
 .sessiondrawer__item{
-  width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:3px;
-  padding:10px 11px;border:0;border-radius:11px;background:transparent;
-  color:var(--ink);font-family:inherit;text-align:left;cursor:pointer
+  width:100%;display:flex;align-items:center;gap:4px;
+  border:0;border-radius:11px;background:transparent;color:var(--ink)
 }
 .sessiondrawer__item:active{background:var(--g2)}
 .sessiondrawer__item.is-active{background:var(--blue-wash)}
+.sessiondrawer__select{
+  min-width:0;flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  padding:10px 11px;border:0;background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer
+}
+.sessiondrawer__delete{
+  flex:none;margin-right:7px;padding:7px 6px;border:0;background:transparent;
+  color:var(--ink-3);font:inherit;font-size:10px;cursor:pointer
+}
 .sessiondrawer__title{
   width:100%;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
 }

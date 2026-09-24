@@ -141,11 +141,14 @@
     } else {
       body = sessions.map(function (s) {
         var active = sessionIsCurrent(s);
-        return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-          + ((s.key || s.id) ? '' : ' disabled')
-          + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+        return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+          + '<button type="button" class="sessiondrawer__select" data-session-select'
+          + ((s.key || s.id) ? '' : ' disabled') + '>'
+          + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+          + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
+          + '</div>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -1102,10 +1105,7 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
-            <button class="hsel${menu === 'provider' ? ' is-open' : ''}" data-chat-menu="provider">
-              <span class="hsel__k">供应商</span><span class="hsel__v">${esc(curProvider.v)}</span>${icon('chevron', 11, 'hsel__car')}
-            </button>
-            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
+            <button class="hsel${(menu === 'provider' || menu === 'model') ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
@@ -1272,11 +1272,14 @@
         }
         host.innerHTML = sessions.map(function (s) {
           var active = sessionIsCurrent(s);
-          return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-            + ((s.key || s.id) ? '' : ' disabled')
-            + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+          return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+            + '<button type="button" class="sessiondrawer__select" data-session-select'
+            + ((s.key || s.id) ? '' : ' disabled') + '>'
+            + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+            + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
+            + '</div>';
         }).join('');
       }
       function setSessionDrawer(open) {
@@ -1393,8 +1396,12 @@
         if (providerPick && root.contains(providerPick)) {
           e.preventDefault();
           e.stopPropagation();
+          var providerList = providerPick.closest('.modelpick__list');
+          var providerScrollTop = providerList ? providerList.scrollTop : 0;
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
           paintChatMenu('model-picker');
+          var restoredProviderList = root.querySelector('.modelpick__providers .modelpick__list');
+          if (restoredProviderList) restoredProviderList.scrollTop = providerScrollTop;
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
@@ -2530,7 +2537,23 @@
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         var routedStickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        if (live) queueOutboundText('[表情包：' + sk.label + ']', routedStickerLog);
+        if (live && T && typeof T.sendSticker === 'function') {
+          T.sendSticker(sk.k, sk.label).then(function (accepted) {
+            var turn = String(accepted && accepted.turn_id || '');
+            if (!turn) return;
+            routedStickerLog.messageRef = 'turn:' + turn + ':user';
+            routedStickerLog.turnId = turn;
+            persistChatLog();
+            livePendingTurns[turn] = true;
+            liveCurrentTurn = turn;
+            liveSetCancel(true);
+            scheduleLivePoll(0);
+          }).catch(function () {
+            setSessionStatus('表情包发送失败，请重试。');
+          });
+        } else if (live) {
+          setSessionStatus('当前版本暂不能发送真实表情包图片。');
+        }
       }
 
       async function onSessionDrawerClick(e) {
@@ -2550,6 +2573,28 @@
         e.preventDefault();
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
+        var deleteButton = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
+        if (deleteButton) {
+          e.stopPropagation();
+          if (!id || !T || typeof T.deleteSession !== 'function') {
+            setSessionStatus('当前版本暂不支持删除服务器会话。');
+            return;
+          }
+          deleteButton.disabled = true;
+          setSessionStatus('正在删除会话…');
+          try {
+            await T.deleteSession(id);
+            await refreshSessions();
+            setSessionStatus('');
+          } catch (err) {
+            var code = String(err && err.payload && err.payload.error || '');
+            setSessionStatus(code === 'active_session_delete_forbidden'
+              ? '当前会话不能直接删除，请先切换到其他会话。'
+              : '删除会话失败，请稍后重试。');
+            deleteButton.disabled = false;
+          }
+          return;
+        }
         if (!key && !id) return;
         var alreadyCurrent = CURRENT_SESSION_ID
           ? (id && id === CURRENT_SESSION_ID)

@@ -102,12 +102,15 @@
         opts = opts || {};
         var base = nativeBase(opts.apiBase || '');
         if (base) Native.setBase(base);
-        return nativeCall('pair', { api_base: base });
+        return nativeCall('pair', { api_base: base, pairing_code: String(opts.pairingCode || opts.pairing_code || '') });
       },
       ensureToken: function (force) {
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
+      history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
+      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
+      deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
           session_key: String(sessionKey || ''),
@@ -120,10 +123,11 @@
           force: !!force
         });
       },
-      sendText: function (text, messageId) {
+      sendText: function (text, messageId, replyTo) {
         return nativeCall('sendText', {
           text: String(text || ''),
-          message_id: messageId || nativeMessageId()
+          message_id: messageId || nativeMessageId(),
+          reply_to: String(replyTo || '')
         });
       },
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
@@ -272,7 +276,8 @@
   async function pair(opts) {
     opts = opts || {};
     var base = setBase(opts.apiBase || '');
-    var body = { installation_id: installationId() };
+    var body = { installation_id: installationId(), pairing_code: String(opts.pairingCode || opts.pairing_code || '') };
+    if (!body.pairing_code) throw new ApiError(401, { error: 'pairing_code_required' }, 'pairing_code_required');
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) {
       webBootstrapCache = null;
@@ -283,14 +288,30 @@
     return out;
   }
   async function ensureToken(force) {
-    if (!force && deviceToken()) return { ok: true, existing: true, installation_id: installationId() };
-    return pair({});
+    if (deviceToken() && !force) return { ok: true, existing: true, installation_id: installationId() };
+    if (deviceToken() && force) return { ok: true, existing: true, installation_id: installationId() };
+    throw new ApiError(401, { error: 'pairing_required' }, 'pairing_required');
   }
   function sessions() {
     return request('/admin/sessions', {
       method: 'GET',
       base: adminBase()
     });
+  }
+  function history(limit, before) {
+    var path = '/mobile/history?limit=' + encodeURIComponent(Number(limit) || 50);
+    if (before) path += '&before=' + encodeURIComponent(String(before));
+    return request(path, { method: 'GET' });
+  }
+  function searchHistory(q, limit) {
+    var query = String(q || '').trim();
+    if (!query) throw new ApiError(400, { error: 'query_required' }, 'query_required');
+    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 20), { method: 'GET' });
+  }
+  function deleteSession(sessionId) {
+    var id = String(sessionId || '').trim();
+    if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
+    return request('/admin/sessions', { method: 'DELETE', body: { session_id: id }, base: adminBase() });
   }
   function memories() {
     return request('/admin/memory', { method: 'GET', base: adminBase() });
@@ -307,20 +328,12 @@
     var key = String(sessionKey || '').trim();
     var id = String(sessionId || '').trim();
     if (!key && !id) throw new ApiError(400, { error: 'session_identity_required' }, 'session_identity_required');
-    var oldToken = deviceToken();
-    var body = { installation_id: installationId() };
+    var body = {};
     if (key) body.session_key = key;
     if (id) body.session_id = id;
-    var out = await request('/mobile/pair', {
-      method: 'POST',
-      body: body,
-      auth: false
-    });
+    var out = await request('/admin/sessions', { method: 'POST', body: body, base: adminBase() });
     webBootstrapCache = null;
     webBootstrapToken = '';
-    if (out.device_token && out.device_token !== oldToken) {
-      set(KEY.token, out.device_token);
-    }
     return out;
   }
   function hasBootstrapCache() {
@@ -348,8 +361,9 @@
     if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
     return 'web-' + r;
   }
-  function sendText(text, messageId) {
+  function sendText(text, messageId, replyTo) {
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
+    if (replyTo) body.reply_to = String(replyTo);
     return request('/mobile/messages', { method: 'POST', body: body });
   }
 
@@ -409,6 +423,9 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    history: history,
+    search: searchHistory,
+    deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,

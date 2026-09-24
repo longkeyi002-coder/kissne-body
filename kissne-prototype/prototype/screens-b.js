@@ -200,7 +200,7 @@
             + kv('认证', '<span data-device-auth>自动 device token</span>')
             + kv('当前模型', '跟随 Hermes')
           )}
-          ${note('这些信息仅用于诊断。App 会自动完成认证与恢复，无需手动配对、连接或刷新 token。')}
+          ${note('这些信息仅用于诊断。已配对设备会自动恢复；首次使用或凭据失效时必须重新输入一次性配对码。')}
         </div>
       </div>`;
     },
@@ -247,7 +247,7 @@
         } catch (err) {
           if (err && err.status === 401 && typeof T.ensureToken === 'function') {
             try {
-              await T.ensureToken(true);
+              throw err;
               var retryBoot = await T.bootstrap();
               if (!retryBoot || !retryBoot.bound) {
                 if (!stopped) {
@@ -639,7 +639,7 @@
         if (status === 401) {
           showNotice('working', 'device token 已失效，正在自动刷新认证…');
           if (T && typeof T.ensureToken === 'function') {
-            T.ensureToken(true).then(function () {
+            T.ensureToken(false).then(function () {
               if (retryDeployLog) pollDeployLog(100);
               else loadStatus();
             }).catch(function () {
