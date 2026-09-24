@@ -102,7 +102,7 @@
         opts = opts || {};
         var base = nativeBase(opts.apiBase || '');
         if (base) Native.setBase(base);
-        return nativeCall('pair', { api_base: base });
+        return nativeCall('pair', { api_base: base, pairing_code: String(opts.pairingCode || opts.pairing_code || '') });
       },
       ensureToken: function (force) {
         return nativeCall('ensureToken', { force: !!force });
@@ -276,7 +276,8 @@
   async function pair(opts) {
     opts = opts || {};
     var base = setBase(opts.apiBase || '');
-    var body = { installation_id: installationId() };
+    var body = { installation_id: installationId(), pairing_code: String(opts.pairingCode || opts.pairing_code || '') };
+    if (!body.pairing_code) throw new ApiError(401, { error: 'pairing_code_required' }, 'pairing_code_required');
     var out = await request('/mobile/pair', { method: 'POST', body: body, auth: false, base: base });
     if (out.device_token) {
       webBootstrapCache = null;
@@ -287,8 +288,9 @@
     return out;
   }
   async function ensureToken(force) {
-    if (!force && deviceToken()) return { ok: true, existing: true, installation_id: installationId() };
-    return pair({});
+    if (deviceToken() && !force) return { ok: true, existing: true, installation_id: installationId() };
+    if (deviceToken() && force) return { ok: true, existing: true, installation_id: installationId() };
+    throw new ApiError(401, { error: 'pairing_required' }, 'pairing_required');
   }
   function sessions() {
     return request('/admin/sessions', {
@@ -316,20 +318,12 @@
     var key = String(sessionKey || '').trim();
     var id = String(sessionId || '').trim();
     if (!key && !id) throw new ApiError(400, { error: 'session_identity_required' }, 'session_identity_required');
-    var oldToken = deviceToken();
-    var body = { installation_id: installationId() };
+    var body = {};
     if (key) body.session_key = key;
     if (id) body.session_id = id;
-    var out = await request('/mobile/pair', {
-      method: 'POST',
-      body: body,
-      auth: false
-    });
+    var out = await request('/admin/sessions', { method: 'POST', body: body, base: adminBase() });
     webBootstrapCache = null;
     webBootstrapToken = '';
-    if (out.device_token && out.device_token !== oldToken) {
-      set(KEY.token, out.device_token);
-    }
     return out;
   }
   function hasBootstrapCache() {
