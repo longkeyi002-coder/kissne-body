@@ -205,6 +205,12 @@ class DeviceStore:
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
             );
+            -- Highest sequence actually returned by /outbound for each installation.
+            -- ACK is fenced to this watermark so a corrupt/buggy client cannot retire unseen rows.
+            CREATE TABLE IF NOT EXISTS delivery_watermarks (
+                installation_id TEXT PRIMARY KEY,
+                delivered_seq   INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
         conn.commit()
@@ -539,13 +545,38 @@ class DeviceStore:
             events.append(event)
         return events
 
-    def ack_events(self, installation_id: str, cursor: int) -> int:
-        """Retire every event up to and including ``cursor``; returns how many were retired."""
+    def mark_delivered(self, installation_id: str, cursor: int) -> int:
+        """Advance and return the highest sequence actually served to this installation."""
         installation = self._installation(installation_id)
         upto = max(0, int(cursor or 0))
         with self._lock:
             conn = self._db()
+            conn.execute(
+                "INSERT INTO delivery_watermarks (installation_id, delivered_seq) VALUES (?, ?) "
+                "ON CONFLICT(installation_id) DO UPDATE SET delivered_seq = "
+                "MAX(delivery_watermarks.delivered_seq, excluded.delivered_seq)",
+                (installation, upto),
+            )
+            row = conn.execute(
+                "SELECT delivered_seq FROM delivery_watermarks WHERE installation_id = ?",
+                (installation,),
+            ).fetchone()
+            conn.commit()
+            return int(row["delivered_seq"]) if row is not None else 0
+
+    def ack_events(self, installation_id: str, cursor: int) -> tuple[int, int]:
+        """Retire only events that were actually served; returns (count, accepted_cursor)."""
+        installation = self._installation(installation_id)
+        requested = max(0, int(cursor or 0))
+        with self._lock:
+            conn = self._db()
             try:
+                row = conn.execute(
+                    "SELECT delivered_seq FROM delivery_watermarks WHERE installation_id = ?",
+                    (installation,),
+                ).fetchone()
+                delivered = int(row["delivered_seq"]) if row is not None else 0
+                upto = min(requested, delivered)
                 removed = conn.execute(
                     "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
                     (installation, upto),
@@ -555,9 +586,9 @@ class DeviceStore:
             except Exception:
                 conn.rollback()
                 raise
-        logger.debug("[kissne_mobile] device acked up to %d for installation %s (%d retired)",
-                     upto, _fingerprint(installation), count)
-        return count
+        logger.debug("[kissne_mobile] device ack requested %d, accepted %d for installation %s (%d retired)",
+                     requested, upto, _fingerprint(installation), count)
+        return count, upto
 
     def open_turn(self, turn_id: str, installation_id: str, *, state: str = TURN_PENDING) -> None:
         """Record a newly accepted inbound turn (the handle the device correlates events with)."""
