@@ -38,30 +38,35 @@ class StreamTransportMixin:
         return await self.adapter.edit_message(**kwargs)
 
     async def _try_seed_frame(self, fail_log: str, *, exc_info: bool = False) -> bool:
-        """Open a native stream with an empty seed frame (typing indicator before any token) as a
-        bool; a raise logs ``fail_log`` at DEBUG (error formatted in, or the traceback when
-        ``exc_info``) and reads as False."""
-        seed = self.adapter.send_stream_frame(
-            "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+        """Attempt the seed call and await as one guarded operation.
+
+        send_stream_frame may validate synchronously before returning its coroutine.
+        Guarding only the await lets a call-time TypeError escape from run() and
+        kills the consumer task before it can fall back.
+        """
+        try:
+            seed = self.adapter.send_stream_frame(
+                "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+        except Exception:
+            logger.debug(fail_log, exc_info=exc_info)
+            return False
         return await self._try_frame(seed, fail_log, exc_info=exc_info)
 
     @staticmethod
     async def _try_frame(coro, fail_log: str, *, exc_info: bool = False) -> bool:
-        """Await a frame send as a bool; a raise logs ``fail_log`` at DEBUG and reads as False."""
+        """Await a frame and normalize adapter results without treating failed SendResult as success."""
         try:
-            return bool(await coro)
+            result = await coro
+            if isinstance(result, bool):
+                return result
+            success = getattr(result, "success", None)
+            return bool(success) if success is not None else bool(result)
         except Exception as e:
             if exc_info:
                 logger.debug(fail_log, exc_info=True)
             else:
                 logger.debug(fail_log, e)
             return False
-
-    async def _send_frame(self, text: str, *, finalize: bool):
-        """One native-stream frame; every frame carries the same chat/reply/turn routing."""
-        return await self.adapter.send_stream_frame(
-            text, finalize=finalize, chat_id=self.chat_id, reply_to=self._initial_reply_to_id,
-            turn_id=self._turn_id)
 
     def _close_native_state(self) -> None:
         """Mark the native stream closed (next content re-seeds or falls back)."""
