@@ -969,10 +969,21 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         is_photo = kind == "photo"
-        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        is_sticker = kind == "sticker"
+        marker = (
+            f"[照片：{file_name}]" if is_photo
+            else "" if is_sticker
+            else f"[文件：{file_name}]"
+        )
+        message_type = (
+            MessageType.PHOTO if is_photo
+            else MessageType.STICKER if is_sticker
+            else MessageType.DOCUMENT
+        )
+        attachment_type = "image" if is_photo else "sticker" if is_sticker else "file"
         event = MessageEvent(
             text=marker,
-            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            message_type=message_type,
             source=self.source_for_installation(installation),
             raw_message={
                 "kind": kind,
@@ -991,7 +1002,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             await asyncio.to_thread(
                 store.record_attachment_message,
                 installation, turn_id, marker,
-                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
+                [{"type": attachment_type, "mime_type": mime_type, "label": file_name}],
             )
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
