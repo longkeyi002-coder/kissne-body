@@ -258,13 +258,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 },
             )
             if progress_message_id is None and reply_to:
+                self._draft_text_last.pop((str(chat_id), draft_id), None)
+                self._draft_activity_seen.pop((str(chat_id), draft_id), None)
+                self._draft_tool_labels.pop((str(chat_id), draft_id), None)
+                self._stream_draft_ids.pop(stream_map_key, None)
                 return SendResult(success=False, error="turn is closed or unavailable")
 
         if not finalize:
             if not str(visible_content or "").strip():
                 return SendResult(success=True, message_id=progress_message_id)
-            return await self.send_draft(
+            result = await self.send_draft(
                 chat_id, draft_id, visible_content, metadata=frame_metadata or None)
+            if not result.success and reply_to:
+                self._draft_text_last.pop((str(chat_id), draft_id), None)
+                self._draft_activity_seen.pop((str(chat_id), draft_id), None)
+                self._draft_tool_labels.pop((str(chat_id), draft_id), None)
+                self._stream_draft_ids.pop(stream_map_key, None)
+            return result
 
         visible, _activities = self._split_draft_frame(visible_content)
         self._clear_draft_state(chat_id)
@@ -720,12 +730,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     logger.debug(
                         "[kissne_mobile] dropping late %s for closed turn %s",
                         event_type, _fingerprint(explicit_turn_id))
-                    # A rejected live frame is terminal for this Mobile turn. Retire
-                    # all draft/stream bookkeeping for the installation so repeated
-                    # cancels cannot accumulate stale stream ids indefinitely.
-                    self._clear_draft_state(installation)
-                    for key in [key for key in self._stream_draft_ids if key[0] == installation]:
-                        self._stream_draft_ids.pop(key, None)
                     return None
             else:
                 seq = await asyncio.to_thread(
