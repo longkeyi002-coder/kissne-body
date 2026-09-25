@@ -727,6 +727,57 @@ def test_repeated_poll_and_ack_are_idempotent(tmp_path):
     assert events[0]["seq"] == first["next_cursor"] + 1, remaining
 
 
+
+def test_reopening_turn_cannot_rehome_its_conversation(tmp_path):
+    """A retry/reopen after a session switch must not rewrite the turn's origin."""
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+        device_store = adapter.device_store()
+        turn_id = "turn-immutable-origin"
+        device_store.open_turn(turn_id, INSTALLATION, conversation_id="conversation-a")
+        device_store.open_turn(turn_id, INSTALLATION, conversation_id="conversation-b")
+        row = device_store.turn(turn_id)
+        assert row is not None
+        assert row["installation_id"] == INSTALLATION
+        assert row["conversation_id"] == "conversation-a"
+
+
+def test_rapid_session_switches_keep_each_turn_on_its_origin(tmp_path):
+    """A -> B -> C switching cannot rehome late events from either older turn."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            a = preexisting_conversation(store, chat_id="rapid-a", user_id="rapid-a")
+            b = preexisting_conversation(store, chat_id="rapid-b", user_id="rapid-b")
+            c = preexisting_conversation(store, chat_id="rapid-c", user_id="rapid-c")
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=a)
+                turn_a = await _open_turn(port, token, text="A", message_id="rapid-a")
+                assert store.switch_session(adapter.mobile_session_key(INSTALLATION), b.session_id)
+                turn_b = await _open_turn(port, token, text="B", message_id="rapid-b")
+                assert store.switch_session(adapter.mobile_session_key(INSTALLATION), c.session_id)
+                turn_c = await _open_turn(port, token, text="C", message_id="rapid-c")
+                await adapter.send_reasoning(INSTALLATION, "late A", draft_id=911, turn_id=turn_a["turn_id"])
+                await adapter.send_draft(INSTALLATION, 912, "late B", metadata={"_mobile_turn_id": turn_b["turn_id"]})
+                await adapter.send(INSTALLATION, "final C", reply_to=turn_c["turn_id"])
+                events = (await _drain(port, token, 0)).get("events") or []
+                return a.session_id, b.session_id, c.session_id, turn_a, turn_b, turn_c, events
+            finally:
+                await stop(adapter)
+
+    a_id, b_id, c_id, turn_a, turn_b, turn_c, events = run(scenario())
+    by_text = {event.get("text"): event for event in events if event.get("text") in {"late A", "late B", "final C"}}
+    assert by_text["late A"]["turn_id"] == turn_a["turn_id"]
+    assert by_text["late A"]["conversation_id"] == a_id
+    assert by_text["late B"]["turn_id"] == turn_b["turn_id"]
+    assert by_text["late B"]["conversation_id"] == b_id
+    assert by_text["final C"]["turn_id"] == turn_c["turn_id"]
+    assert by_text["final C"]["conversation_id"] == c_id
+
+
 def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
     """Late A events stay bound to A's turn after the installation is rebound to B."""
     async def scenario():
