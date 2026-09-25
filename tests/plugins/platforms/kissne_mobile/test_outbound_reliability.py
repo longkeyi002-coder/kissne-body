@@ -755,11 +755,13 @@ def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
                 await adapter.send(
                     INSTALLATION, "final B", reply_to=turn_b["turn_id"])
                 events = (await _drain(port, token, 0)).get("events") or []
-                return (turn_a, turn_b, conversation_a.session_id, conversation_b.session_id,\n                        late_reasoning, late_draft, late_final, events)
+                return (turn_a, turn_b, conversation_a.session_id, conversation_b.session_id,
+late_reasoning, late_draft, late_final, events)
             finally:
                 await stop(adapter)
 
-    (turn_a, turn_b, conversation_a_id, conversation_b_id,\n     late_reasoning, late_draft, late_final, events) = run(scenario())
+    (turn_a, turn_b, conversation_a_id, conversation_b_id,
+late_reasoning, late_draft, late_final, events) = run(scenario())
     assert late_reasoning.success is True
     assert late_draft.success is True
     assert late_final.success is True
