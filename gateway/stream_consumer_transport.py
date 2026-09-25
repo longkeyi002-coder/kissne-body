@@ -73,12 +73,18 @@ class StreamTransportMixin:
 
     async def _send_frame(self, text: str, *, finalize: bool):
         """Send one native frame with the complete Gateway routing contract."""
+        metadata = dict(self.metadata) if self.metadata else {}
+        # Opt-in adapters can persist tool progress as typed Activity instead of mixing it into
+        # assistant text. Other native platforms keep the legacy frame content unchanged.
+        if (getattr(type(self.adapter), "SUPPORTS_STRUCTURED_TOOL_PROGRESS", False)
+                and getattr(self, "_tool_progress_lines", None)):
+            metadata["_stream_tool_progress"] = list(self._tool_progress_lines)
         kwargs = dict(
             finalize=finalize, chat_id=self.chat_id,
             reply_to=self._initial_reply_to_id, turn_id=self._turn_id,
         )
-        if self.metadata:
-            kwargs["metadata"] = self.metadata
+        if metadata:
+            kwargs["metadata"] = metadata
         return await self.adapter.send_stream_frame(text, **kwargs)
 
     def _close_native_state(self) -> None:

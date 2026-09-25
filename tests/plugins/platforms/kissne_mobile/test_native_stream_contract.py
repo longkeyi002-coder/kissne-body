@@ -88,3 +88,63 @@ async def test_mobile_native_tool_activity_uses_the_same_turn():
 
     assert queued and queued[0][0] == "delta"
     assert queued[0][1] == "kbm_turn_1"
+
+
+@pytest.mark.asyncio
+async def test_gateway_native_tool_progress_is_typed_and_removed_from_assistant_text():
+    adapter = object.__new__(KissneMobileAdapter)
+    adapter._stream_draft_ids = {}
+    adapter._draft_text_last = {}
+    adapter._draft_activity_seen = {}
+    adapter._draft_tool_labels = {}
+    queued = []
+
+    async def queue_event(installation, event_type, *, content=None, reply_to=None,
+                          extra=None, target_turn_id=None):
+        queued.append({
+            "installation": installation, "type": event_type, "content": content,
+            "extra": extra or {}, "target_turn_id": target_turn_id,
+        })
+        return "out-1"
+
+    adapter._queue_event = queue_event
+    adapter._clear_draft_state = lambda installation: None
+    result = await adapter.send_stream_frame(
+        "answer\n\n---\n正在检查文件",
+        chat_id="inst-1", turn_id="gateway-turn-1", reply_to="kbm_turn_1",
+        metadata={"_stream_tool_progress": ["正在检查文件"]},
+    )
+
+    assert result.success is True
+    assert [row["extra"].get("presentation") for row in queued] == [
+        "tool_progress", "assistant_text",
+    ]
+    assert queued[0]["target_turn_id"] == "kbm_turn_1"
+    assert queued[0]["extra"]["activity"]["detail"] == "正在检查文件"
+    assert queued[1]["content"] == "answer"
+
+
+@pytest.mark.asyncio
+async def test_gateway_native_frame_carries_progress_metadata_only_for_opt_in_adapter():
+    class Capture:
+        SUPPORTS_STRUCTURED_TOOL_PROGRESS = True
+
+        async def send_stream_frame(self, content, **kwargs):
+            self.content = content
+            self.kwargs = kwargs
+            return SendResult(success=True)
+
+    consumer = object.__new__(GatewayStreamConsumer)
+    consumer.adapter = Capture()
+    consumer.chat_id = "mobile-1"
+    consumer._initial_reply_to_id = "kbm_turn_1"
+    consumer._turn_id = "gateway-turn-1"
+    consumer.metadata = {"source": "test"}
+    consumer._tool_progress_lines = ["正在检查文件"]
+
+    result = await consumer._send_frame("answer\n\n---\n正在检查文件", finalize=False)
+
+    assert result.success is True
+    assert consumer.adapter.kwargs["metadata"] == {
+        "source": "test", "_stream_tool_progress": ["正在检查文件"],
+    }

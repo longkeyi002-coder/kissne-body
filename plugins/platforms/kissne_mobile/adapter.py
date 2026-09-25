@@ -162,6 +162,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
     # what makes Gateway tool progress reach send_draft as typed Activity instead
     # of falling back to the legacy progress path.
     SUPPORTS_NATIVE_STREAMING = True
+    SUPPORTS_STRUCTURED_TOOL_PROGRESS = True
 
     def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
         return True
@@ -198,14 +199,44 @@ class KissneMobileAdapter(BasePlatformAdapter):
         frame_metadata = dict(metadata or {})
         if reply_to:
             frame_metadata["_mobile_turn_id"] = str(reply_to)
+        progress_lines = [
+            str(line) for line in (frame_metadata.pop("_stream_tool_progress", None) or [])
+            if str(line).strip()
+        ]
+        visible_content = self._strip_native_tool_progress(content, progress_lines)
+
+        # Native Gateway progress is a typed event, not assistant prose. Reuse the per-draft
+        # dedupe set so repeated frames do not create repeated Activity rows.
+        progress_seen = self._draft_activity_seen.setdefault((str(chat_id), draft_id), set())
+        progress_message_id: Optional[str] = None
+        for index, line in enumerate(progress_lines):
+            identity = f"native-progress:{hashlib.sha256(line.encode('utf-8')).hexdigest()}"
+            if identity in progress_seen:
+                continue
+            progress_seen.add(identity)
+            progress_message_id = await self._queue_event(
+                chat_id, EVENT_DELTA, content="",
+                target_turn_id=str(frame_metadata.get("_mobile_turn_id") or reply_to or "").strip() or None,
+                extra={
+                    "draft_id": draft_id,
+                    "presentation": "tool_progress",
+                    "tool_call_id": identity,
+                    "activity": {
+                        "tool_call_id": identity, "detail": line,
+                        "label": line, "index": index, "status": "running",
+                    },
+                },
+            )
+            if progress_message_id is None and reply_to:
+                return SendResult(success=False, error="turn is closed or unavailable")
 
         if not finalize:
-            if not str(content or "").strip():
-                return SendResult(success=True, message_id=None)
+            if not str(visible_content or "").strip():
+                return SendResult(success=True, message_id=progress_message_id)
             return await self.send_draft(
-                chat_id, draft_id, content, metadata=frame_metadata or None)
+                chat_id, draft_id, visible_content, metadata=frame_metadata or None)
 
-        visible, _activities = self._split_draft_frame(content)
+        visible, _activities = self._split_draft_frame(visible_content)
         self._clear_draft_state(chat_id)
         self._stream_draft_ids.pop(stream_map_key, None)
         if not visible.strip():
@@ -592,6 +623,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if activities:
             text = re.sub(r"\n*---\s*$", "", text).rstrip()
         return text, activities
+
+    @staticmethod
+    def _strip_native_tool_progress(content: str, lines: List[str]) -> str:
+        """Remove the Gateway's native progress overlay from the assistant draft snapshot."""
+        progress = "\n".join(str(line) for line in lines if str(line).strip())
+        if not progress:
+            return str(content or "")
+        snapshot = str(content or "")
+        if snapshot == progress:
+            return ""
+        separator = "\n\n---\n"
+        suffix = separator + progress
+        return snapshot[:-len(suffix)] if snapshot.endswith(suffix) else snapshot
 
     def _clear_draft_state(self, installation_id: str) -> None:
         installation = str(installation_id or "")
