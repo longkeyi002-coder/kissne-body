@@ -681,3 +681,47 @@ def test_delivery_watermark_survives_runtime_restart(tmp_path):
     events = remaining.get("events") or []
     assert events, remaining
     assert events[0]["seq"] == delivered + 1, remaining
+
+
+def test_repeated_poll_and_ack_are_idempotent(tmp_path):
+    """Retries must neither duplicate retirement nor skip events after the acknowledged cursor."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter._read_limit = 2
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                await _open_turn(port, token, text="retry poll", message_id="m-retry-poll")
+                for index in range(4):
+                    await adapter.send_draft(INSTALLATION, 333, "retry draft " + str(index))
+
+                first = await _drain(port, token, 0)
+                repeated = await _drain(port, token, 0)
+                assert first["events"] == repeated["events"]
+                cursor = first["next_cursor"]
+
+                ack1 = await http(
+                    port, "POST", "/ack", token=token,
+                    body={"ack": {"cursor": cursor}},
+                )
+                ack2 = await http(
+                    port, "POST", "/ack", token=token,
+                    body={"ack": {"cursor": cursor}},
+                )
+                remaining = await _drain(port, token, cursor)
+                return first, repeated, ack1, ack2, remaining
+            finally:
+                await stop(adapter)
+
+    first, repeated, ack1, ack2, remaining = run(scenario())
+    assert repeated["next_cursor"] == first["next_cursor"]
+    assert ack1[0] == 200 and ack1[1]["cursor"] == first["next_cursor"], ack1
+    assert ack2[0] == 200 and ack2[1]["cursor"] == first["next_cursor"], ack2
+    assert ack2[1]["acked"] == 0, ack2
+    events = remaining.get("events") or []
+    assert events, remaining
+    assert events[0]["seq"] == first["next_cursor"] + 1, remaining
