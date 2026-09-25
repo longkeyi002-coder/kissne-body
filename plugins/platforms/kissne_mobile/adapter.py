@@ -715,6 +715,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         pending_turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
         explicit_turn_id = str(target_turn_id or "").strip()
         turn_id = explicit_turn_id or str(pending_turn_id or "")
+        if turn_id:
+            turn_row = await asyncio.to_thread(store.turn, turn_id)
+            if isinstance(turn_row, dict):
+                conversation_id = str(turn_row.get("conversation_id") or "").strip()
+                if conversation_id:
+                    payload["conversation_id"] = conversation_id
         # Explicitly-bound live frames are admitted atomically with the durable turn
         # state. This closes the check/enqueue race with cancel; completed also changes
         # pending->completed in the same transaction as its final event.
@@ -1126,7 +1132,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to persist inbound attachment")
             return _error_response("attachment_store_failed", 503)
 
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        identity = self._conversation_identity(installation) or {}
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation,
+            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1549,7 +1558,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to materialize inbound attachment")
             return _error_response("attachment_store_failed", 503)
         row = materialized[0]
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        identity = self._conversation_identity(installation) or {}
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation,
+            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1655,7 +1667,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if outcome == INBOUND_CONFLICT:
                 return _error_response("message_id_conflict", 409)
 
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        identity = self._conversation_identity(installation) or {}
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation,
+            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
