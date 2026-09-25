@@ -2275,8 +2275,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return _json_response({
             "ok": True,
             "uptime_seconds": uptime,
-            "git": {"head": "", "describe": "", "branch": "", "dirty_files": 0},
-            "deploy": {"running": False, "success": None, "type": None},
+            # This listener has no authoritative repository/deployment provider. Keep the
+            # fields explicit so an empty string/zero cannot be mistaken for real status.
+            "git": {
+                "available": False,
+                "source": "not_connected",
+                "head": None,
+                "describe": None,
+                "branch": None,
+                "dirty_files": None,
+            },
+            "deploy": {
+                "available": False,
+                "source": "not_connected",
+                "running": None,
+                "success": None,
+                "type": None,
+            },
             "mobile": {"connected": bool(self.is_connected), "bound_port": self.bound_port},
         })
 
