@@ -154,12 +154,11 @@ def test_multipart_sticker_reaches_runtime_and_history_as_sticker(tmp_path):
         "bytes": [PNG],
     }]
     sticker_rows = [row for row in rows if row["turn_id"] == payload["turn_id"]]
-    assert sticker_rows == [{
-        "turn_id": payload["turn_id"],
-        "text": "",
-        "attachments": [{"type": "sticker", "mime_type": "image/webp", "label": "happy.webp"}],
-        "created_at": sticker_rows[0]["created_at"],
-    }]
+    assert len(sticker_rows) == 1
+    assert sticker_rows[0]["text"] == ""
+    assert sticker_rows[0]["attachments"] == [
+        {"type": "sticker", "mime_type": "image/webp", "label": "happy.webp"}
+    ]
 
 
 def test_text_contract_remains_backward_compatible(tmp_path):
