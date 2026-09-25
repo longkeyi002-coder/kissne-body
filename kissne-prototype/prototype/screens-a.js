@@ -1798,6 +1798,12 @@
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
+        var eventConversationId = String(event.conversation_id || '');
+        /* A turn keeps the Conversation it originated in even if the installation is rebound
+           while the Runtime is still working. Never project an inactive Conversation's late
+           reasoning/tool/final frames into the currently visible chat; its durable transcript
+           will hydrate when that Conversation is opened. */
+        if (eventConversationId && CURRENT_SESSION_ID && eventConversationId !== CURRENT_SESSION_ID) return;
 
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
