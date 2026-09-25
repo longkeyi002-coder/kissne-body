@@ -599,3 +599,40 @@ def test_queue_cap_never_discards_unacked_terminal_event(tmp_path):
     ), events
     seqs = [event["seq"] for event in events]
     assert seqs == list(range(seqs[0], seqs[-1] + 1)), seqs
+
+
+def test_ack_cannot_retire_events_beyond_last_delivered_cursor(tmp_path):
+    """A corrupt/buggy client cursor must not acknowledge events it was never served."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter._read_limit = 2
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="ack fence", message_id="m-ack-fence")
+                for index in range(4):
+                    await adapter.send_draft(INSTALLATION, 123, "draft " + str(index))
+                first = await _drain(port, token, 0)
+                assert len(first.get("events") or []) == 2, first
+                delivered = first["next_cursor"]
+
+                # Deliberately acknowledge far beyond what this installation was served.
+                acked = await http(
+                    port, "POST", "/ack", token=token,
+                    body={"ack": {"cursor": delivered + 1000}},
+                )
+                remaining = await _drain(port, token, delivered)
+                return turn, first, acked, remaining
+            finally:
+                await stop(adapter)
+
+    _turn, first, acked, remaining = run(scenario())
+    assert acked[0] == 200, acked
+    assert acked[1]["cursor"] == first["next_cursor"], acked
+    events = remaining.get("events") or []
+    assert events, (first, acked, remaining)
+    assert events[0]["seq"] == first["next_cursor"] + 1
