@@ -922,7 +922,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return stem[:120] or "upload.bin"
 
     async def _handle_media_inbound(self, request: web.Request, installation: str) -> web.Response:
-        """Multipart photo/document -> normal Hermes MessageEvent with a local media path."""
+        """Multipart media -> the same canonical attachment lifecycle as JSON media."""
         from aiohttp import web
         from plugins.plugin_storage import plugin_data_dir
 
@@ -932,7 +932,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_too_large", 413)
 
         message_id = ""
-        kind = "file"
+        raw_kind = "file"
         file_name = ""
         mime_type = ""
         file_bytes = bytearray()
@@ -960,7 +960,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     if field == "message_id":
                         message_id = value
                     elif field == "kind":
-                        kind = value if value in {"photo", "sticker"} else "file"
+                        raw_kind = value or "file"
                     elif field == "file_name":
                         file_name = value
                     elif field == "mime_type":
@@ -973,10 +973,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         if not file_bytes:
             return _error_response("attachment_required", 400)
-        file_name = _Path(file_name or ("photo" if kind == "photo" else "file")).name
-        mime_type = (mime_type or "application/octet-stream").strip()
-        if mime_type.startswith("image/") and kind != "sticker":
-            kind = "photo"
+        file_name = _Path(file_name or "file").name
+        mime_type = (mime_type or "application/octet-stream").strip().lower()
+        try:
+            kind = self._normalize_attachment_kind(raw_kind, mime_type)
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
 
         store = self.device_store()
         client_message_id = message_id.strip()
@@ -1028,14 +1030,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
-        is_photo = kind == "photo"
-        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        marker = "" if kind == "sticker" else (
+            f"[照片：{file_name}]" if kind == "image" else f"[文件：{file_name}]"
+        )
+        message_type = (
+            MessageType.STICKER if kind == "sticker"
+            else MessageType.PHOTO if kind == "image"
+            else MessageType.DOCUMENT
+        )
         event = MessageEvent(
             text=marker,
-            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            message_type=message_type,
             source=self.source_for_installation(installation),
             raw_message={
-                "kind": kind,
+                "kind": "sticker" if kind == "sticker" else (
+                    "photo" if kind == "image" else "file"
+                ),
                 "file_name": file_name,
                 "mime_type": mime_type,
                 "size": len(file_bytes),
@@ -1046,14 +1056,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
             media_types=[mime_type],
             media_text_inlined=[False],
         )
+        self._set_inbound_attachment_metadata(
+            event, installation, turn_id, marker,
+            [{"type": kind, "mime_type": mime_type, "label": file_name}],
+            [str(disk_path)],
+        )
         try:
             await self.handle_message(event)
-            await asyncio.to_thread(
-                store.record_attachment_message,
-                installation, turn_id, marker,
-                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
-            )
         except Exception:
+            self._cleanup_inbound_media(event)
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
 
@@ -1061,7 +1072,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "ok": True,
             "message_id": message_id,
             "turn_id": turn_id,
-            "kind": kind,
+            "kind": "sticker" if kind == "sticker" else (
+                "photo" if kind == "image" else "file"
+            ),
             "file_name": file_name,
             "mime_type": mime_type,
             "size": len(file_bytes),
@@ -1253,6 +1266,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
         retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
         return _json_response({"ok": True, "acked": retired, "cursor": cursor})
 
+    @staticmethod
+    def _normalize_attachment_kind(kind: Any, mime_type: Any) -> str:
+        """Return the one internal attachment kind used by both inbound paths."""
+        value = str(kind or "").strip().lower()
+        if value == "photo":
+            value = "image"
+        mime = str(mime_type or "").strip().lower()
+        if value not in {"image", "sticker", "file"}:
+            raise ValueError("invalid_attachment")
+        if value in {"image", "sticker"} and not mime.startswith("image/"):
+            raise ValueError("invalid_attachment")
+        return value
+
     def _materialize_attachments(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Decode bounded JSON attachments once and return temporary media paths."""
         from plugins.plugin_storage import plugin_data_dir
@@ -1262,12 +1288,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         materialized: List[Dict[str, Any]] = []
         try:
             for item in items:
-                kind = str(item.get("type") or "").strip().lower()
                 mime_type = str(item.get("mime_type") or "").strip().lower()
+                kind = self._normalize_attachment_kind(item.get("type"), mime_type)
                 encoded = item.get("data")
-                if kind not in {"image", "sticker", "file"} or not mime_type:
-                    raise ValueError("invalid_attachment")
-                if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+                if not mime_type:
                     raise ValueError("invalid_attachment")
                 if not isinstance(encoded, str) or not encoded:
                     raise ValueError("attachment_required")
@@ -1333,8 +1357,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         item = attachments[0]
         if not isinstance(item, dict):
             return _error_response("invalid_attachment", 400)
-        kind = str(item.get("type") or "").strip().lower()
         mime_type = str(item.get("mime_type") or "").strip().lower()
+        try:
+            kind = self._normalize_attachment_kind(item.get("type"), mime_type)
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
         encoded = item.get("data")
         if kind not in {"image", "sticker", "file"} or not mime_type:
             return _error_response("invalid_attachment", 400)
