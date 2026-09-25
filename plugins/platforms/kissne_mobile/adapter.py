@@ -167,23 +167,44 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return True
 
     async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", turn_id: str = "",
-                                reply_to: Optional[str] = None, final: bool = False,
+                                turn_id: str = "", reply_to: Optional[str] = None,
+                                finalize: bool = False,
                                 metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        # GatewayStreamConsumer identifies one native stream with its own turn_id.
-        # Accept that standard argument explicitly; otherwise the consumer's first seed
-        # raises TypeError and silently degrades Mobile to buffered send(), which is why
-        # live tool Activity only appeared after reopening the app.
-        stream_key = str(stream_id or turn_id or "mobile")
-        draft_id = abs(hash(stream_key)) % 2147483647 or 1
+        """Implement GatewayStreamConsumer's native-stream contract.
+
+        turn_id identifies the Gateway stream/draft; reply_to is the inbound Mobile
+        turn (kbm_turn_*) and therefore the durable event target. Non-final frames
+        are deltas. A final frame is a completed event, never a delta followed by
+        a separate buffered send.
+        """
+        stream_key = str(turn_id or "mobile")
+        stream_map_key = (str(chat_id or ""), stream_key)
+        draft_id = self._stream_draft_ids.get(stream_map_key)
+        if draft_id is None:
+            digest = hashlib.sha256(stream_key.encode("utf-8")).digest()
+            draft_id = int.from_bytes(digest[:8], "big") % 2_147_483_646 + 1
+            self._stream_draft_ids[stream_map_key] = draft_id
+
         frame_metadata = dict(metadata or {})
-        # Gateway's native-stream turn_id is a stream key, while reply_to is the
-        # inbound Mobile event id. Preserve that server turn identity separately so
-        # a stale stream can never attach its draft frames to a newer pending turn.
         if reply_to:
             frame_metadata["_mobile_turn_id"] = str(reply_to)
-        return await self.send_draft(
-            chat_id, draft_id, content, metadata=frame_metadata or None)
+
+        if not finalize:
+            return await self.send_draft(
+                chat_id, draft_id, content, metadata=frame_metadata or None)
+
+        visible, _activities = self._split_draft_frame(content)
+        message_id = await self._queue_event(
+            chat_id, EVENT_COMPLETED, content=visible,
+            reply_to=reply_to,
+            target_turn_id=str(reply_to or "").strip() or None,
+            extra={"draft_id": draft_id, "presentation": "assistant_text"},
+        )
+        self._clear_draft_state(chat_id)
+        self._stream_draft_ids.pop(stream_map_key, None)
+        if message_id is None:
+            return SendResult(success=False, error="native stream finalize failed")
+        return SendResult(success=True, message_id=message_id)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -208,6 +229,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
+        # Native Gateway streams use a gateway turn UUID as their stream key. Keep the
+        # mapping explicit so every delta/final frame reuses one Mobile draft id and
+        # finalization can retire the mapping atomically.
+        self._stream_draft_ids: Dict[Tuple[str, str], int] = {}
         self._session_reset_pending: set[str] = set()
         self._session_reset_turns: Dict[str, str] = {}
         # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
@@ -406,6 +431,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._pair_attempts.clear()
         self._draft_text_last.clear()
         self._draft_activity_seen.clear()
+        self._draft_tool_labels.clear()
+        self._stream_draft_ids.clear()
         self._mark_disconnected()
         logger.info("[kissne_mobile] disconnected")
 
@@ -718,6 +745,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             presentation = "tool_result" if kind == "tool_result" else "tool_call"
             last_message_id = await self._queue_event(
                 installation, EVENT_DELTA, content="",
+                target_turn_id=explicit_turn_id or None,
                 extra={
                     "draft_id": int(draft_id),
                     "presentation": presentation,
@@ -729,6 +757,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             self._draft_text_last[key] = visible
             last_message_id = await self._queue_event(
                 installation, EVENT_DELTA, content=visible,
+                target_turn_id=explicit_turn_id or None,
                 extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
 
         if last_message_id is None:
