@@ -148,3 +148,54 @@ async def test_gateway_native_frame_carries_progress_metadata_only_for_opt_in_ad
     assert consumer.adapter.kwargs["metadata"] == {
         "source": "test", "_stream_tool_progress": ["正在检查文件"],
     }
+
+
+
+def test_gateway_real_tool_events_are_semantic_not_private_markers(tmp_path):
+    """Exercise formatter -> consumer progress -> native frame -> device event end to end."""
+    async def scenario():
+        from gateway.stream_consumer import GatewayStreamConsumer
+        from gateway.stream_events import ToolCallChunk, ToolCallFinished
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="inspect", message_id="m-real-tool")
+                consumer = GatewayStreamConsumer(
+                    adapter=adapter, chat_id=INSTALLATION,
+                    initial_reply_to_id=turn["turn_id"],
+                )
+                started = adapter.format_tool_event(
+                    ToolCallChunk("read_file", args={"path": "gateway/session.py"}, index=7)
+                )
+                finished = adapter.format_tool_event(
+                    ToolCallFinished("read_file", duration=0.25, ok=True, index=7)
+                )
+                consumer._tool_progress_lines = [started, finished]
+                await consumer._send_frame(
+                    consumer._compose_frame_content(), finalize=False
+                )
+                payload = await _drain(port, token, 0)
+                return turn, payload, started, finished
+            finally:
+                await stop(adapter)
+
+    turn, payload, started, finished = run(scenario())
+    events = payload.get("events") or []
+    activities = [
+        event for event in events
+        if event.get("presentation") in {"tool_call", "tool_result"}
+    ]
+    assert [event["presentation"] for event in activities[-2:]] == ["tool_call", "tool_result"]
+    assert all(event.get("turn_id") == turn["turn_id"] for event in activities[-2:])
+    assert activities[-2]["activity"]["status"] == "running"
+    assert activities[-1]["activity"]["status"] == "completed"
+    assert activities[-1]["activity"]["label"] == activities[-2]["activity"]["label"]
+    serialized = str(activities[-2:]) 
+    assert started not in serialized and finished not in serialized
+    assert "KISSNE_ACTIVITY" not in serialized
