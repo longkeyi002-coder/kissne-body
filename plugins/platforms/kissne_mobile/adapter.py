@@ -166,11 +166,33 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
         return True
 
-    async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", final: bool = False,
-                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
-        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+    async def send_stream_frame(
+        self,
+        content: str,
+        *,
+        chat_id: str,
+        reply_to: Optional[str] = None,
+        turn_id: str = "",
+        finalize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Deliver one Gateway native-stream frame to the device event lanes.
+
+        ``reply_to`` is the Runtime-admitted Mobile ``server_turn_id`` (the
+        ``MessageEvent.message_id``), while ``turn_id`` is only the Gateway stream
+        identity used to keep draft/activity state together. They must never be swapped.
+        """
+        stream_key = str(turn_id or "mobile")
+        # hashlib is deterministic across Runtime processes; Python's hash() is salted
+        # and could attach a resumed/retried stream to a different draft bucket.
+        digest = hashlib.sha256(stream_key.encode("utf-8")).digest()
+        draft_id = int.from_bytes(digest[:8], "big") % 2147483647 or 1
+        frame_metadata = dict(metadata or {})
+        durable_turn_id = str(reply_to or "").strip()
+        if durable_turn_id:
+            frame_metadata["_mobile_turn_id"] = durable_turn_id
+        return await self.send_draft(
+            chat_id, draft_id, content, metadata=frame_metadata or None, finalize=finalize)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -638,17 +660,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=message_id)
 
     async def send_reasoning(self, chat_id: str, content: str, *,
-                             draft_id: int = 0) -> SendResult:
+                             draft_id: int = 0, turn_id: str = "") -> SendResult:
         """Queue provider-visible reasoning on its own transport lane.
 
-        This never enters assistant_text: final answer scrubbing remains unchanged while
-        models/providers that expose reasoning can stream it to capable clients.
+        turn_id is the Runtime-admitted Mobile server turn id. It is separate
+        from the Gateway stream UUID used by native draft frames.
         """
         text = str(content or "")
         if not text:
             return SendResult(success=True, message_id=None)
         message_id = await self._queue_event(
             chat_id, EVENT_DELTA, content=text,
+            target_turn_id=str(turn_id or "").strip() or None,
             extra={
                 "draft_id": int(draft_id or 0),
                 "presentation": "reasoning",
@@ -660,11 +683,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=message_id)
 
     async def send_draft(self, chat_id: str, draft_id: int, content: str,
-                         metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        """Separate cumulative assistant text from semantic tool Activity before delivery."""
+                         metadata: Optional[Dict[str, Any]] = None, *,
+                         finalize: bool = False) -> SendResult:
+        """Separate cumulative assistant text from semantic tool Activity before delivery.
+
+        ``finalize`` turns the last visible frame into the durable ``completed`` event;
+        regular frames remain ``delta`` events. The target turn is explicit when native
+        streaming supplies ``_mobile_turn_id`` and never falls back to a newer pending
+        turn for that stream.
+        """
         installation = str(chat_id or "").strip()
         key = (installation, int(draft_id))
+        durable_turn_id = str((metadata or {}).get("_mobile_turn_id") or "").strip() or None
         visible, activities = self._split_draft_frame(content)
+        event_type = EVENT_COMPLETED if finalize else EVENT_DELTA
         seen = self._draft_activity_seen.setdefault(key, set())
         labels = self._draft_tool_labels.setdefault(key, {})
         last_message_id: Optional[str] = None
@@ -692,14 +724,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     "presentation": presentation,
                     "tool_call_id": identity,
                     "activity": activity,
-                })
+                },
+                target_turn_id=durable_turn_id)
 
-        if visible.strip() and self._draft_text_last.get(key) != visible:
+        if visible.strip() and (finalize or self._draft_text_last.get(key) != visible):
             self._draft_text_last[key] = visible
             last_message_id = await self._queue_event(
-                installation, EVENT_DELTA, content=visible,
-                extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
+                installation, event_type, content=visible,
+                extra={"draft_id": int(draft_id), "presentation": "assistant_text"},
+                target_turn_id=durable_turn_id)
 
+        # A native final frame must close even when the answer is empty or consists only
+        # of tool activity. The device needs a typed completed event to settle the turn.
+        if finalize and last_message_id is None:
+            last_message_id = await self._queue_event(
+                installation, EVENT_COMPLETED, content="",
+                extra={"draft_id": int(draft_id), "presentation": "assistant_text"},
+                target_turn_id=durable_turn_id)
+        if finalize:
+            self._clear_draft_state(installation)
         if last_message_id is None:
             return SendResult(success=True, message_id=None)
         return SendResult(success=True, message_id=last_message_id)

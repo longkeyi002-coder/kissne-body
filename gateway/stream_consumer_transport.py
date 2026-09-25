@@ -38,18 +38,30 @@ class StreamTransportMixin:
         return await self.adapter.edit_message(**kwargs)
 
     async def _try_seed_frame(self, fail_log: str, *, exc_info: bool = False) -> bool:
-        """Open a native stream with an empty seed frame (typing indicator before any token) as a
-        bool; a raise logs ``fail_log`` at DEBUG (error formatted in, or the traceback when
-        ``exc_info``) and reads as False."""
-        seed = self.adapter.send_stream_frame(
-            "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+        """Open a native stream with an empty seed frame and contain call-time failures.
+
+        ``send_stream_frame`` is an async method, but Python evaluates the method call before
+        creating its coroutine. A signature mismatch therefore escapes ``_try_frame`` unless
+        the invocation itself is inside this boundary. This is the first frame, so an escape
+        here would terminate ``run()`` before its normal exception guard is entered.
+        """
+        try:
+            seed = self.adapter.send_stream_frame(
+                "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+        except Exception:
+            logger.debug(fail_log, exc_info=exc_info)
+            return False
         return await self._try_frame(seed, fail_log, exc_info=exc_info)
 
     @staticmethod
     async def _try_frame(coro, fail_log: str, *, exc_info: bool = False) -> bool:
         """Await a frame send as a bool; a raise logs ``fail_log`` at DEBUG and reads as False."""
         try:
-            return bool(await coro)
+            result = await coro
+            # Native adapters return SendResult; a failed result must enter the same
+            # fallback path as an exception. ``bool(SendResult)`` is otherwise always True.
+            success = getattr(result, "success", None)
+            return bool(success if success is not None else result)
         except Exception as e:
             if exc_info:
                 logger.debug(fail_log, exc_info=True)
