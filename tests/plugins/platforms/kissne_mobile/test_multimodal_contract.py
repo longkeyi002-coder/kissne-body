@@ -103,6 +103,65 @@ def test_sticker_reaches_runtime_as_sticker_media_not_caption(tmp_path):
     assert captured == [("", MessageType.STICKER, ["image/png"], [PNG])]
 
 
+def test_multipart_sticker_reaches_runtime_and_history_as_sticker(tmp_path):
+    async def scenario():
+        import aiohttp
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            captured = []
+
+            async def capture(event):
+                captured.append({
+                    "text": event.text,
+                    "message_type": event.message_type,
+                    "media_types": list(event.media_types),
+                    "bytes": [Path(p).read_bytes() for p in event.media_urls],
+                })
+
+            adapter.handle_message = capture
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                form = aiohttp.FormData()
+                form.add_field("message_id", "stk-multipart-1")
+                form.add_field("kind", "sticker")
+                form.add_field("file_name", "happy.webp")
+                form.add_field("mime_type", "image/webp")
+                form.add_field("file", PNG, filename="happy.webp", content_type="image/webp")
+                headers = {"Authorization": f"Bearer {token}"}
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"http://127.0.0.1:{port}/messages", data=form, headers=headers,
+                    ) as response:
+                        status = response.status
+                        payload = await response.json()
+                rows = adapter.device_store().attachment_messages("inst-1")
+            finally:
+                await stop(adapter)
+        return status, payload, captured, rows
+
+    status, payload, captured, rows = run(scenario())
+    assert status == 202, (status, payload)
+    assert payload["kind"] == "sticker"
+    assert captured == [{
+        "text": "",
+        "message_type": MessageType.STICKER,
+        "media_types": ["image/webp"],
+        "bytes": [PNG],
+    }]
+    sticker_rows = [row for row in rows if row["turn_id"] == payload["turn_id"]]
+    assert sticker_rows == [{
+        "turn_id": payload["turn_id"],
+        "text": "",
+        "attachments": [{"type": "sticker", "mime_type": "image/webp", "label": "happy.webp"}],
+        "created_at": sticker_rows[0]["created_at"],
+    }]
+
+
 def test_text_contract_remains_backward_compatible(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
