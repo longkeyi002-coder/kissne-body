@@ -755,11 +755,11 @@ def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
                 await adapter.send(
                     INSTALLATION, "final B", reply_to=turn_b["turn_id"])
                 events = (await _drain(port, token, 0)).get("events") or []
-                return turn_a, turn_b, late_reasoning, late_draft, late_final, events
+                return (turn_a, turn_b, conversation_a.session_id, conversation_b.session_id,\n                        late_reasoning, late_draft, late_final, events)
             finally:
                 await stop(adapter)
 
-    turn_a, turn_b, late_reasoning, late_draft, late_final, events = run(scenario())
+    (turn_a, turn_b, conversation_a_id, conversation_b_id,\n     late_reasoning, late_draft, late_final, events) = run(scenario())
     assert late_reasoning.success is True
     assert late_draft.success is True
     assert late_final.success is True
@@ -767,6 +767,13 @@ def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
     late = [event for event in events if event.get("text") in late_texts]
     assert {event.get("text") for event in late} == late_texts, events
     assert all(event.get("turn_id") == turn_a["turn_id"] for event in late), late
+    assert all(event.get("conversation_id") == conversation_a_id for event in late), late
+    assert any(
+        event.get("turn_id") == turn_b["turn_id"]
+        and event.get("conversation_id") == conversation_b_id
+        and event.get("text") == "final B"
+        for event in events
+    ), events
     assert not any(
         event.get("turn_id") == turn_b["turn_id"] and event.get("text") in late_texts
         for event in events
