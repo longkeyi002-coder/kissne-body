@@ -1268,8 +1268,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
                 stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
                 message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
-                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
+                item: Dict[str, Any] = {
+                    "message_ref": message_ref, "role": role, "text": text, "created_at": stamp,
+                }
                 if mobile_turn:
+                    # Public history must carry explicit turn identity. The web client must
+                    # not have to infer an assistant/tool row from the preceding user row.
+                    item["turn_id"] = mobile_turn
                     item["_turn_id"] = mobile_turn
                 if attachments:
                     item["attachments"] = attachments
@@ -1291,6 +1296,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                                if str(item.get("turn_id") or "") == turn_id), {})
                 rows.append({
                     "message_ref": f"turn:{turn_id}:user",
+                    "turn_id": turn_id,
                     "_turn_id": turn_id,
                     "role": "user",
                     "text": str(record.get("text") or ""),
