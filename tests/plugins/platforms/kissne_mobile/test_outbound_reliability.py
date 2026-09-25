@@ -563,3 +563,39 @@ def test_gateway_consumer_projects_native_tool_progress_as_typed_event(tmp_path)
     assert progress and progress[-1]["turn_id"] == turn["turn_id"]
     assert progress[-1]["activity"]["detail"] == "正在检查文件"
     assert visible and visible[-1]["text"] == "answer"
+
+
+
+def test_queue_cap_never_discards_unacked_terminal_event(tmp_path):
+    """Queue pressure must not violate the explicit-ACK durability contract."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            adapter._outbound_cap = 3
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="slow client", message_id="m-cap")
+                for index in range(8):
+                    await adapter.send_draft(INSTALLATION, 91, "draft " + str(index))
+                await adapter.send(INSTALLATION, "terminal answer")
+                payload = await _drain(port, token, 0)
+                return turn, payload
+            finally:
+                await stop(adapter)
+
+    turn, payload = run(scenario())
+    events = payload.get("events") or []
+    assert len(events) >= 10, events
+    assert events[0].get("type") == "pending", events
+    assert any(
+        event.get("type") == "completed"
+        and event.get("turn_id") == turn["turn_id"]
+        and event.get("text") == "terminal answer"
+        for event in events
+    ), events
+    seqs = [event["seq"] for event in events]
+    assert seqs == list(range(seqs[0], seqs[-1] + 1)), seqs
