@@ -622,7 +622,7 @@ def test_ack_cannot_retire_events_beyond_last_delivered_cursor(tmp_path):
 
                 # Deliberately acknowledge far beyond what this installation was served.
                 acked = await http(
-                    port, "POST", "/ack", token=token,
+                    port, "POST", "/messages", token=token,
                     body={"ack": {"cursor": delivered + 1000}},
                 )
                 remaining = await _drain(port, token, delivered)
@@ -667,7 +667,7 @@ def test_delivery_watermark_survives_runtime_restart(tmp_path):
             second_port = await start(restarted)
             try:
                 acked = await http(
-                    second_port, "POST", "/ack", token=token,
+                    second_port, "POST", "/messages", token=token,
                     body={"ack": {"cursor": delivered + 1000}},
                 )
                 remaining = await _drain(second_port, token, delivered)
@@ -705,11 +705,11 @@ def test_repeated_poll_and_ack_are_idempotent(tmp_path):
                 cursor = first["next_cursor"]
 
                 ack1 = await http(
-                    port, "POST", "/ack", token=token,
+                    port, "POST", "/messages", token=token,
                     body={"ack": {"cursor": cursor}},
                 )
                 ack2 = await http(
-                    port, "POST", "/ack", token=token,
+                    port, "POST", "/messages", token=token,
                     body={"ack": {"cursor": cursor}},
                 )
                 remaining = await _drain(port, token, cursor)
