@@ -166,18 +166,28 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
         return True
 
-    async def send_stream_frame(self, chat_id: str, content: str, *,
-                                turn_id: str = "", reply_to: Optional[str] = None,
-                                finalize: bool = False,
+    async def send_stream_frame(self, content: str = "", *legacy_args: str,
+                                chat_id: Optional[str] = None,
+                                stream_id: str = "", turn_id: str = "",
+                                reply_to: Optional[str] = None,
+                                finalize: bool = False, final: Optional[bool] = None,
                                 metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Implement GatewayStreamConsumer's native-stream contract.
 
-        turn_id identifies the Gateway stream/draft; reply_to is the inbound Mobile
-        turn (kbm_turn_*) and therefore the durable event target. Non-final frames
-        are deltas. A final frame is a completed event, never a delta followed by
-        a separate buffered send.
+        The Gateway shape is ``send_stream_frame(content, *, chat_id, reply_to,
+        turn_id, finalize, metadata)``. The positional compatibility branch keeps
+        earlier Mobile-only callers safe while production uses the canonical shape.
         """
-        stream_key = str(turn_id or "mobile")
+        if legacy_args:
+            if len(legacy_args) != 1 or chat_id is not None:
+                raise TypeError("send_stream_frame expects content, *, chat_id=...")
+            chat_id, content = content, legacy_args[0]
+        if chat_id is None or not str(chat_id).strip():
+            raise TypeError("send_stream_frame requires chat_id")
+        if final is not None:
+            finalize = bool(final)
+
+        stream_key = str(stream_id or turn_id or "mobile")
         stream_map_key = (str(chat_id or ""), stream_key)
         draft_id = self._stream_draft_ids.get(stream_map_key)
         if draft_id is None:
@@ -190,18 +200,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
             frame_metadata["_mobile_turn_id"] = str(reply_to)
 
         if not finalize:
+            if not str(content or "").strip():
+                return SendResult(success=True, message_id=None)
             return await self.send_draft(
                 chat_id, draft_id, content, metadata=frame_metadata or None)
 
         visible, _activities = self._split_draft_frame(content)
+        self._clear_draft_state(chat_id)
+        self._stream_draft_ids.pop(stream_map_key, None)
+        if not visible.strip():
+            return SendResult(success=True, message_id=None)
         message_id = await self._queue_event(
             chat_id, EVENT_COMPLETED, content=visible,
             reply_to=reply_to,
-            target_turn_id=str(reply_to or "").strip() or None,
+            target_turn_id=str(frame_metadata.get("_mobile_turn_id") or reply_to or "").strip() or None,
             extra={"draft_id": draft_id, "presentation": "assistant_text"},
         )
-        self._clear_draft_state(chat_id)
-        self._stream_draft_ids.pop(stream_map_key, None)
         if message_id is None:
             return SendResult(success=False, error="native stream finalize failed")
         return SendResult(success=True, message_id=message_id)
@@ -761,6 +775,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
 
         if last_message_id is None:
+            if explicit_turn_id:
+                return SendResult(success=False, error="turn is closed or unavailable")
             return SendResult(success=True, message_id=None)
         return SendResult(success=True, message_id=last_message_id)
 

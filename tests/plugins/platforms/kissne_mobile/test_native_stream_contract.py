@@ -82,8 +82,7 @@ async def test_mobile_native_tool_activity_uses_the_same_turn():
         "tool_name": "read", "label": "读取文件", "index": 0,
     })
     await adapter.send_draft(
-        "inst-1", 7, marker + "
-",
+        "inst-1", 7, marker + "\n",
         metadata={"_mobile_turn_id": "kbm_turn_1"},
     )
 

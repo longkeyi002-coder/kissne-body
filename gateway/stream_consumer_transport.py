@@ -46,7 +46,10 @@ class StreamTransportMixin:
         """
         try:
             seed = self.adapter.send_stream_frame(
-                "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+                "", chat_id=self.chat_id, finalize=False,
+                reply_to=self._initial_reply_to_id, turn_id=self._turn_id,
+                **({"metadata": self.metadata} if self.metadata else {}),
+            )
         except Exception:
             logger.debug(fail_log, exc_info=exc_info)
             return False
@@ -67,6 +70,16 @@ class StreamTransportMixin:
             else:
                 logger.debug(fail_log, e)
             return False
+
+    async def _send_frame(self, text: str, *, finalize: bool):
+        """Send one native frame with the complete Gateway routing contract."""
+        kwargs = dict(
+            finalize=finalize, chat_id=self.chat_id,
+            reply_to=self._initial_reply_to_id, turn_id=self._turn_id,
+        )
+        if self.metadata:
+            kwargs["metadata"] = self.metadata
+        return await self.adapter.send_stream_frame(text, **kwargs)
 
     def _close_native_state(self) -> None:
         """Mark the native stream closed (next content re-seeds or falls back)."""
