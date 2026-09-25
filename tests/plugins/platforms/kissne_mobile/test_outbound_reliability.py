@@ -740,7 +740,8 @@ def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=conversation_a)
                 turn_a = await _open_turn(port, token, text="turn A", message_id="m-turn-a")
-                assert adapter.bind_conversation(INSTALLATION, conversation_b.session_key)
+                switched = store.switch_session(adapter.mobile_session_key(INSTALLATION), conversation_b.session_id)
+                assert switched is not None and switched.session_id == conversation_b.session_id
 
                 turn_b = await _open_turn(port, token, text="turn B", message_id="m-turn-b")
                 late_reasoning = await adapter.send_reasoning(
