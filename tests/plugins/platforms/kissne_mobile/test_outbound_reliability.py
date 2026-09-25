@@ -528,3 +528,38 @@ def test_gateway_native_fallback_cannot_attach_old_turn_to_new_turn(tmp_path):
         and event.get("turn_id") == new_turn["turn_id"]
         for event in events
     ), events
+
+
+def test_gateway_consumer_projects_native_tool_progress_as_typed_event(tmp_path):
+    """The production consumer path must not persist tool progress as assistant prose."""
+    async def scenario():
+        from gateway.stream_consumer import GatewayStreamConsumer
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                turn = await _open_turn(port, token, text="inspect", message_id="m-native-progress")
+                consumer = GatewayStreamConsumer(
+                    adapter=adapter, chat_id=INSTALLATION,
+                    initial_reply_to_id=turn["turn_id"],
+                )
+                consumer._tool_progress_lines = ["正在检查文件"]
+                await consumer._send_frame(
+                    "answer\n\n---\n正在检查文件", finalize=False)
+                payload = await _drain(port, token, 0)
+                return turn, payload
+            finally:
+                await stop(adapter)
+
+    turn, payload = run(scenario())
+    events = payload.get("events") or []
+    progress = [event for event in events if event.get("presentation") == "tool_progress"]
+    visible = [event for event in events if event.get("presentation") == "assistant_text"]
+    assert progress and progress[-1]["turn_id"] == turn["turn_id"]
+    assert progress[-1]["activity"]["detail"] == "正在检查文件"
+    assert visible and visible[-1]["text"] == "answer"
