@@ -720,6 +720,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     logger.debug(
                         "[kissne_mobile] dropping late %s for closed turn %s",
                         event_type, _fingerprint(explicit_turn_id))
+                    # A rejected live frame is terminal for this Mobile turn. Retire
+                    # all draft/stream bookkeeping for the installation so repeated
+                    # cancels cannot accumulate stale stream ids indefinitely.
+                    self._clear_draft_state(installation)
+                    for key in [key for key in self._stream_draft_ids if key[0] == installation]:
+                        self._stream_draft_ids.pop(key, None)
                     return None
             else:
                 seq = await asyncio.to_thread(
