@@ -199,3 +199,37 @@ def test_gateway_real_tool_events_are_semantic_not_private_markers(tmp_path):
     serialized = str(activities[-2:]) 
     assert started not in serialized and finished not in serialized
     assert "KISSNE_ACTIVITY" not in serialized
+
+
+
+def test_rejected_old_stream_cleanup_does_not_erase_new_turn_draft_state(tmp_path):
+    """A late cancelled stream may retire itself, never another turn's in-memory draft."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                old_turn = await _open_turn(port, token, text="old", message_id="m-old-scope")
+                await http(port, "POST", "/cancel", token=token,
+                           body={"turn_id": old_turn["turn_id"]})
+                new_turn = await _open_turn(port, token, text="new", message_id="m-new-scope")
+                await adapter.send_stream_frame(
+                    "new draft", chat_id=INSTALLATION, stream_id="new-stream",
+                    reply_to=new_turn["turn_id"], finalize=False)
+                new_key = (INSTALLATION, "new-stream")
+                new_draft_id = adapter._stream_draft_ids[new_key]
+                stale = await adapter.send_stream_frame(
+                    "late old", chat_id=INSTALLATION, stream_id="old-stream",
+                    reply_to=old_turn["turn_id"], finalize=False)
+                return stale, new_key, new_draft_id, dict(adapter._stream_draft_ids), dict(adapter._draft_text_last)
+            finally:
+                await stop(adapter)
+
+    stale, new_key, new_draft_id, streams, drafts = run(scenario())
+    assert stale.success is False
+    assert streams.get(new_key) == new_draft_id
+    assert drafts.get((INSTALLATION, new_draft_id)) == "new draft"
