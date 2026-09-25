@@ -464,11 +464,10 @@ class DeviceStore:
                     if int(moved.rowcount or 0) != 1:
                         conn.rollback()
                         return None
-                if int(cap) > 0:
-                    conn.execute(
-                        "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
-                        (installation, seq - int(cap)),
-                    )
+                # Never evict unacknowledged events here. The caller-visible contract is
+                # durable delivery until explicit ACK; deleting by queue length silently creates
+                # cursor holes for slow/offline clients. Retention must be based on acknowledged
+                # rows (ack_events) or an explicit expiry protocol, not enqueue pressure.
                 conn.commit()
                 return seq
             except Exception:
@@ -506,13 +505,9 @@ class DeviceStore:
                     (installation, seq, turn_id, str(event_type),
                      json.dumps(body, ensure_ascii=False), now),
                 )
-                if int(cap) > 0:
-                    # A device that never acks must not grow the file without bound: the oldest events
-                    # fall off once the window is exceeded (acknowledgement is the normal way they go).
-                    conn.execute(
-                        "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
-                        (installation, seq - int(cap)),
-                    )
+                # Unacknowledged rows are intentionally retained. A size cap that deletes
+                # them contradicts the cursor/ACK reliability contract and can discard terminal
+                # completed/cancelled events while the device is offline.
                 conn.commit()
             except Exception:
                 conn.rollback()
