@@ -660,17 +660,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=message_id)
 
     async def send_reasoning(self, chat_id: str, content: str, *,
-                             draft_id: int = 0) -> SendResult:
+                             draft_id: int = 0, turn_id: str = "") -> SendResult:
         """Queue provider-visible reasoning on its own transport lane.
 
-        This never enters assistant_text: final answer scrubbing remains unchanged while
-        models/providers that expose reasoning can stream it to capable clients.
+        turn_id is the Runtime-admitted Mobile server turn id. It is separate
+        from the Gateway stream UUID used by native draft frames.
         """
         text = str(content or "")
         if not text:
             return SendResult(success=True, message_id=None)
         message_id = await self._queue_event(
             chat_id, EVENT_DELTA, content=text,
+            target_turn_id=str(turn_id or "").strip() or None,
             extra={
                 "draft_id": int(draft_id or 0),
                 "presentation": "reasoning",

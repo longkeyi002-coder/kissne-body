@@ -1179,8 +1179,18 @@ class TurnRunner:
             def reasoning_cb(text: str) -> None:
                 if not ctx._run_still_current() or not str(text or ""):
                     return
+                kwargs = {}
+                # Mobile's inbound server turn id is the event message id. Pass it through
+                # when the adapter supports explicit turn binding; older adapters keep the
+                # two-argument contract.
+                if str(getattr(ctx, "event_message_id", "") or ""):
+                    kwargs["turn_id"] = str(ctx.event_message_id)
+                try:
+                    pending = reasoning_sender(ctx._status_chat_id, str(text), **kwargs)
+                except TypeError:
+                    pending = reasoning_sender(ctx._status_chat_id, str(text))
                 self._schedule(
-                    reasoning_sender(ctx._status_chat_id, str(text)),
+                    pending,
                     "reasoning_callback scheduling error",
                 )
             agent.reasoning_callback = reasoning_cb

@@ -13,6 +13,7 @@ import pytest
 
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
+from gateway.stream_events import ToolCallChunk, ToolCallFinished
 from plugins.platforms.kissne_mobile.device_store import EVENT_COMPLETED, EVENT_DELTA
 from tests.plugins.platforms.kissne_mobile._transport_harness import (
     isolated_runtime,
@@ -116,3 +117,77 @@ async def test_real_mobile_consumer_to_adapter_l3_seed_delta_and_finalize(tmp_pa
     assert EVENT_COMPLETED in event_types
     assert all(item[2].get("target_turn_id") == "kbm_turn_server" for item in events)
     assert consumer._use_native_streaming is True
+
+
+@pytest.mark.asyncio
+async def test_l3_nine_native_mobile_delivery_scenarios(tmp_path):
+    """Cover the nine boundary cases that must share one durable server turn."""
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+        events = []
+
+        async def capture_event(installation_id, event_type, **kwargs):
+            events.append((installation_id, event_type, kwargs))
+            return f"event-{len(events)}"
+
+        adapter._queue_event = capture_event
+        server_turn = "kbm_turn_primary"
+        other_turn = "kbm_turn_other"
+        stream = "gateway-stream-primary"
+
+        # 1 seed: opens the native lane but emits no user-visible delta.
+        await adapter.send_stream_frame("", chat_id="inst-1", reply_to=server_turn, turn_id=stream)
+        # 2 first text delta.
+        await adapter.send_stream_frame("hello", chat_id="inst-1", reply_to=server_turn, turn_id=stream)
+        # 3 duplicate cumulative delta is deduplicated.
+        await adapter.send_stream_frame("hello", chat_id="inst-1", reply_to=server_turn, turn_id=stream)
+        # 4 tool start and 5 tool finish stay typed activity events.
+        start = adapter.format_tool_event(
+            ToolCallChunk(tool_name="terminal", preview="检查 Git", index=1)
+        )
+        finish = adapter.format_tool_event(
+            ToolCallFinished(tool_name="terminal", duration=0.2, ok=True, index=1)
+        )
+        await adapter.send_stream_frame(
+            start, chat_id="inst-1", reply_to=server_turn, turn_id=stream
+        )
+        await adapter.send_stream_frame(
+            finish, chat_id="inst-1", reply_to=server_turn, turn_id=stream
+        )
+        # 6 reasoning is a separate lane but keeps the same durable turn.
+        reasoning = await adapter.send_reasoning(
+            "inst-1", "先检查运行状态", turn_id=server_turn
+        )
+        # 7 final text closes the primary turn.
+        await adapter.send_stream_frame(
+            "hello", chat_id="inst-1", reply_to=server_turn,
+            turn_id=stream, finalize=True
+        )
+        # 8 an empty final still closes a turn.
+        await adapter.send_stream_frame(
+            "", chat_id="inst-1", reply_to=other_turn,
+            turn_id="gateway-stream-other", finalize=True
+        )
+        # 9 a late frame carries its original server turn, never the other one.
+        await adapter.send_stream_frame(
+            "late", chat_id="inst-1", reply_to=server_turn,
+            turn_id=stream
+        )
+
+    assert reasoning.success
+    assert [item[1] for item in events].count(EVENT_COMPLETED) == 2
+    assert all(
+        item[2].get("target_turn_id") in {server_turn, other_turn}
+        for item in events
+    )
+    assert any(
+        item[2].get("extra", {}).get("presentation") == "reasoning"
+        and item[2].get("target_turn_id") == server_turn
+        for item in events
+    )
+    activities = [
+        item[2].get("extra", {}).get("activity", {})
+        for item in events
+        if item[2].get("extra", {}).get("presentation") in {"tool_call", "tool_result"}
+    ]
+    assert {str(item.get("kind")) for item in activities} == {"tool_call", "tool_result"}
