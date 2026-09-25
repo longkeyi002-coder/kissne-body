@@ -1351,6 +1351,10 @@ class SessionStore(
                 except Exception:
                     for key, data in rollback.items():
                         self._entries[key] = SessionEntry.from_dict(data)
+                    # The first write may have partially reached a mirror. Best-effort
+                    # persistence of the original routing snapshot is part of rollback.
+                    with contextlib.suppress(Exception):
+                        self._save()
                     raise
                 self._session_owner_hints.pop(session_id, None)
             return True
