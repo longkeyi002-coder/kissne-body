@@ -170,13 +170,23 @@ def test_gateway_real_tool_events_are_semantic_not_private_markers(tmp_path):
                     adapter=adapter, chat_id=INSTALLATION,
                     initial_reply_to_id=turn["turn_id"],
                 )
-                started = adapter.format_tool_event(
-                    ToolCallChunk("read_file", args={"path": "gateway/session.py"}, index=7)
+                from gateway.stream_dispatch import GatewayEventDispatcher
+
+                consumer._use_native_streaming = True
+                dispatcher = GatewayEventDispatcher(
+                    adapter, sink=consumer, enqueue_tool_line=consumer.on_tool_progress,
                 )
-                finished = adapter.format_tool_event(
-                    ToolCallFinished("read_file", duration=0.25, ok=True, index=7)
+                start_event = ToolCallChunk(
+                    "read_file", args={"path": "gateway/session.py"}, index=7
                 )
-                consumer._tool_progress_lines = [started, finished]
+                finish_event = ToolCallFinished(
+                    "read_file", duration=0.25, ok=True, index=7
+                )
+                started = adapter.format_tool_event(start_event)
+                finished = adapter.format_tool_event(finish_event)
+                dispatcher.dispatch(start_event)
+                dispatcher.dispatch(finish_event)
+                consumer._drain_queue()
                 await consumer._send_frame(
                     consumer._compose_frame_content(), finalize=False
                 )
