@@ -2,6 +2,7 @@
 explicit resets and the dynamic "Current Session Context" system prompt section."""
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
@@ -755,6 +756,15 @@ class RouteBindingError(ValueError):
     :meth:`SessionStore.bind_source_to_existing_session`: the refusal never half-applies."""
 
 
+class SessionDeleteError(ValueError):
+    """A public SessionStore delete was refused or could not commit atomically."""
+
+    def __init__(self, code: str, detail: str = ""):
+        self.code = code
+        super().__init__(detail or code)
+
+
+
 class SessionStore(
     SessionPersistenceMixin, SessionRecoveryMixin, SessionLifecycleMixin, SessionTranscriptMixin,
 ):
@@ -1257,6 +1267,101 @@ class SessionStore(
             return None
         with self._lock:
             return self._entry_locked(session_key)
+
+    def delete_session(
+        self, session_id: str, *, requester_session_key: Optional[str] = None,
+        reason: str = "session_deleted",
+    ) -> bool:
+        """Atomically remove every routing alias for one inactive session.
+
+        The adapter must not coordinate SessionDB and routing-index writes itself. This
+        public operation performs the ownership/lease check, gathers all aliases,
+        promotes the durable row to an explicit reset boundary, removes the aliases,
+        and compensates both sides when a later write fails. True means the whole
+        operation committed; SessionDeleteError is a stable refusal/failure code.
+        """
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise SessionDeleteError("not_found")
+
+        with self._lock:
+            self._ensure_loaded_locked()
+            aliases = {
+                key: entry for key, entry in self._entries.items()
+                if entry.session_id == session_id
+            }
+            if not aliases:
+                raise SessionDeleteError("not_found")
+            if requester_session_key and (
+                self._entries.get(requester_session_key) is not None
+                and self._entries[requester_session_key].session_id == session_id
+            ):
+                raise SessionDeleteError("active")
+            active_keys = [
+                key for key, entry in aliases.items()
+                if entry.active_turn_token
+                or self._has_active_processes_safe(key, context="delete")
+            ]
+            if active_keys:
+                raise SessionDeleteError("active")
+
+        db = self._db_for_key(next(iter(aliases)))
+        if db is None:
+            raise SessionDeleteError("persistence", "session database unavailable")
+        try:
+            row = db.get_session(session_id)
+            if row is None:
+                raise SessionDeleteError("not_found")
+            if row.get("end_reason") is not None:
+                raise SessionDeleteError("not_found")
+            promote = getattr(db, "promote_to_session_reset", None)
+            if callable(promote):
+                promote(session_id, reason)
+            else:
+                db.end_session(session_id, reason)
+        except SessionDeleteError:
+            raise
+        except Exception as exc:
+            raise SessionDeleteError("persistence", str(exc)) from exc
+
+        try:
+            with self._lock:
+                self._ensure_loaded_locked()
+                current = {
+                    key: entry for key, entry in self._entries.items()
+                    if entry.session_id == session_id
+                }
+                if not current:
+                    raise SessionDeleteError("not_found")
+                if requester_session_key and requester_session_key in current:
+                    raise SessionDeleteError("active")
+                if any(
+                    entry.active_turn_token
+                    or self._has_active_processes_safe(key, context="delete")
+                    for key, entry in current.items()
+                ):
+                    raise SessionDeleteError("active")
+                rollback = {
+                    key: entry.to_dict() for key, entry in current.items()
+                }
+                for key in current:
+                    self._entries.pop(key, None)
+                try:
+                    self._save()
+                except Exception:
+                    for key, data in rollback.items():
+                        self._entries[key] = SessionEntry.from_dict(data)
+                    raise
+                self._session_owner_hints.pop(session_id, None)
+            return True
+        except SessionDeleteError:
+            with contextlib.suppress(Exception):
+                db.reopen_session(session_id)
+            raise
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                db.reopen_session(session_id)
+            raise SessionDeleteError("persistence", str(exc)) from exc
 
     def peek_session_id(self, session_key: str) -> Optional[str]:
         """Lock-held accessor for the key -> session_id mapping (None if unknown)."""
