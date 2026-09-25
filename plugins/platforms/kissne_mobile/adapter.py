@@ -210,21 +210,51 @@ class KissneMobileAdapter(BasePlatformAdapter):
         progress_seen = self._draft_activity_seen.setdefault((str(chat_id), draft_id), set())
         progress_message_id: Optional[str] = None
         for index, line in enumerate(progress_lines):
-            identity = f"native-progress:{hashlib.sha256(line.encode('utf-8')).hexdigest()}"
-            if identity in progress_seen:
-                continue
-            progress_seen.add(identity)
+            # Structured-capable adapters feed format_tool_event() markers through the
+            # consumer progress lane. Decode those markers back to semantic Activity
+            # instead of exposing the private transport marker/base64 as UI text.
+            decoded = self._decode_activity_marker(line)
+            if decoded is not None:
+                identity = str(
+                    decoded.get("tool_call_id")
+                    or f"draft-tool:{decoded.get('index', index)}"
+                )
+                kind = str(decoded.get("kind") or "tool_call")
+                phase_key = f"{kind}:{identity}"
+                if phase_key in progress_seen:
+                    continue
+                progress_seen.add(phase_key)
+                presentation = "tool_result" if kind == "tool_result" else "tool_call"
+                activity = dict(decoded)
+                if kind == "tool_call":
+                    self._draft_tool_labels.setdefault((str(chat_id), draft_id), {})[identity] = str(
+                        activity.get("label") or ""
+                    )
+                elif not activity.get("label"):
+                    activity["label"] = self._draft_tool_labels.setdefault(
+                        (str(chat_id), draft_id), {}
+                    ).get(identity, "") or self._semantic_activity_label(
+                        str(activity.get("tool_name") or ""), None, None
+                    )
+            else:
+                identity = f"native-progress:{hashlib.sha256(line.encode('utf-8')).hexdigest()}"
+                phase_key = identity
+                if phase_key in progress_seen:
+                    continue
+                progress_seen.add(phase_key)
+                presentation = "tool_progress"
+                activity = {
+                    "tool_call_id": identity, "detail": line,
+                    "label": line, "index": index, "status": "running",
+                }
             progress_message_id = await self._queue_event(
                 chat_id, EVENT_DELTA, content="",
                 target_turn_id=str(frame_metadata.get("_mobile_turn_id") or reply_to or "").strip() or None,
                 extra={
                     "draft_id": draft_id,
-                    "presentation": "tool_progress",
+                    "presentation": presentation,
                     "tool_call_id": identity,
-                    "activity": {
-                        "tool_call_id": identity, "detail": line,
-                        "label": line, "index": index, "status": "running",
-                    },
+                    "activity": activity,
                 },
             )
             if progress_message_id is None and reply_to:
