@@ -224,4 +224,27 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
 
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
+def test_admin_status_does_not_claim_unavailable_sources_are_real(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                return await http(port, "GET", "/admin/status", token=token)
+            finally:
+                await stop(adapter)
 
+    status, body = run(scenario())
+    assert status == 200, body
+    assert body["git"] == {
+        "available": False, "source": "not_connected",
+        "head": None, "describe": None, "branch": None, "dirty_files": None,
+    }
+    assert body["deploy"] == {
+        "available": False, "source": "not_connected",
+        "running": None, "success": None, "type": None,
+    }
