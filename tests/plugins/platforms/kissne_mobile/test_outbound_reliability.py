@@ -725,3 +725,53 @@ def test_repeated_poll_and_ack_are_idempotent(tmp_path):
     events = remaining.get("events") or []
     assert events, remaining
     assert events[0]["seq"] == first["next_cursor"] + 1, remaining
+
+
+def test_switching_conversation_cannot_rehome_late_old_turn_events(tmp_path):
+    """Late A events stay bound to A's turn after the installation is rebound to B."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            conversation_a = preexisting_conversation(store, chat_id="chat-a", user_id="user-a")
+            conversation_b = preexisting_conversation(store, chat_id="chat-b", user_id="user-b")
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation_a)
+                turn_a = await _open_turn(port, token, text="turn A", message_id="m-turn-a")
+                assert adapter.bind_conversation(INSTALLATION, conversation_b.session_key)
+
+                turn_b = await _open_turn(port, token, text="turn B", message_id="m-turn-b")
+                late_reasoning = await adapter.send_reasoning(
+                    INSTALLATION, "late reasoning A", draft_id=901, turn_id=turn_a["turn_id"])
+                late_draft = await adapter.send_draft(
+                    INSTALLATION, 902, "late draft A",
+                    metadata={"_mobile_turn_id": turn_a["turn_id"]})
+                late_final = await adapter.send(
+                    INSTALLATION, "late final A", reply_to=turn_a["turn_id"])
+                await adapter.send_reasoning(
+                    INSTALLATION, "reasoning B", draft_id=903, turn_id=turn_b["turn_id"])
+                await adapter.send(
+                    INSTALLATION, "final B", reply_to=turn_b["turn_id"])
+                events = (await _drain(port, token, 0)).get("events") or []
+                return turn_a, turn_b, late_reasoning, late_draft, late_final, events
+            finally:
+                await stop(adapter)
+
+    turn_a, turn_b, late_reasoning, late_draft, late_final, events = run(scenario())
+    assert late_reasoning.success is True
+    assert late_draft.success is True
+    assert late_final.success is True
+    late_texts = {"late reasoning A", "late draft A", "late final A"}
+    late = [event for event in events if event.get("text") in late_texts]
+    assert {event.get("text") for event in late} == late_texts, events
+    assert all(event.get("turn_id") == turn_a["turn_id"] for event in late), late
+    assert not any(
+        event.get("turn_id") == turn_b["turn_id"] and event.get("text") in late_texts
+        for event in events
+    ), events
+    assert any(
+        event.get("turn_id") == turn_b["turn_id"] and event.get("text") == "final B"
+        for event in events
+    ), events
