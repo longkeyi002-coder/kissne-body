@@ -1371,8 +1371,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("ack_cursor_required", 400)
         if cursor < 0:
             return _error_response("ack_cursor_must_not_be_negative", 400)
-        retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
-        return _json_response({"ok": True, "acked": retired, "cursor": cursor})
+        retired, accepted_cursor = await asyncio.to_thread(
+            self.device_store().ack_events, installation, cursor)
+        return _json_response({
+            "ok": True, "acked": retired, "cursor": accepted_cursor,
+            "requested_cursor": cursor,
+        })
 
     @staticmethod
     def _normalize_attachment_kind(kind: Any, mime_type: Any) -> str:
@@ -1715,6 +1719,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         events = await asyncio.to_thread(
             self.device_store().events_after, installation, cursor, limit=limit)
         next_cursor = int(events[-1]["seq"]) if events else cursor
+        if events:
+            await asyncio.to_thread(
+                self.device_store().mark_delivered, installation, next_cursor)
         return _json_response({
             "ok": True,
             "events": events,
