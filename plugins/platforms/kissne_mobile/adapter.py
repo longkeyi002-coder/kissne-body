@@ -2196,24 +2196,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
             target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
             if target is None:
                 return _error_response("session_not_found", 404)
-            # SessionStore intentionally has no destructive delete API. Remove the
-            # inactive conversation from the active routing index and end its durable
-            # session row through the same lifecycle primitive used by resets/switches.
-            target_key = str(target.session_key or "")
-            db = store._db_for_key(target_key)
-            if db is not None:
-                promote = getattr(db, "promote_to_session_reset", None)
-                if callable(promote):
-                    promote(session_id, "session_deleted")
-                else:
-                    db.end_session(session_id, "session_deleted")
-            with store._lock:
-                store._ensure_loaded_locked()
-                routed = store._entries.get(target_key)
-                if routed is None or routed.session_id != session_id:
+            try:
+                deleted = await asyncio.to_thread(
+                    store.delete_session,
+                    session_id,
+                    requester_session_key=self.mobile_session_key(installation),
+                )
+            except Exception as exc:
+                code = str(getattr(exc, "code", "") or "")
+                if code == "not_found":
                     return _error_response("session_not_found", 404)
-                store._entries.pop(target_key, None)
-                store._save()
+                if code == "active":
+                    return _error_response("session_active", 409)
+                logger.warning(
+                    "[kissne_mobile] could not delete session %s",
+                    _fingerprint(session_id), exc_info=True,
+                )
+                return _error_response("session_delete_unavailable", 503)
+            if not deleted:
+                return _error_response("session_delete_unavailable", 503)
         except Exception:
             logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
             return _error_response("session_delete_unavailable", 503)
