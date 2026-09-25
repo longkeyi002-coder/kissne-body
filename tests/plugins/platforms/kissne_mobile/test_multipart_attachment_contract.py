@@ -5,7 +5,7 @@ from pathlib import Path
 import aiohttp
 import pytest
 
-from gateway.platforms.event import MessageType
+from gateway.platforms.event import MessageType, ProcessingOutcome
 from _transport_harness import (
     build_session_store, isolated_runtime, make_adapter, pair,
     preexisting_conversation, run, start, stop,
@@ -69,9 +69,11 @@ async def test_multipart_sticker_matches_json_semantics_and_admission_persistenc
             assert saved[0]["attachments"] == [
                 {"type": "sticker", "mime_type": "image/png", "label": "sticker.png"}
             ]
+
+            await adapter.on_processing_complete(event, ProcessingOutcome.FAILURE)
+            assert adapter.device_store().attachment_messages("inst-1") == []
+            assert not Path(event.media_urls[0]).exists()
         finally:
-            if captured:
-                adapter._cleanup_inbound_media(captured[0])
             await stop(adapter)
 
 

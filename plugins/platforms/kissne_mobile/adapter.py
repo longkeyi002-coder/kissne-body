@@ -75,7 +75,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms._shared import coerce_port, get_scoped_secret
 from gateway.platforms.base import BasePlatformAdapter, SendResult
-from gateway.platforms.event import MessageEvent, MessageType
+from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.session import build_session_key
 
 from .device_store import (
@@ -687,6 +687,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         elif bool((metadata or {}).get("_interim_send")):
             message_id = await self._queue_event(
                 installation, EVENT_DELTA, content=content, reply_to=reply_to,
+                target_turn_id=str(reply_to or "").strip() or None,
                 extra={"presentation": "commentary", "interim": True})
         else:
             pending_turn = await asyncio.to_thread(
@@ -702,6 +703,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 final_extra = {"presentation": "assistant_text"} if reply_to is None else None
                 message_id = await self._queue_event(
                     installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                    target_turn_id=str(reply_to or "").strip() or None,
                     extra=final_extra)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
@@ -1352,6 +1354,32 @@ class KissneMobileAdapter(BasePlatformAdapter):
             list(metadata.get("attachments") or []),
         )
         metadata["persisted"] = True
+
+    async def on_processing_complete(
+        self, event: MessageEvent, outcome: ProcessingOutcome,
+    ) -> None:
+        """Remove attachment projections that never reached a successful turn.
+
+        ``on_processing_start`` runs before the Runtime decides whether the turn is accepted. A
+        rejected, failed, or cancelled turn must not leave either the history projection or the
+        materialized upload behind; otherwise the next startup can synthesize a ghost attachment.
+        """
+        if outcome not in {ProcessingOutcome.FAILURE, ProcessingOutcome.CANCELLED}:
+            return
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        try:
+            if metadata.get("persisted"):
+                await asyncio.to_thread(
+                    self.device_store().delete_attachment_message,
+                    str(metadata.get("installation") or ""),
+                    str(metadata.get("turn_id") or ""),
+                )
+        except Exception:
+            logger.warning("[kissne_mobile] failed to remove rejected attachment projection", exc_info=True)
+        finally:
+            self._cleanup_inbound_media(event)
 
     def _cleanup_inbound_media(self, event: MessageEvent) -> None:
         metadata = getattr(event, "_kissne_attachment_metadata", None)

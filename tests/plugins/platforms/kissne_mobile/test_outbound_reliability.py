@@ -486,3 +486,45 @@ def test_cancelled_native_stream_cannot_attach_draft_to_new_turn(tmp_path):
         and event.get("turn_id") == old_turn["turn_id"]
         for event in events
     ), events
+
+
+def test_gateway_native_fallback_cannot_attach_old_turn_to_new_turn(tmp_path):
+    """A rejected native frame must not fall back into the current pending turn."""
+    async def scenario():
+        from gateway.stream_consumer import GatewayStreamConsumer
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                old_turn = await _open_turn(port, token, text="old", message_id="m-old-fallback")
+                status, payload, _ = await http(
+                    port, "POST", "/cancel", token=token,
+                    body={"turn_id": old_turn["turn_id"]})
+                assert status == 200, payload
+                new_turn = await _open_turn(port, token, text="new", message_id="m-new-fallback")
+
+                consumer = GatewayStreamConsumer(
+                    adapter=adapter, chat_id=INSTALLATION,
+                    initial_reply_to_id=old_turn["turn_id"],
+                )
+                consumer._use_native_streaming = True
+                consumer._native_stream_opened = True
+                delivered = await consumer._send_or_edit(
+                    "late old fallback", finalize=False, is_turn_final=False)
+                events = (await _drain(port, token, 0)).get("events") or []
+                return delivered, new_turn, events
+            finally:
+                await stop(adapter)
+
+    delivered, new_turn, events = run(scenario())
+    assert delivered is False
+    assert not any(
+        event.get("text") == "late old fallback"
+        and event.get("turn_id") == new_turn["turn_id"]
+        for event in events
+    ), events

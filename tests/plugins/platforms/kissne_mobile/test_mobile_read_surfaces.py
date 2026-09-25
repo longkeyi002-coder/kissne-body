@@ -238,7 +238,7 @@ def test_admin_status_does_not_claim_unavailable_sources_are_real(tmp_path):
             finally:
                 await stop(adapter)
 
-    status, body = run(scenario())
+    status, body, _headers = run(scenario())
     assert status == 200, body
     assert body["git"] == {
         "available": False, "source": "not_connected",
