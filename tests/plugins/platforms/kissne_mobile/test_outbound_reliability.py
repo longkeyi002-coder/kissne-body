@@ -636,3 +636,48 @@ def test_ack_cannot_retire_events_beyond_last_delivered_cursor(tmp_path):
     events = remaining.get("events") or []
     assert events, (first, acked, remaining)
     assert events[0]["seq"] == first["next_cursor"] + 1
+
+
+def test_delivery_watermark_survives_runtime_restart(tmp_path):
+    """A served-but-unacked cursor remains the ACK ceiling after the adapter restarts."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+
+            first_adapter = make_adapter()
+            first_adapter._read_limit = 2
+            first_adapter.set_session_store(store)
+            first_port = await start(first_adapter)
+            token = await pair(first_port, first_adapter, conversation=existing)
+            turn = await _open_turn(
+                first_port, token, text="restart fence", message_id="m-restart-fence")
+            for index in range(4):
+                await first_adapter.send_draft(INSTALLATION, 222, "restart draft " + str(index))
+            first = await _drain(first_port, token, 0)
+            delivered = first["next_cursor"]
+            assert len(first.get("events") or []) == 2, first
+            await stop(first_adapter)
+
+            # A fresh adapter/store is the real persistence boundary: no in-memory watermark survives.
+            restarted_store = build_session_store(home)
+            restarted = make_adapter()
+            restarted._read_limit = 2
+            restarted.set_session_store(restarted_store)
+            second_port = await start(restarted)
+            try:
+                acked = await http(
+                    second_port, "POST", "/ack", token=token,
+                    body={"ack": {"cursor": delivered + 1000}},
+                )
+                remaining = await _drain(second_port, token, delivered)
+                return turn, delivered, acked, remaining
+            finally:
+                await stop(restarted)
+
+    _turn, delivered, acked, remaining = run(scenario())
+    assert acked[0] == 200, acked
+    assert acked[1]["cursor"] == delivered, acked
+    events = remaining.get("events") or []
+    assert events, remaining
+    assert events[0]["seq"] == delivered + 1, remaining
