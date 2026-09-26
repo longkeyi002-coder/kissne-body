@@ -741,11 +741,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         explicit_turn_id = str(target_turn_id or "").strip()
         turn_id = explicit_turn_id or str(pending_turn_id or "")
         if turn_id:
-            turn_row = await asyncio.to_thread(store.turn, turn_id)
-            if isinstance(turn_row, dict):
-                conversation_id = str(turn_row.get("conversation_id") or "").strip()
-                if conversation_id:
-                    payload["conversation_id"] = conversation_id
+            conversation_id = self._turn_conversation_id(turn_id)
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
         # Explicitly-bound live frames are admitted atomically with the durable turn
         # state. This closes the check/enqueue race with cancel; completed also changes
         # pending->completed in the same transaction as its final event.
