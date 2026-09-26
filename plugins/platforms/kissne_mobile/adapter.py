@@ -64,8 +64,9 @@ import shlex
 import sys
 import time
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path as _Path
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, NamedTuple, Optional, Tuple
 
 if TYPE_CHECKING:  # typing only — the module is imported lazily where it is actually needed
     from aiohttp import web
@@ -134,6 +135,31 @@ _ACTIVITY_MARKER_SUFFIX = "]]"
 #: is rate limited instead: this many attempts per client address per window, then 429 + Retry-After.
 PAIR_ATTEMPT_LIMIT = 10
 PAIR_ATTEMPT_WINDOW_SECONDS = 60.0
+
+
+class _SelectedSession(NamedTuple):
+    """The two fields a picked conversation target has to carry: id + owning key."""
+
+    session_id: str
+    session_key: str
+
+
+def _iso_utc(value: Any) -> str:
+    """Epoch-second session timestamps as the ISO-8601 string the Android client parses."""
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+    return str(value or "")
+
+
+def _session_message_count(session: Dict[str, Any]) -> int:
+    """Stored message count of a picker row; 0 when the runtime did not report one."""
+    try:
+        return max(0, int(session.get("message_count") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _fingerprint(value: str) -> str:
@@ -1242,6 +1268,24 @@ class KissneMobileAdapter(BasePlatformAdapter):
             by_id[bound_id] = canonical if isinstance(canonical, dict) else {"id": bound_id}
         return list(by_id.values())
 
+    def _device_session_target(self, installation: str, session_id: str) -> Optional[_SelectedSession]:
+        """Resolve a picker target that no routing alias points at any more.
+
+        ``switch_session`` only needs the canonical session id, and the picker only
+        ever offers conversations this installation already owns, so membership in
+        the device's own conversation rows is the whole authorization check.
+        """
+        target_id = str(session_id or "").strip()
+        if not target_id:
+            return None
+        mobile_key = self.mobile_session_key(installation)
+        for session in self._mobile_history_sessions(installation):
+            if str(session.get("id") or "") == target_id:
+                return _SelectedSession(
+                    session_id=target_id, session_key=str(session.get("session_key") or "") or mobile_key
+                )
+        return None
+
     def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
         """Flatten /new-separated transcripts into one Mobile-visible timeline."""
         store = getattr(self, "_session_store", None)
@@ -2295,41 +2339,40 @@ class KissneMobileAdapter(BasePlatformAdapter):
         store = getattr(self, "_session_store", None)
         if store is None:
             return _error_response("session_store_unavailable", 503)
+        current = self._conversation_identity(installation)
+        current_id = str((current or {}).get("session_id") or "")
+        # The picker lists the conversations THIS installation owns, not every routing
+        # alias on the host: an alias only exists for the session a lane currently
+        # holds, so reading the index showed rows labelled with the installation and
+        # hid every conversation the device had ever used.
         try:
-            entries = await asyncio.to_thread(store.list_sessions)
+            sessions = await asyncio.to_thread(self._mobile_history_sessions, installation)
         except Exception:
             logger.warning("[kissne_mobile] could not list sessions", exc_info=True)
             return _error_response("session_list_unavailable", 503)
 
-        current = self._conversation_identity(installation)
-        current_id = str((current or {}).get("session_id") or "")
-        # Routing aliases can point at the same Conversation. Return one row per
-        # canonical session id, preferring a non-mobile key/title when available.
-        by_id: Dict[str, Dict[str, Any]] = {}
-        for entry in entries:
-            sid = str(getattr(entry, "session_id", "") or "")
+        rows: List[Dict[str, Any]] = []
+        for session in sessions:
+            sid = str(session.get("id") or "")
             if not sid:
                 continue
-            key = str(getattr(entry, "session_key", "") or "")
-            display = str(getattr(entry, "display_name", "") or "")
-            updated = getattr(entry, "updated_at", None)
-            created = getattr(entry, "created_at", None)
-            row = {
+            active = sid == current_id
+            # A /new reset leaves an empty shell behind. Offering it opens a
+            # conversation with nothing to read, which reads to the device as a
+            # failed switch.
+            messages = _session_message_count(session)
+            titled = bool(str(session.get("title") or "").strip())
+            if not messages and not titled and not active:
+                continue
+            key = str(session.get("session_key") or "") or self.mobile_session_key(installation)
+            rows.append({
                 "session_id": sid,
                 "session_key": key,
-                "title": display,
-                "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else str(updated or ""),
-                "created_at": created.isoformat() if hasattr(created, "isoformat") else str(created or ""),
-                "active": sid == current_id,
-            }
-            previous = by_id.get(sid)
-            mobile_key = key.startswith("kissne_mobile:")
-            previous_mobile = bool(previous and str(previous.get("session_key") or "").startswith("kissne_mobile:"))
-            if previous is None or (previous_mobile and not mobile_key):
-                by_id[sid] = row
-            elif sid == current_id:
-                previous["active"] = True
-        rows = list(by_id.values())
+                "title": str(session.get("title") or "").strip(),
+                "updated_at": _iso_utc(session.get("last_activity_at") or session.get("started_at")),
+                "created_at": _iso_utc(session.get("started_at")),
+                "active": active,
+            })
         rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
 
@@ -2355,6 +2398,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.warning("[kissne_mobile] could not resolve selected session", exc_info=True)
             return _error_response("session_select_unavailable", 503)
+        if target is None and session_id:
+            # Picker rows come from the device's own conversation rows, so a pick is
+            # legitimate even when no routing alias points at it any more (a /new
+            # reset or a switch away retires the alias, not the conversation).
+            target = await asyncio.to_thread(self._device_session_target, installation, session_id)
         if target is None:
             return _error_response("session_not_found", 404)
         mobile_key = self.mobile_session_key(installation)
