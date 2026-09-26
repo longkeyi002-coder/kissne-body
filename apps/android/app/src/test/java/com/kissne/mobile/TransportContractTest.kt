@@ -33,4 +33,30 @@ class TransportContractTest {
         assertEquals("file", normalizeAttachmentKind("file"))
         assertEquals("file", normalizeAttachmentKind("unknown"))
     }
+    @Test fun reinstalling_same_version_must_refresh_embedded_web_assets() {
+        assertTrue(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 26,
+            currentVersionCode = 26,
+            previousInstallStamp = 1000L,
+            currentInstallStamp = 2000L,
+        ))
+    }
+
+    @Test fun unchanged_install_must_not_refresh_embedded_web_assets() {
+        assertFalse(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 26,
+            currentVersionCode = 26,
+            previousInstallStamp = 2000L,
+            currentInstallStamp = 2000L,
+        ))
+    }
+
+    @Test fun version_upgrade_still_refreshes_embedded_web_assets() {
+        assertTrue(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 26,
+            currentVersionCode = 27,
+            previousInstallStamp = 2000L,
+            currentInstallStamp = 3000L,
+        ))
+    }
 }
