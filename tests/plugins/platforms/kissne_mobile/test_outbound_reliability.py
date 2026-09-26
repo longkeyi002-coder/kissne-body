@@ -728,18 +728,13 @@ def test_repeated_poll_and_ack_are_idempotent(tmp_path):
 
 
 
-def test_reopening_turn_cannot_rehome_its_conversation(tmp_path):
-    """A retry/reopen after a session switch must not rewrite the turn's origin."""
+def test_turn_identity_recovers_canonical_owner_without_device_mapping(tmp_path):
+    """Turn correlation carries immutable owner without adding conversation truth to DeviceStore."""
     with isolated_runtime(tmp_path):
         adapter = make_adapter()
-        device_store = adapter.device_store()
-        turn_id = "turn-immutable-origin"
-        device_store.open_turn(turn_id, INSTALLATION, conversation_id="conversation-a")
-        device_store.open_turn(turn_id, INSTALLATION, conversation_id="conversation-b")
-        row = device_store.turn(turn_id)
-        assert row is not None
-        assert row["installation_id"] == INSTALLATION
-        assert row["conversation_id"] == "conversation-a"
+        turn_id = adapter._conversation_turn_id("conversation-a")
+        assert adapter._turn_conversation_id(turn_id) == "conversation-a"
+        assert adapter._turn_conversation_id("kbm_turn_legacy") == ""
 
 
 def test_rapid_session_switches_keep_each_turn_on_its_origin(tmp_path):
