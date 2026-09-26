@@ -323,6 +323,15 @@ def test_web_session_history_contract_is_lazy_and_keeps_active_metadata():
     assert "if (active) return '当前会话';" not in source
     assert "if (active) parts.push('当前会话');" in source
 
+
+def test_session_index_matches_9120_pinned_and_active_timestamp_contract():
+    root = Path(__file__).resolve().parents[4]
+    source = (
+        root / "plugins/platforms/kissne_mobile/adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "include_pinned=True" in source
+    assert 'active_row["last_active"] = max(numeric_stamps)' in source
+
 def test_history_session_id_pages_only_target_session_to_oldest_message(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
@@ -382,17 +391,23 @@ def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_pat
                     body={"session_id": ended.session_id},
                 )
                 history = await http(port, "GET", "/history?limit=50", token=token)
+                rejected_send = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "must-not-reopen-ended", "text": "do not append"},
+                )
                 after = dict(db.get_session(ended.session_id))
-                return ended.session_id, before, selected, history, after
+                return ended.session_id, before, selected, history, rejected_send, after
             finally:
                 await stop(adapter)
 
-    ended_id, before, selected, history, after = run(scenario())
+    ended_id, before, selected, history, rejected_send, after = run(scenario())
     assert selected[0] == 200, selected
     assert selected[1]["conversation"]["session_id"] == ended_id
     assert after == before
     assert after["end_reason"] == "session_reset"
     assert history[0] == 200, history
+    assert rejected_send[0] == 409, rejected_send
+    assert rejected_send[1]["error"] == "session_read_only"
     assert len(history[1]["messages"]) == 6
     assert all(str(row["message_ref"]).startswith(ended_id + ":") for row in history[1]["messages"])
 
