@@ -1,7 +1,7 @@
 """Regression coverage for Android read surfaces."""
 from _transport_harness import (
     build_session_store, http, isolated_runtime, make_adapter, pair,
-    preexisting_conversation, run, start, stop,
+    preexisting_conversation, run, seed_transcript, start, stop,
 )
 
 
@@ -225,3 +225,124 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
 
+
+
+def test_session_index_lists_cross_source_top_level_rows_with_counts(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            mobile = preexisting_conversation(sessions, chat_id="mobile", user_id="mobile-user")
+            foreign = preexisting_conversation(sessions, chat_id="foreign", user_id="foreign-user")
+            db = sessions._db_for_session_id(foreign.session_id)
+            db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", foreign.session_id))
+            seed_transcript(sessions, mobile.session_id, 1)
+            seed_transcript(sessions, foreign.session_id, 3)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=mobile)
+                return foreign.session_id, await http(port, "GET", "/admin/sessions", token=token)
+            finally:
+                await stop(adapter)
+
+    foreign_id, result = run(scenario())
+    assert result[0] == 200, result
+    row = next(item for item in result[1]["sessions"] if item["session_id"] == foreign_id)
+    assert row["source"] == "weixin"
+    assert row["message_count"] == 6
+
+
+def test_session_index_keeps_active_archived_but_hides_other_archived(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="active-archived", user_id="active-user")
+            other = preexisting_conversation(sessions, chat_id="other-archived", user_id="other-user")
+            seed_transcript(sessions, active.session_id, 1)
+            seed_transcript(sessions, other.session_id, 1)
+            db = sessions._db_for_session_id(active.session_id)
+            db.set_session_archived(active.session_id, True)
+            db.set_session_archived(other.session_id, True)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                return active.session_id, other.session_id, await http(port, "GET", "/admin/sessions", token=token)
+            finally:
+                await stop(adapter)
+
+    active_id, other_id, result = run(scenario())
+    ids = {row["session_id"] for row in result[1]["sessions"]}
+    assert active_id in ids
+    assert other_id not in ids
+
+
+def test_history_session_id_pages_only_target_session_to_oldest_message(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="active-history", user_id="active-user")
+            target = preexisting_conversation(sessions, chat_id="target-history", user_id="target-user")
+            seed_transcript(sessions, active.session_id, 2)
+            seed_transcript(sessions, target.session_id, 61)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                before = ""
+                seen = []
+                while True:
+                    suffix = f"&before={before}" if before else ""
+                    result = await http(
+                        port, "GET",
+                        f"/history?session_id={target.session_id}&limit=50{suffix}",
+                        token=token,
+                    )
+                    assert result[0] == 200, result
+                    seen = result[1]["messages"] + seen
+                    if not result[1]["has_more"]:
+                        return target.session_id, seen
+                    before = result[1]["next_before"]
+            finally:
+                await stop(adapter)
+
+    target_id, seen = run(scenario())
+    assert len(seen) == 122
+    assert seen[0]["text"] == "seeded question 0"
+    assert seen[-1]["text"] == "seeded answer 60"
+    assert all(str(row["message_ref"]).startswith(target_id + ":") for row in seen)
+
+
+def test_cross_lane_select_changes_only_mobile_alias(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            mobile = preexisting_conversation(sessions, chat_id="mobile-origin", user_id="mobile-user")
+            foreign = preexisting_conversation(sessions, chat_id="weixin-origin", user_id="weixin-user")
+            foreign_key = foreign.session_key
+            db = sessions._db_for_session_id(foreign.session_id)
+            db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", foreign.session_id))
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=mobile)
+                before = sessions.lookup_by_session_key(foreign_key)
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": foreign.session_id},
+                )
+                after = sessions.lookup_by_session_key(foreign_key)
+                return foreign, before, selected, after, adapter.bound_conversation("inst-1")
+            finally:
+                await stop(adapter)
+
+    foreign, before, selected, after, mobile_bound = run(scenario())
+    assert selected[0] == 200, selected
+    assert before.session_id == foreign.session_id
+    assert after.session_id == foreign.session_id
+    assert after.session_key == before.session_key
+    assert mobile_bound.session_id == foreign.session_id
