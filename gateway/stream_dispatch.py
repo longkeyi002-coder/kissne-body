@@ -12,7 +12,8 @@ import logging
 from typing import Any, Callable, Optional
 
 from gateway.stream_events import (
-    Commentary, GatewayNotice, LongToolHint, MessageChunk, MessageStop, StreamEvent, ToolCallChunk,
+    Commentary, GatewayNotice, LongToolHint, MessageChunk, MessageStop, StreamEvent,
+    ToolCallChunk, ToolCallFinished,
 )
 
 logger = logging.getLogger("gateway.stream_events")
@@ -56,24 +57,27 @@ class GatewayEventDispatcher:
             logger.debug("stream-event dispatch error", exc_info=True)
 
     def _dispatch(self, event: StreamEvent) -> None:
-        # ToolCallFinished: no chrome on completion (only "started" is rendered);
-        # completion only drives onboarding hints (LongToolHint).
+        # Native/rich adapters may render completion to settle an existing Activity;
+        # the base adapter still returns no chrome for ToolCallFinished.
         if isinstance(event, (MessageChunk, MessageStop, Commentary)):
             if self.sink is not None:
                 self.adapter.render_message_event(event, self.sink)
-        elif isinstance(event, ToolCallChunk):
+        elif isinstance(event, (ToolCallChunk, ToolCallFinished)):
             self._dispatch_tool_call(event)
         elif isinstance(event, LongToolHint) and self._on_long_tool is not None:
             self._on_long_tool(event)
         elif isinstance(event, GatewayNotice) and self._on_notice is not None:
             self._on_notice(event)
 
-    def _dispatch_tool_call(self, event: ToolCallChunk) -> None:
+    def _dispatch_tool_call(self, event: ToolCallChunk | ToolCallFinished) -> None:
         if self.tool_mode == "off" or self._enqueue_tool_line is None:
             return
-        if self.tool_mode == "new" and event.tool_name == self._last_tool:
-            return
-        self._last_tool = event.tool_name
+        # Completion must always pass through so native clients can settle the
+        # matching running Activity. "new" dedup applies only to repeated starts.
+        if isinstance(event, ToolCallChunk):
+            if self.tool_mode == "new" and event.tool_name == self._last_tool:
+                return
+            self._last_tool = event.tool_name
         line = self.adapter.format_tool_event(
             event, mode=self.tool_mode, preview_max_len=self.preview_max_len,
         )

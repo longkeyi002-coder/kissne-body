@@ -187,3 +187,25 @@ def test_real_gateway_reasoning_effort_default_session_override_and_fallback(tmp
         )
         assert resolved == {"enabled": True, "effort": "low"}
         assert adapter._live_reasoning_effort(installation) == "low"
+
+
+def test_live_reasoning_effort_uses_canonical_conversation_key(tmp_path, monkeypatch):
+    """Mobile routing aliases must not hide a conversation-scoped reasoning override."""
+    class Runner:
+        def _resolve_session_reasoning_config(self, *, source, session_key, model):
+            if session_key == "canonical:conversation":
+                return {"enabled": True, "effort": "high"}
+            return {"enabled": False}
+
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+        adapter.gateway_runner = Runner()
+        monkeypatch.setattr(
+            adapter,
+            "_conversation_identity",
+            lambda _installation: {
+                "session_id": "session-1",
+                "session_key": "canonical:conversation",
+            },
+        )
+        assert adapter._live_reasoning_effort(PAIRED_INSTALLATION) == "high"

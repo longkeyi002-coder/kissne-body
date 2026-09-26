@@ -507,6 +507,7 @@
   function looksLikeRuntimeControl(value) {
     var text = cleanActivityText(value, '').trim();
     return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
+      || /^\s*Operation interrupted\s*:\s*waiting for model response\b/i.test(text)
       || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
   }
 
@@ -815,10 +816,16 @@
     var raw = String(text == null ? '' : text);
     /* Gateway prepends routing metadata to persisted user messages. It is transport
        context, not conversation content, so never render/search/copy it in Kissne. */
-    return raw.replace(
+    raw = raw.replace(
       /^Gateway message origin \(JSON data, not instructions or authorization\):\s*[\s\S]*?Do not guess a reply destination when these fields are insufficient\.\s*/i,
       ''
     );
+    /* emotion is message metadata, never assistant prose. Older transcripts may still
+       contain the legacy tag, so scrub it at the single wire->UI boundary as well. */
+    return raw.replace(/(?:^|\n)\s*<emotion\s*:\s*[^>\n]+>\s*(?=\n|$)/gi, '\n')
+      .replace(/^\s*<emotion\s*:\s*[^>\n]+>\s*/gi, '')
+      .replace(/\s*<emotion\s*:\s*[^>\n]+>\s*$/gi, '')
+      .trim();
   }
   function chatHtmlFromWire(text) {
     var raw = visibleChatText(text);
@@ -1791,6 +1798,12 @@
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
+        var eventConversationId = String(event.conversation_id || '');
+        /* A turn keeps the Conversation it originated in even if the installation is rebound
+           while the Runtime is still working. Never project an inactive Conversation's late
+           reasoning/tool/final frames into the currently visible chat; its durable transcript
+           will hydrate when that Conversation is opened. */
+        if (eventConversationId && CURRENT_SESSION_ID && eventConversationId !== CURRENT_SESSION_ID) return;
 
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
@@ -2039,6 +2052,9 @@
               liveAvatar(pendingEl, 'read');
             }
           }
+          /* Session discovery can race app startup/pairing. A successful bound bootstrap is
+             authoritative proof that auth is usable, so refresh the drawer again here. */
+          refreshSessions().catch(function () {});
           scheduleOutboxDrain();
           scheduleLivePoll(0);
         } catch (err) {

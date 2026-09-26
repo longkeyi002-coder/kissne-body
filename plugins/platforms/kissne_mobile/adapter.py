@@ -75,7 +75,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms._shared import coerce_port, get_scoped_secret
 from gateway.platforms.base import BasePlatformAdapter, SendResult
-from gateway.platforms.event import MessageEvent, MessageType
+from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.session import build_session_key
 
 from .device_store import (
@@ -162,15 +162,134 @@ class KissneMobileAdapter(BasePlatformAdapter):
     # what makes Gateway tool progress reach send_draft as typed Activity instead
     # of falling back to the legacy progress path.
     SUPPORTS_NATIVE_STREAMING = True
+    SUPPORTS_STRUCTURED_TOOL_PROGRESS = True
 
     def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
         return True
 
-    async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", final: bool = False,
+    async def send_stream_frame(self, content: str = "", *legacy_args: str,
+                                chat_id: Optional[str] = None,
+                                stream_id: str = "", turn_id: str = "",
+                                reply_to: Optional[str] = None,
+                                finalize: bool = False, final: Optional[bool] = None,
                                 metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
-        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+        """Implement GatewayStreamConsumer's native-stream contract.
+
+        The Gateway shape is ``send_stream_frame(content, *, chat_id, reply_to,
+        turn_id, finalize, metadata)``. The positional compatibility branch keeps
+        earlier Mobile-only callers safe while production uses the canonical shape.
+        """
+        if legacy_args:
+            if len(legacy_args) != 1 or chat_id is not None:
+                raise TypeError("send_stream_frame expects content, *, chat_id=...")
+            chat_id, content = content, legacy_args[0]
+        if chat_id is None or not str(chat_id).strip():
+            raise TypeError("send_stream_frame requires chat_id")
+        if final is not None:
+            finalize = bool(final)
+
+        stream_key = str(stream_id or turn_id or "mobile")
+        stream_map_key = (str(chat_id or ""), stream_key)
+        draft_id = self._stream_draft_ids.get(stream_map_key)
+        if draft_id is None:
+            digest = hashlib.sha256(stream_key.encode("utf-8")).digest()
+            draft_id = int.from_bytes(digest[:8], "big") % 2_147_483_646 + 1
+            self._stream_draft_ids[stream_map_key] = draft_id
+
+        frame_metadata = dict(metadata or {})
+        if reply_to:
+            frame_metadata["_mobile_turn_id"] = str(reply_to)
+        progress_lines = [
+            str(line) for line in (frame_metadata.pop("_stream_tool_progress", None) or [])
+            if str(line).strip()
+        ]
+        visible_content = self._strip_native_tool_progress(content, progress_lines)
+
+        # Native Gateway progress is a typed event, not assistant prose. Reuse the per-draft
+        # dedupe set so repeated frames do not create repeated Activity rows.
+        progress_seen = self._draft_activity_seen.setdefault((str(chat_id), draft_id), set())
+        progress_message_id: Optional[str] = None
+        for index, line in enumerate(progress_lines):
+            # Structured-capable adapters feed format_tool_event() markers through the
+            # consumer progress lane. Decode those markers back to semantic Activity
+            # instead of exposing the private transport marker/base64 as UI text.
+            decoded = self._decode_activity_marker(line)
+            if decoded is not None:
+                identity = str(
+                    decoded.get("tool_call_id")
+                    or f"draft-tool:{decoded.get('index', index)}"
+                )
+                kind = str(decoded.get("kind") or "tool_call")
+                phase_key = f"{kind}:{identity}"
+                if phase_key in progress_seen:
+                    continue
+                progress_seen.add(phase_key)
+                presentation = "tool_result" if kind == "tool_result" else "tool_call"
+                activity = dict(decoded)
+                if kind == "tool_call":
+                    self._draft_tool_labels.setdefault((str(chat_id), draft_id), {})[identity] = str(
+                        activity.get("label") or ""
+                    )
+                elif not activity.get("label"):
+                    activity["label"] = self._draft_tool_labels.setdefault(
+                        (str(chat_id), draft_id), {}
+                    ).get(identity, "") or self._semantic_activity_label(
+                        str(activity.get("tool_name") or ""), None, None
+                    )
+            else:
+                identity = f"native-progress:{hashlib.sha256(line.encode('utf-8')).hexdigest()}"
+                phase_key = identity
+                if phase_key in progress_seen:
+                    continue
+                progress_seen.add(phase_key)
+                presentation = "tool_progress"
+                activity = {
+                    "tool_call_id": identity, "detail": line,
+                    "label": line, "index": index, "status": "running",
+                }
+            progress_message_id = await self._queue_event(
+                chat_id, EVENT_DELTA, content="",
+                target_turn_id=str(frame_metadata.get("_mobile_turn_id") or reply_to or "").strip() or None,
+                extra={
+                    "draft_id": draft_id,
+                    "presentation": presentation,
+                    "tool_call_id": identity,
+                    "activity": activity,
+                },
+            )
+            if progress_message_id is None and reply_to:
+                self._draft_text_last.pop((str(chat_id), draft_id), None)
+                self._draft_activity_seen.pop((str(chat_id), draft_id), None)
+                self._draft_tool_labels.pop((str(chat_id), draft_id), None)
+                self._stream_draft_ids.pop(stream_map_key, None)
+                return SendResult(success=False, error="turn is closed or unavailable")
+
+        if not finalize:
+            if not str(visible_content or "").strip():
+                return SendResult(success=True, message_id=progress_message_id)
+            result = await self.send_draft(
+                chat_id, draft_id, visible_content, metadata=frame_metadata or None)
+            if not result.success and reply_to:
+                self._draft_text_last.pop((str(chat_id), draft_id), None)
+                self._draft_activity_seen.pop((str(chat_id), draft_id), None)
+                self._draft_tool_labels.pop((str(chat_id), draft_id), None)
+                self._stream_draft_ids.pop(stream_map_key, None)
+            return result
+
+        visible, _activities = self._split_draft_frame(visible_content)
+        self._clear_draft_state(chat_id)
+        self._stream_draft_ids.pop(stream_map_key, None)
+        if not visible.strip():
+            return SendResult(success=True, message_id=None)
+        message_id = await self._queue_event(
+            chat_id, EVENT_COMPLETED, content=visible,
+            reply_to=reply_to,
+            target_turn_id=str(frame_metadata.get("_mobile_turn_id") or reply_to or "").strip() or None,
+            extra={"draft_id": draft_id, "presentation": "assistant_text"},
+        )
+        if message_id is None:
+            return SendResult(success=False, error="native stream finalize failed")
+        return SendResult(success=True, message_id=message_id)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -195,6 +314,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
+        # Native Gateway streams use a gateway turn UUID as their stream key. Keep the
+        # mapping explicit so every delta/final frame reuses one Mobile draft id and
+        # finalization can retire the mapping atomically.
+        self._stream_draft_ids: Dict[Tuple[str, str], int] = {}
         self._session_reset_pending: set[str] = set()
         self._session_reset_turns: Dict[str, str] = {}
         # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
@@ -393,6 +516,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._pair_attempts.clear()
         self._draft_text_last.clear()
         self._draft_activity_seen.clear()
+        self._draft_tool_labels.clear()
+        self._stream_draft_ids.clear()
         self._mark_disconnected()
         logger.info("[kissne_mobile] disconnected")
 
@@ -539,6 +664,44 @@ class KissneMobileAdapter(BasePlatformAdapter):
             text = re.sub(r"\n*---\s*$", "", text).rstrip()
         return text, activities
 
+    @staticmethod
+    def _strip_native_tool_progress(content: str, lines: List[str]) -> str:
+        """Remove the Gateway's native progress overlay from the assistant draft snapshot."""
+        progress = "\n".join(str(line) for line in lines if str(line).strip())
+        if not progress:
+            return str(content or "")
+        snapshot = str(content or "")
+        if snapshot == progress:
+            return ""
+        separator = "\n\n---\n"
+        suffix = separator + progress
+        return snapshot[:-len(suffix)] if snapshot.endswith(suffix) else snapshot
+
+    @staticmethod
+    def _conversation_turn_id(session_id: str) -> str:
+        """Create an opaque transport turn id that can recover its canonical SessionStore owner."""
+        import base64
+        raw = str(session_id or "").encode("utf-8")
+        owner = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return f"kbm_turn_v2.{owner}.{secrets.token_hex(8)}"
+
+    @staticmethod
+    def _turn_conversation_id(turn_id: str) -> str:
+        """Recover the canonical session id embedded by _conversation_turn_id; legacy ids return empty."""
+        import base64
+        value = str(turn_id or "")
+        prefix = "kbm_turn_v2."
+        if not value.startswith(prefix):
+            return ""
+        parts = value[len(prefix):].split(".", 1)
+        if len(parts) != 2 or not parts[0]:
+            return ""
+        try:
+            encoded = parts[0]
+            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return ""
+
     def _clear_draft_state(self, installation_id: str) -> None:
         installation = str(installation_id or "")
         keys = set(self._draft_text_last) | set(self._draft_activity_seen) | set(self._draft_tool_labels)
@@ -575,16 +738,36 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
         pending_turn_id = await asyncio.to_thread(store.pending_turn_id, installation)
-        turn_id = str(target_turn_id or pending_turn_id or "")
+        explicit_turn_id = str(target_turn_id or "").strip()
+        turn_id = explicit_turn_id or str(pending_turn_id or "")
+        if turn_id:
+            conversation_id = self._turn_conversation_id(turn_id)
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
+        # Explicitly-bound live frames are admitted atomically with the durable turn
+        # state. This closes the check/enqueue race with cancel; completed also changes
+        # pending->completed in the same transaction as its final event.
         try:
-            seq = await asyncio.to_thread(
-                store.enqueue_event, installation, event_type, payload, turn_id or None,
-                cap=max(1, self._outbound_cap),
-            )
+            if explicit_turn_id and event_type in {EVENT_DELTA, EVENT_COMPLETED}:
+                seq = await asyncio.to_thread(
+                    store.enqueue_pending_turn_event,
+                    installation, explicit_turn_id, event_type, payload,
+                    cap=max(1, self._outbound_cap),
+                    close=event_type == EVENT_COMPLETED,
+                )
+                if seq is None:
+                    logger.debug(
+                        "[kissne_mobile] dropping late %s for closed turn %s",
+                        event_type, _fingerprint(explicit_turn_id))
+                    return None
+            else:
+                seq = await asyncio.to_thread(
+                    store.enqueue_event, installation, event_type, payload, turn_id or None,
+                    cap=max(1, self._outbound_cap),
+                )
+                if event_type == EVENT_COMPLETED and turn_id:
+                    await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
             if event_type == EVENT_COMPLETED and turn_id:
-                # The reply closes the turn it answers — but only from ``pending``: a late reply must not
-                # resurrect a turn the user already cancelled.
-                await asyncio.to_thread(store.close_turn, turn_id, TURN_COMPLETED)
                 self._inbound_turns.discard(turn_id)
         except Exception:
             logger.exception("[kissne_mobile] failed to queue %s event for installation %s",
@@ -617,6 +800,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         elif bool((metadata or {}).get("_interim_send")):
             message_id = await self._queue_event(
                 installation, EVENT_DELTA, content=content, reply_to=reply_to,
+                target_turn_id=str(reply_to or "").strip() or None,
                 extra={"presentation": "commentary", "interim": True})
         else:
             pending_turn = await asyncio.to_thread(
@@ -632,13 +816,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 final_extra = {"presentation": "assistant_text"} if reply_to is None else None
                 message_id = await self._queue_event(
                     installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                    target_turn_id=str(reply_to or "").strip() or None,
                     extra=final_extra)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
 
     async def send_reasoning(self, chat_id: str, content: str, *,
-                             draft_id: int = 0) -> SendResult:
+                             draft_id: int = 0, turn_id: str = "") -> SendResult:
         """Queue provider-visible reasoning on its own transport lane.
 
         This never enters assistant_text: final answer scrubbing remains unchanged while
@@ -649,6 +834,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=None)
         message_id = await self._queue_event(
             chat_id, EVENT_DELTA, content=text,
+            target_turn_id=str(turn_id or "").strip() or None,
             extra={
                 "draft_id": int(draft_id or 0),
                 "presentation": "reasoning",
@@ -664,6 +850,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Separate cumulative assistant text from semantic tool Activity before delivery."""
         installation = str(chat_id or "").strip()
         key = (installation, int(draft_id))
+        explicit_turn_id = str((metadata or {}).get("_mobile_turn_id") or "").strip()
         visible, activities = self._split_draft_frame(content)
         seen = self._draft_activity_seen.setdefault(key, set())
         labels = self._draft_tool_labels.setdefault(key, {})
@@ -687,6 +874,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             presentation = "tool_result" if kind == "tool_result" else "tool_call"
             last_message_id = await self._queue_event(
                 installation, EVENT_DELTA, content="",
+                target_turn_id=explicit_turn_id or None,
                 extra={
                     "draft_id": int(draft_id),
                     "presentation": presentation,
@@ -698,9 +886,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             self._draft_text_last[key] = visible
             last_message_id = await self._queue_event(
                 installation, EVENT_DELTA, content=visible,
+                target_turn_id=explicit_turn_id or None,
                 extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
 
         if last_message_id is None:
+            if explicit_turn_id:
+                return SendResult(success=False, error="turn is closed or unavailable")
             return SendResult(success=True, message_id=None)
         return SendResult(success=True, message_id=last_message_id)
 
@@ -862,7 +1053,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return stem[:120] or "upload.bin"
 
     async def _handle_media_inbound(self, request: web.Request, installation: str) -> web.Response:
-        """Multipart photo/document -> normal Hermes MessageEvent with a local media path."""
+        """Multipart media -> the same canonical attachment lifecycle as JSON media."""
         from aiohttp import web
         from plugins.plugin_storage import plugin_data_dir
 
@@ -872,7 +1063,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_too_large", 413)
 
         message_id = ""
-        kind = "file"
+        raw_kind = "file"
         file_name = ""
         mime_type = ""
         file_bytes = bytearray()
@@ -900,7 +1091,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     if field == "message_id":
                         message_id = value
                     elif field == "kind":
-                        kind = value if value in {"photo", "sticker"} else "file"
+                        raw_kind = value or "file"
                     elif field == "file_name":
                         file_name = value
                     elif field == "mime_type":
@@ -913,10 +1104,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         if not file_bytes:
             return _error_response("attachment_required", 400)
-        file_name = _Path(file_name or ("photo" if kind == "photo" else "file")).name
-        mime_type = (mime_type or "application/octet-stream").strip()
-        if mime_type.startswith("image/") and kind != "sticker":
-            kind = "photo"
+        file_name = _Path(file_name or "file").name
+        mime_type = (mime_type or "application/octet-stream").strip().lower()
+        try:
+            kind = self._normalize_attachment_kind(raw_kind, mime_type)
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
 
         store = self.device_store()
         client_message_id = message_id.strip()
@@ -941,7 +1134,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             outcome = await asyncio.to_thread(
                 store.record_inbound, installation, client_message_id, fingerprint, turn_id)
@@ -962,20 +1156,29 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to persist inbound attachment")
             return _error_response("attachment_store_failed", 503)
 
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
-        is_photo = kind == "photo"
-        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        marker = "" if kind == "sticker" else (
+            f"[照片：{file_name}]" if kind == "image" else f"[文件：{file_name}]"
+        )
+        message_type = (
+            MessageType.STICKER if kind == "sticker"
+            else MessageType.PHOTO if kind == "image"
+            else MessageType.DOCUMENT
+        )
         event = MessageEvent(
             text=marker,
-            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            message_type=message_type,
             source=self.source_for_installation(installation),
             raw_message={
-                "kind": kind,
+                "kind": "sticker" if kind == "sticker" else (
+                    "photo" if kind == "image" else "file"
+                ),
                 "file_name": file_name,
                 "mime_type": mime_type,
                 "size": len(file_bytes),
@@ -986,14 +1189,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
             media_types=[mime_type],
             media_text_inlined=[False],
         )
+        self._set_inbound_attachment_metadata(
+            event, installation, turn_id, marker,
+            [{"type": kind, "mime_type": mime_type, "label": file_name}],
+            [str(disk_path)],
+        )
         try:
             await self.handle_message(event)
-            await asyncio.to_thread(
-                store.record_attachment_message,
-                installation, turn_id, marker,
-                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
-            )
         except Exception:
+            self._cleanup_inbound_media(event)
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
 
@@ -1001,7 +1205,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "ok": True,
             "message_id": message_id,
             "turn_id": turn_id,
-            "kind": kind,
+            "kind": "sticker" if kind == "sticker" else (
+                "photo" if kind == "image" else "file"
+            ),
             "file_name": file_name,
             "mime_type": mime_type,
             "size": len(file_bytes),
@@ -1093,8 +1299,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
                 stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
                 message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
-                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
+                item: Dict[str, Any] = {
+                    "message_ref": message_ref, "role": role, "text": text, "created_at": stamp,
+                }
                 if mobile_turn:
+                    # Public history must carry explicit turn identity. The web client must
+                    # not have to infer an assistant/tool row from the preceding user row.
+                    item["turn_id"] = mobile_turn
                     item["_turn_id"] = mobile_turn
                 if attachments:
                     item["attachments"] = attachments
@@ -1116,6 +1327,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                                if str(item.get("turn_id") or "") == turn_id), {})
                 rows.append({
                     "message_ref": f"turn:{turn_id}:user",
+                    "turn_id": turn_id,
                     "_turn_id": turn_id,
                     "role": "user",
                     "text": str(record.get("text") or ""),
@@ -1190,8 +1402,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("ack_cursor_required", 400)
         if cursor < 0:
             return _error_response("ack_cursor_must_not_be_negative", 400)
-        retired = await asyncio.to_thread(self.device_store().ack_events, installation, cursor)
-        return _json_response({"ok": True, "acked": retired, "cursor": cursor})
+        retired, accepted_cursor = await asyncio.to_thread(
+            self.device_store().ack_events, installation, cursor)
+        return _json_response({
+            "ok": True, "acked": retired, "cursor": accepted_cursor,
+            "requested_cursor": cursor,
+        })
+
+    @staticmethod
+    def _normalize_attachment_kind(kind: Any, mime_type: Any) -> str:
+        """Return the one internal attachment kind used by both inbound paths."""
+        value = str(kind or "").strip().lower()
+        if value == "photo":
+            value = "image"
+        mime = str(mime_type or "").strip().lower()
+        if value not in {"image", "sticker", "file"}:
+            raise ValueError("invalid_attachment")
+        if value in {"image", "sticker"} and not mime.startswith("image/"):
+            raise ValueError("invalid_attachment")
+        return value
 
     def _materialize_attachments(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Decode bounded JSON attachments once and return temporary media paths."""
@@ -1202,12 +1431,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         materialized: List[Dict[str, Any]] = []
         try:
             for item in items:
-                kind = str(item.get("type") or "").strip().lower()
                 mime_type = str(item.get("mime_type") or "").strip().lower()
+                kind = self._normalize_attachment_kind(item.get("type"), mime_type)
                 encoded = item.get("data")
-                if kind not in {"image", "sticker", "file"} or not mime_type:
-                    raise ValueError("invalid_attachment")
-                if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+                if not mime_type:
                     raise ValueError("invalid_attachment")
                 if not isinstance(encoded, str) or not encoded:
                     raise ValueError("attachment_required")
@@ -1253,6 +1480,32 @@ class KissneMobileAdapter(BasePlatformAdapter):
         )
         metadata["persisted"] = True
 
+    async def on_processing_complete(
+        self, event: MessageEvent, outcome: ProcessingOutcome,
+    ) -> None:
+        """Remove attachment projections that never reached a successful turn.
+
+        ``on_processing_start`` runs before the Runtime decides whether the turn is accepted. A
+        rejected, failed, or cancelled turn must not leave either the history projection or the
+        materialized upload behind; otherwise the next startup can synthesize a ghost attachment.
+        """
+        if outcome not in {ProcessingOutcome.FAILURE, ProcessingOutcome.CANCELLED}:
+            return
+        metadata = getattr(event, "_kissne_attachment_metadata", None)
+        if not isinstance(metadata, dict):
+            return
+        try:
+            if metadata.get("persisted"):
+                await asyncio.to_thread(
+                    self.device_store().delete_attachment_message,
+                    str(metadata.get("installation") or ""),
+                    str(metadata.get("turn_id") or ""),
+                )
+        except Exception:
+            logger.warning("[kissne_mobile] failed to remove rejected attachment projection", exc_info=True)
+        finally:
+            self._cleanup_inbound_media(event)
+
     def _cleanup_inbound_media(self, event: MessageEvent) -> None:
         metadata = getattr(event, "_kissne_attachment_metadata", None)
         if not isinstance(metadata, dict):
@@ -1273,8 +1526,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         item = attachments[0]
         if not isinstance(item, dict):
             return _error_response("invalid_attachment", 400)
-        kind = str(item.get("type") or "").strip().lower()
         mime_type = str(item.get("mime_type") or "").strip().lower()
+        try:
+            kind = self._normalize_attachment_kind(item.get("type"), mime_type)
+        except ValueError as exc:
+            return _error_response(str(exc) or "invalid_attachment", 400)
         encoded = item.get("data")
         if kind not in {"image", "sticker", "file"} or not mime_type:
             return _error_response("invalid_attachment", 400)
@@ -1305,7 +1561,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             outcome = await asyncio.to_thread(
                 store.record_inbound, installation, client_message_id, fingerprint, turn_id
@@ -1324,7 +1581,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to materialize inbound attachment")
             return _error_response("attachment_store_failed", 503)
         row = materialized[0]
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1418,7 +1676,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             # The claim is the gate: whichever concurrent retry wins it is the one that injects the turn.
             outcome = await asyncio.to_thread(
@@ -1430,7 +1689,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if outcome == INBOUND_CONFLICT:
                 return _error_response("message_id_conflict", 409)
 
-        await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
+        await asyncio.to_thread(
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1494,6 +1754,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         events = await asyncio.to_thread(
             self.device_store().events_after, installation, cursor, limit=limit)
         next_cursor = int(events[-1]["seq"]) if events else cursor
+        if events:
+            await asyncio.to_thread(
+                self.device_store().mark_delivered, installation, next_cursor)
         return _json_response({
             "ok": True,
             "events": events,
@@ -1533,10 +1796,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not callable(resolver):
             return ""
         source = self.source_for_installation(installation)
+        # Reasoning overrides live on the canonical Runtime conversation. The mobile
+        # installation key is only a routing alias; resolving against that alias made
+        # the picker report "none" even while the selected conversation had an effort.
+        identity = self._conversation_identity(installation) or {}
+        canonical_key = str(identity.get("session_key") or "").strip()
+        session_key = canonical_key or self.mobile_session_key(installation)
         try:
             config = resolver(
                 source=source,
-                session_key=self.mobile_session_key(installation),
+                session_key=session_key,
                 model=str(model or ""),
             )
         except Exception:
@@ -2130,24 +2399,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
             target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
             if target is None:
                 return _error_response("session_not_found", 404)
-            # SessionStore intentionally has no destructive delete API. Remove the
-            # inactive conversation from the active routing index and end its durable
-            # session row through the same lifecycle primitive used by resets/switches.
-            target_key = str(target.session_key or "")
-            db = store._db_for_key(target_key)
-            if db is not None:
-                promote = getattr(db, "promote_to_session_reset", None)
-                if callable(promote):
-                    promote(session_id, "session_deleted")
-                else:
-                    db.end_session(session_id, "session_deleted")
-            with store._lock:
-                store._ensure_loaded_locked()
-                routed = store._entries.get(target_key)
-                if routed is None or routed.session_id != session_id:
+            try:
+                deleted = await asyncio.to_thread(
+                    store.delete_session,
+                    session_id,
+                    requester_session_key=self.mobile_session_key(installation),
+                )
+            except Exception as exc:
+                code = str(getattr(exc, "code", "") or "")
+                if code == "not_found":
                     return _error_response("session_not_found", 404)
-                store._entries.pop(target_key, None)
-                store._save()
+                if code == "active":
+                    return _error_response("session_active", 409)
+                logger.warning(
+                    "[kissne_mobile] could not delete session %s",
+                    _fingerprint(session_id), exc_info=True,
+                )
+                return _error_response("session_delete_unavailable", 503)
+            if not deleted:
+                return _error_response("session_delete_unavailable", 503)
         except Exception:
             logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
             return _error_response("session_delete_unavailable", 503)
@@ -2165,8 +2435,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return _json_response({
             "ok": True,
             "uptime_seconds": uptime,
-            "git": {"head": "", "describe": "", "branch": "", "dirty_files": 0},
-            "deploy": {"running": False, "success": None, "type": None},
+            # This listener has no authoritative repository/deployment provider. Keep the
+            # fields explicit so an empty string/zero cannot be mistaken for real status.
+            "git": {
+                "available": False,
+                "source": "not_connected",
+                "head": None,
+                "describe": None,
+                "branch": None,
+                "dirty_files": None,
+            },
+            "deploy": {
+                "available": False,
+                "source": "not_connected",
+                "running": None,
+                "success": None,
+                "type": None,
+            },
             "mobile": {"connected": bool(self.is_connected), "bound_port": self.bound_port},
         })
 

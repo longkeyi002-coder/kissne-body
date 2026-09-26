@@ -224,4 +224,83 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
 
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
+def test_admin_status_does_not_claim_unavailable_sources_are_real(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                return await http(port, "GET", "/admin/status", token=token)
+            finally:
+                await stop(adapter)
 
+    status, body, _headers = run(scenario())
+    assert status == 200, body
+    assert body["git"] == {
+        "available": False, "source": "not_connected",
+        "head": None, "describe": None, "branch": None, "dirty_files": None,
+    }
+    assert body["deploy"] == {
+        "available": False, "source": "not_connected",
+        "running": None, "success": None, "type": None,
+    }
+
+
+def test_bootstrap_adversarial_turn_ownership_survives_tool_rows_and_identical_text(tmp_path):
+    """Turn ownership must come from explicit ids/roles, never neighbouring text or row position."""
+    from _transport_harness import seed_transcript
+
+    with isolated_runtime(tmp_path) as home:
+        adapter = make_adapter()
+        sessions = build_session_store(home)
+        conversation = preexisting_conversation(sessions)
+        adapter.set_session_store(sessions)
+
+        # Deliberately use identical visible text and insert assistant/tool chatter between
+        # the user and final answer. Text equality or "previous row" inference would mix these.
+        first = "kbm_turn_adversarial_a"
+        second = "kbm_turn_adversarial_b"
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "user", "content": "same", "message_id": first,
+        })
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "assistant", "content": "", "tool_calls": [{
+                "id": "call-a", "type": "function",
+                "function": {"name": "read_file", "arguments": "{\"path\":\"a\"}"},
+            }],
+        })
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "tool", "content": "same", "tool_call_id": "call-a",
+            "tool_name": "read_file",
+        })
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "assistant", "content": "same",
+        })
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "user", "content": "same", "message_id": second,
+        })
+        sessions.append_to_transcript(conversation.session_id, {
+            "role": "assistant", "content": "same",
+        })
+
+        history, truncated, represented = adapter._bootstrap_history_snapshot(
+            conversation.session_id
+        )
+
+    assert truncated is False
+    assert represented == {first, second}
+    assert [row["role"] for row in history] == [
+        "user", "assistant", "tool", "assistant", "user", "assistant"
+    ]
+    first_rows = history[:4]
+    second_rows = history[4:]
+    assert {row.get("turn_id") for row in first_rows} == {first}
+    assert {row.get("turn_id") for row in second_rows} == {second}
+    assert first_rows[-1]["message_ref"] == f"turn:{first}:assistant"
+    assert second_rows[-1]["message_ref"] == f"turn:{second}:assistant"
+    assert first_rows[0]["message_ref"] == f"turn:{first}:user"
+    assert second_rows[0]["message_ref"] == f"turn:{second}:user"

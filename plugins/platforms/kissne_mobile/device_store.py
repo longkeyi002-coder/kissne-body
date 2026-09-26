@@ -205,9 +205,14 @@ class DeviceStore:
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
             );
+            -- Highest sequence actually returned by /outbound for each installation.
+            -- ACK is fenced to this watermark so a corrupt/buggy client cannot retire unseen rows.
+            CREATE TABLE IF NOT EXISTS delivery_watermarks (
+                installation_id TEXT PRIMARY KEY,
+                delivered_seq   INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
-        conn.commit()
         self._conn = conn
 
     def _db(self) -> sqlite3.Connection:
@@ -411,6 +416,69 @@ class DeviceStore:
             raise ValueError("installation_id is required")
         return installation
 
+    def enqueue_pending_turn_event(
+        self, installation_id: str, turn_id: str, event_type: str,
+        payload: Dict[str, Any], *, cap: int = 200, close: bool = False,
+    ) -> Optional[int]:
+        """Atomically append an event only while this installation owns a pending turn.
+
+        With close=True the event insert and pending-to-completed transition share one
+        transaction, so cancel cannot slip between the state check and final enqueue.
+        """
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return None
+        body = payload if isinstance(payload, dict) else {"text": str(payload)}
+        now = time.time()
+        with self._lock:
+            conn = self._db()
+            try:
+                row = conn.execute(
+                    "SELECT state FROM turns WHERE installation_id = ? AND turn_id = ?",
+                    (installation, handle),
+                ).fetchone()
+                if row is None or str(row["state"]) != TURN_PENDING:
+                    return None
+                conn.execute(
+                    "INSERT OR IGNORE INTO seq_counters (installation_id, next_seq) "
+                    "SELECT ?, COALESCE(MAX(seq), 0) + 1 FROM outbound_events WHERE installation_id = ?",
+                    (installation, installation),
+                )
+                conn.execute(
+                    "UPDATE seq_counters SET next_seq = next_seq + 1 WHERE installation_id = ?",
+                    (installation,),
+                )
+                seq_row = conn.execute(
+                    "SELECT next_seq FROM seq_counters WHERE installation_id = ?", (installation,)
+                ).fetchone()
+                seq = int(seq_row["next_seq"]) - 1
+                conn.execute(
+                    "INSERT INTO outbound_events "
+                    "(installation_id, seq, turn_id, event_type, payload, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (installation, seq, handle, str(event_type),
+                     json.dumps(body, ensure_ascii=False), now),
+                )
+                if close:
+                    moved = conn.execute(
+                        "UPDATE turns SET state = ?, updated_at = ? "
+                        "WHERE installation_id = ? AND turn_id = ? AND state = ?",
+                        (TURN_COMPLETED, now, installation, handle, TURN_PENDING),
+                    )
+                    if int(moved.rowcount or 0) != 1:
+                        conn.rollback()
+                        return None
+                # Never evict unacknowledged events here. The caller-visible contract is
+                # durable delivery until explicit ACK; deleting by queue length silently creates
+                # cursor holes for slow/offline clients. Retention must be based on acknowledged
+                # rows (ack_events) or an explicit expiry protocol, not enqueue pressure.
+                conn.commit()
+                return seq
+            except Exception:
+                conn.rollback()
+                raise
+
     def enqueue_event(self, installation_id: str, event_type: str, payload: Dict[str, Any],
                       turn_id: Optional[str] = None, *, cap: int = 200) -> int:
         """Append one outbound event; returns its sequence number (the cursor the device acks with)."""
@@ -442,13 +510,9 @@ class DeviceStore:
                     (installation, seq, turn_id, str(event_type),
                      json.dumps(body, ensure_ascii=False), now),
                 )
-                if int(cap) > 0:
-                    # A device that never acks must not grow the file without bound: the oldest events
-                    # fall off once the window is exceeded (acknowledgement is the normal way they go).
-                    conn.execute(
-                        "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
-                        (installation, seq - int(cap)),
-                    )
+                # Unacknowledged rows are intentionally retained. A size cap that deletes
+                # them contradicts the cursor/ACK reliability contract and can discard terminal
+                # completed/cancelled events while the device is offline.
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -480,13 +544,38 @@ class DeviceStore:
             events.append(event)
         return events
 
-    def ack_events(self, installation_id: str, cursor: int) -> int:
-        """Retire every event up to and including ``cursor``; returns how many were retired."""
+    def mark_delivered(self, installation_id: str, cursor: int) -> int:
+        """Advance and return the highest sequence actually served to this installation."""
         installation = self._installation(installation_id)
         upto = max(0, int(cursor or 0))
         with self._lock:
             conn = self._db()
+            conn.execute(
+                "INSERT INTO delivery_watermarks (installation_id, delivered_seq) VALUES (?, ?) "
+                "ON CONFLICT(installation_id) DO UPDATE SET delivered_seq = "
+                "MAX(delivery_watermarks.delivered_seq, excluded.delivered_seq)",
+                (installation, upto),
+            )
+            row = conn.execute(
+                "SELECT delivered_seq FROM delivery_watermarks WHERE installation_id = ?",
+                (installation,),
+            ).fetchone()
+            conn.commit()
+            return int(row["delivered_seq"]) if row is not None else 0
+
+    def ack_events(self, installation_id: str, cursor: int) -> tuple[int, int]:
+        """Retire only events that were actually served; returns (count, accepted_cursor)."""
+        installation = self._installation(installation_id)
+        requested = max(0, int(cursor or 0))
+        with self._lock:
+            conn = self._db()
             try:
+                row = conn.execute(
+                    "SELECT delivered_seq FROM delivery_watermarks WHERE installation_id = ?",
+                    (installation,),
+                ).fetchone()
+                delivered = int(row["delivered_seq"]) if row is not None else 0
+                upto = min(requested, delivered)
                 removed = conn.execute(
                     "DELETE FROM outbound_events WHERE installation_id = ? AND seq <= ?",
                     (installation, upto),
@@ -496,9 +585,9 @@ class DeviceStore:
             except Exception:
                 conn.rollback()
                 raise
-        logger.debug("[kissne_mobile] device acked up to %d for installation %s (%d retired)",
-                     upto, _fingerprint(installation), count)
-        return count
+        logger.debug("[kissne_mobile] device ack requested %d, accepted %d for installation %s (%d retired)",
+                     requested, upto, _fingerprint(installation), count)
+        return count, upto
 
     def open_turn(self, turn_id: str, installation_id: str, *, state: str = TURN_PENDING) -> None:
         """Record a newly accepted inbound turn (the handle the device correlates events with)."""
@@ -511,8 +600,11 @@ class DeviceStore:
             conn = self._db()
             try:
                 conn.execute(
-                    "INSERT OR REPLACE INTO turns (turn_id, installation_id, state, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO turns (turn_id, installation_id, state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(turn_id) DO UPDATE SET "
+                    "state = excluded.state, updated_at = excluded.updated_at "
+                    "WHERE turns.installation_id = excluded.installation_id",
                     (handle, installation, str(state), now, now),
                 )
                 conn.commit()
@@ -573,6 +665,19 @@ class DeviceStore:
             except Exception:
                 conn.rollback()
                 raise
+
+    def turn_state(self, installation_id: str, turn_id: str) -> Optional[str]:
+        """Return one installation's durable turn state, or None when it does not own the turn."""
+        installation = self._installation(installation_id)
+        handle = str(turn_id or "").strip()
+        if not handle:
+            return None
+        with self._lock:
+            row = self._db().execute(
+                "SELECT state FROM turns WHERE installation_id = ? AND turn_id = ?",
+                (installation, handle),
+            ).fetchone()
+        return str(row["state"]) if row is not None else None
 
     def pending_turn_id(self, installation_id: str) -> Optional[str]:
         """The newest still-pending turn of one installation."""
