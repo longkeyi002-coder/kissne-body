@@ -2082,18 +2082,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
             sid = str(row.get("id") or "")
             if not sid:
                 continue
+            title = str(row.get("title") or row.get("display_name") or "")
+            message_count = int(row.get("message_count") or 0)
+            if message_count == 0 and not title and sid != current_id:
+                continue
             projected.append({
                 "session_id": sid,
                 "session_key": str(row.get("session_key") or ""),
-                "title": str(row.get("title") or row.get("display_name") or ""),
+                "title": title,
                 "updated_at": row.get("last_active") or row.get("updated_at") or "",
                 "created_at": row.get("started_at") or row.get("created_at") or "",
-                "message_count": int(row.get("message_count") or 0),
+                "message_count": message_count,
                 "source": str(row.get("source") or ""),
                 "active": sid == current_id,
             })
         rows = projected
-        rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+        rows.sort(key=lambda row: float(row.get("updated_at") or 0), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
 
     async def _handle_select_admin_session(self, request: web.Request) -> web.Response:
@@ -2132,11 +2136,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # mutating the selected conversation's canonical/source alias.
                 return _error_response("mobile_session_alias_missing", 409)
             else:
-                switched = await asyncio.to_thread(store.switch_session, mobile_key, target_id)
+                switched = await asyncio.to_thread(
+                    store.repoint_source_alias_to_existing_session,
+                    self.source_for_installation(installation), target_id,
+                )
                 bound = switched is not None and switched.session_id == target_id
         except Exception:
             logger.warning("[kissne_mobile] failed to switch installation %s to %s",
-                           _fingerprint(installation), target.session_id, exc_info=True)
+                           _fingerprint(installation), target_id, exc_info=True)
             bound = False
         if not bound:
             return _error_response("session_select_failed", 409)
