@@ -79,13 +79,17 @@ try {
   if (!window.KSN) { document.getElementById('loadFail').style.display = 'block'; }
 });</script>
 
-<script src="core.js?v=20260922a"></script>
-<script src="assets/_manifest.js?v=20260922a"></script>
-<script src="assets/icons/sprite-data.js?v=20260922a"></script>
-<script src="assets.js?v=20260922a"></script>
-<script src="transport.js?v=20260922a"></script>
-<script src="screens-a.js?v=20260922a"></script>
-<script src="screens-b.js?v=20260922a"></script>
-<script src="app.js?v=20260922a"></script>
+<script>
+(function () {
+  var build = new URLSearchParams(location.search).get('appVersion') || 'web';
+  var files = [
+    'core.js', 'assets/_manifest.js', 'assets/icons/sprite-data.js', 'assets.js',
+    'transport.js', 'screens-a.js', 'screens-b.js', 'app.js'
+  ];
+  files.forEach(function (src) {
+    document.write('<script src="' + src + '?v=' + encodeURIComponent(build) + '"><\\/script>');
+  });
+})();
+</script>
 </body>
 </html>
