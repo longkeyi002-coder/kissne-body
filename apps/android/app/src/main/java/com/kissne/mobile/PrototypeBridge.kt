@@ -145,6 +145,7 @@ class PrototypeBridge(
             "history" -> client().historyPayload(
                 limit = body.optInt("limit", 50),
                 before = body.optString("before").takeIf { it.isNotBlank() },
+                sessionId = body.optString("session_id").takeIf { it.isNotBlank() },
             )
             "search" -> {
                 val query = body.optString("q").trim()

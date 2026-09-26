@@ -1,7 +1,9 @@
 """Regression coverage for Android read surfaces."""
+from pathlib import Path
+
 from _transport_harness import (
     build_session_store, http, isolated_runtime, make_adapter, pair,
-    preexisting_conversation, run, start, stop,
+    preexisting_conversation, run, seed_transcript, start, stop,
 )
 
 
@@ -225,3 +227,307 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
 
+
+
+def test_session_index_lists_cross_source_top_level_rows_with_counts(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            mobile = preexisting_conversation(sessions, chat_id="mobile", user_id="mobile-user")
+            foreign = preexisting_conversation(sessions, chat_id="foreign", user_id="foreign-user")
+            db = sessions._db_for_session_id(foreign.session_id)
+            db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", foreign.session_id))
+            seed_transcript(sessions, mobile.session_id, 1)
+            seed_transcript(sessions, foreign.session_id, 3)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=mobile)
+                return foreign.session_id, await http(port, "GET", "/admin/sessions", token=token)
+            finally:
+                await stop(adapter)
+
+    foreign_id, result = run(scenario())
+    assert result[0] == 200, result
+    row = next(item for item in result[1]["sessions"] if item["session_id"] == foreign_id)
+    assert row["source"] == "weixin"
+    assert row["message_count"] == 6
+
+
+def test_session_index_keeps_active_archived_but_hides_other_archived(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="active-archived", user_id="active-user")
+            other = preexisting_conversation(sessions, chat_id="other-archived", user_id="other-user")
+            seed_transcript(sessions, active.session_id, 1)
+            seed_transcript(sessions, other.session_id, 1)
+            db = sessions._db_for_session_id(active.session_id)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                db.set_session_archived(active.session_id, True)
+                db.set_session_archived(other.session_id, True)
+                return active.session_id, other.session_id, await http(port, "GET", "/admin/sessions", token=token)
+            finally:
+                await stop(adapter)
+
+    active_id, other_id, result = run(scenario())
+    ids = {row["session_id"] for row in result[1]["sessions"]}
+    assert active_id in ids
+    assert other_id not in ids
+
+
+
+def test_history_without_session_id_reads_only_current_bound_conversation(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(
+                sessions, chat_id="default-history-active", user_id="active-user"
+            )
+            other = preexisting_conversation(
+                sessions, chat_id="default-history-other", user_id="other-user"
+            )
+            seed_transcript(sessions, active.session_id, 3)
+            seed_transcript(sessions, other.session_id, 3)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                return active.session_id, other.session_id, await http(
+                    port, "GET", "/history?limit=50", token=token
+                )
+            finally:
+                await stop(adapter)
+
+    active_id, other_id, result = run(scenario())
+    assert result[0] == 200, result
+    refs = [str(row["message_ref"]) for row in result[1]["messages"]]
+    assert refs
+    assert all(ref.startswith(active_id + ":") for ref in refs)
+    assert not any(ref.startswith(other_id + ":") for ref in refs)
+
+
+def test_web_session_history_contract_is_lazy_and_keeps_active_metadata():
+    root = Path(__file__).resolve().parents[4]
+    source = (root / "kissne-prototype/prototype/screens-a.js").read_text(encoding="utf-8")
+    assert "T.history(50, '', sessionId)" in source
+    assert "T.history(50, requestedBefore, CURRENT_SESSION_ID)" in source
+    assert "还有更早的记录 · 上滑加载" in source
+    assert "list.scrollTop <= 24 && sessionHistoryHasMore" in source
+    assert "if (active) return '当前会话';" not in source
+    assert "if (active) parts.push('当前会话');" in source
+
+
+def test_session_index_matches_9120_pinned_and_active_timestamp_contract():
+    root = Path(__file__).resolve().parents[4]
+    source = (
+        root / "plugins/platforms/kissne_mobile/adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "include_pinned=True" in source
+    assert 'active_row["last_active"] = max(numeric_stamps)' in source
+
+def test_history_session_id_pages_only_target_session_to_oldest_message(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="active-history", user_id="active-user")
+            target = preexisting_conversation(sessions, chat_id="target-history", user_id="target-user")
+            seed_transcript(sessions, active.session_id, 2)
+            seed_transcript(sessions, target.session_id, 61)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                before = ""
+                seen = []
+                while True:
+                    suffix = f"&before={before}" if before else ""
+                    result = await http(
+                        port, "GET",
+                        f"/history?session_id={target.session_id}&limit=50{suffix}",
+                        token=token,
+                    )
+                    assert result[0] == 200, result
+                    seen = result[1]["messages"] + seen
+                    if not result[1]["has_more"]:
+                        return target.session_id, seen
+                    before = result[1]["next_before"]
+            finally:
+                await stop(adapter)
+
+    target_id, seen = run(scenario())
+    assert len(seen) == 122
+    assert seen[0]["text"] == "seeded question 0"
+    assert seen[-1]["text"] == "seeded answer 60"
+    assert all(str(row["message_ref"]).startswith(target_id + ":") for row in seen)
+
+
+
+def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            mobile = preexisting_conversation(sessions, chat_id="ended-mobile", user_id="mobile-user")
+            ended = preexisting_conversation(sessions, chat_id="ended-target", user_id="weixin-user")
+            db = sessions._db_for_session_id(ended.session_id)
+            db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", ended.session_id))
+            seed_transcript(sessions, ended.session_id, 3)
+            sessions._promote_session_reset(ended.session_key, ended.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
+            before = dict(db.get_session(ended.session_id))
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=mobile)
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": ended.session_id},
+                )
+                history = await http(port, "GET", "/history?limit=50", token=token)
+                rejected_send = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "must-not-reopen-ended", "text": "do not append"},
+                )
+                after = dict(db.get_session(ended.session_id))
+                return ended.session_id, before, selected, history, rejected_send, after
+            finally:
+                await stop(adapter)
+
+    ended_id, before, selected, history, rejected_send, after = run(scenario())
+    assert selected[0] == 200, selected
+    assert selected[1]["conversation"]["session_id"] == ended_id
+    assert after == before
+    assert after["end_reason"] == "session_reset"
+    assert history[0] == 200, history
+    assert rejected_send[0] == 409, rejected_send
+    assert rejected_send[1]["error"] == "session_read_only"
+    assert len(history[1]["messages"]) == 6
+    assert all(str(row["message_ref"]).startswith(ended_id + ":") for row in history[1]["messages"])
+
+
+def test_reselect_current_ended_session_is_noop(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            current = preexisting_conversation(sessions, chat_id="ended-current", user_id="mobile-user")
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=current)
+                db = sessions._db_for_session_id(current.session_id)
+                sessions._promote_session_reset(current.session_key, current.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
+                before = dict(db.get_session(current.session_id))
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": current.session_id},
+                )
+                after = dict(db.get_session(current.session_id))
+                return current.session_id, before, selected, after
+            finally:
+                await stop(adapter)
+
+    current_id, before, selected, after = run(scenario())
+    assert selected[0] == 200, selected
+    assert selected[1]["conversation"]["session_id"] == current_id
+    assert after == before
+
+def test_cross_lane_select_changes_only_mobile_alias(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            mobile = preexisting_conversation(sessions, chat_id="mobile-origin", user_id="mobile-user")
+            foreign = preexisting_conversation(sessions, chat_id="weixin-origin", user_id="weixin-user")
+            foreign_key = foreign.session_key
+            db = sessions._db_for_session_id(foreign.session_id)
+            db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", foreign.session_id))
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=mobile)
+                before = sessions.lookup_by_session_key(foreign_key)
+                mobile_before = dict(db.get_session(mobile.session_id))
+                foreign_before = dict(db.get_session(foreign.session_id))
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": foreign.session_id},
+                )
+                after = sessions.lookup_by_session_key(foreign_key)
+                durable_after = dict(db.get_session(foreign.session_id))
+                mobile_after = dict(db.get_session(mobile.session_id))
+                return (
+                    foreign, before, selected, after, adapter.bound_conversation("inst-1"),
+                    foreign_before, durable_after, mobile_before, mobile_after,
+                )
+            finally:
+                await stop(adapter)
+
+    (
+        foreign, before, selected, after, mobile_bound,
+        foreign_before, durable_after, mobile_before, mobile_after,
+    ) = run(scenario())
+    assert selected[0] == 200, selected
+    assert before.session_id == foreign.session_id
+    assert after.session_id == foreign.session_id
+    assert after.session_key == before.session_key
+    assert mobile_bound.session_id == foreign.session_id
+    assert durable_after == foreign_before
+    assert durable_after["source"] == "weixin"
+    assert mobile_after == mobile_before
+
+
+def test_history_rejects_unknown_target_session(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                return await http(port, "GET", "/history?session_id=does-not-exist&limit=50", token=token)
+            finally:
+                await stop(adapter)
+
+    result = run(scenario())
+    assert result[0] == 404
+    assert result[1]["error"] == "session_not_found"
+
+
+def test_history_cursor_cannot_cross_selected_session(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="cursor-active", user_id="active")
+            target = preexisting_conversation(sessions, chat_id="cursor-target", user_id="target")
+            seed_transcript(sessions, active.session_id, 2)
+            seed_transcript(sessions, target.session_id, 2)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                active_page = await http(
+                    port, "GET", f"/history?session_id={active.session_id}&limit=1", token=token,
+                )
+                foreign_cursor = active_page[1]["messages"][0]["message_ref"]
+                return await http(
+                    port, "GET",
+                    f"/history?session_id={target.session_id}&limit=1&before={foreign_cursor}",
+                    token=token,
+                )
+            finally:
+                await stop(adapter)
+
+    result = run(scenario())
+    assert result[0] == 400
+    assert result[1]["error"] == "history_cursor_not_found"

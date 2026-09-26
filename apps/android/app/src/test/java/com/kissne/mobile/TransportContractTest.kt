@@ -33,4 +33,14 @@ class TransportContractTest {
         assertEquals("file", normalizeAttachmentKind("file"))
         assertEquals("file", normalizeAttachmentKind("unknown"))
     }
+    @Test fun history_request_scopes_and_encodes_selected_session() {
+        assertEquals(
+            "/history?limit=100&before=turn%3Aold%3Auser&session_id=session+with+space",
+            historyRequestPath(500, "turn:old:user", "session with space"),
+        )
+    }
+
+    @Test fun history_request_keeps_legacy_unscoped_shape_when_session_missing() {
+        assertEquals("/history?limit=50", historyRequestPath(50, null, null))
+    }
 }

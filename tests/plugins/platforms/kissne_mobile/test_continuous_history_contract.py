@@ -25,7 +25,7 @@ def test_history_pages_across_hidden_session_boundaries(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
             adapter = make_adapter()
-            adapter._mobile_history_rows = lambda _installation: _rows()
+            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
             port = await start(adapter)
             try:
                 token = await pair(port, adapter)
@@ -44,7 +44,7 @@ def test_search_crosses_hidden_session_boundaries(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
             adapter = make_adapter()
-            adapter._mobile_history_rows = lambda _installation: _rows()
+            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
             port = await start(adapter)
             try:
                 token = await pair(port, adapter)
@@ -63,7 +63,7 @@ def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
             store = build_session_store(home)
             existing = preexisting_conversation(store)
             adapter.set_session_store(store)
-            adapter._mobile_history_rows = lambda _installation: _rows()
+            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
             captured = []
 
             async def capture(event):
@@ -243,7 +243,7 @@ def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_pat
             [{"type": "file", "mime_type": "text/plain", "label": "notes.txt"}],
         )
 
-        rows = adapter._mobile_history_rows("phone-a")
+        rows = adapter._mobile_history_rows("phone-a", include_mobile_timeline=True)
 
     assert rows[0]["message_ref"] == target_ref
     assert rows[1]["message_ref"] == "turn:kbm_turn_quote:user"

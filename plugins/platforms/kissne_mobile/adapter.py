@@ -1036,8 +1036,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             by_id[bound_id] = canonical if isinstance(canonical, dict) else {"id": bound_id}
         return list(by_id.values())
 
-    def _mobile_history_rows(self, installation: str) -> List[Dict[str, Any]]:
-        """Flatten /new-separated transcripts into one Mobile-visible timeline."""
+    def _mobile_history_rows(
+        self, installation: str, session_id: str = "", *, include_mobile_timeline: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Read one canonical conversation; aggregate the legacy Mobile timeline only for search."""
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
@@ -1060,7 +1062,27 @@ class KissneMobileAdapter(BasePlatformAdapter):
             for item in saved_replies if str(item.get("turn_id") or "")
         }
         rows: List[Dict[str, Any]] = []
-        for session in self._mobile_history_sessions(installation):
+        if session_id:
+            mobile_key = self.mobile_session_key(installation)
+            db = store._db_for_key(mobile_key)
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            target = get_session(session_id) if callable(get_session) else None
+            sessions = [target] if isinstance(target, dict) else []
+        else:
+            if include_mobile_timeline:
+                sessions = self._mobile_history_sessions(installation)
+            else:
+                identity = self._conversation_identity(installation)
+                current_id = str((identity or {}).get("session_id") or "")
+                if not current_id:
+                    sessions = []
+                else:
+                    mobile_key = self.mobile_session_key(installation)
+                    db = store._db_for_key(mobile_key)
+                    get_session = getattr(db, "get_session", None) if db is not None else None
+                    current = get_session(current_id) if callable(get_session) else None
+                    sessions = [current] if isinstance(current, dict) else []
+        for session in sessions:
             session_id = str(session.get("id") or "")
             if not session_id:
                 continue
@@ -1123,7 +1145,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     "attachments": attachment_list,
                 })
         try:
-            notices = self.device_store().timeline_notices(installation)
+            notices = [] if session_id else self.device_store().timeline_notices(installation)
         except Exception:
             notices = []
         for notice in notices:
@@ -1147,7 +1169,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("limit_must_be_an_integer", 400)
         limit = max(1, min(limit, 100))
         before = str(request.query.get("before") or "").strip()
-        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        session_id = str(request.query.get("session_id") or "").strip()
+        if session_id:
+            store = getattr(self, "_session_store", None)
+            mobile_key = self.mobile_session_key(installation)
+            db = store._db_for_key(mobile_key) if store is not None else None
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            try:
+                target = await asyncio.to_thread(get_session, session_id) if callable(get_session) else None
+            except Exception:
+                logger.warning("[kissne_mobile] target history lookup failed", exc_info=True)
+                return _error_response("history_unavailable", 503)
+            if not isinstance(target, dict):
+                return _error_response("session_not_found", 404)
+        rows = await asyncio.to_thread(self._mobile_history_rows, installation, session_id)
         end = len(rows)
         if before:
             positions = [i for i, item in enumerate(rows) if item["message_ref"] == before]
@@ -1172,7 +1207,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("limit_must_be_an_integer", 400)
         limit = max(1, min(limit, 50))
         needle = query.casefold()
-        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        rows = await asyncio.to_thread(
+            self._mobile_history_rows, installation, include_mobile_timeline=True
+        )
         matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
         return _json_response({"ok": True, "results": matches[:limit]})
 
@@ -1370,6 +1407,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not installation:
             return _error_response("unauthorized", 401)
         if str(getattr(request, "content_type", "") or "").lower().startswith("multipart/"):
+            if await asyncio.to_thread(self._bound_session_is_ended, installation):
+                return _error_response("session_read_only", 409)
             return await self._handle_media_inbound(request, installation)
         payload, error = await self._payload(request)
         if error is not None:
@@ -1379,6 +1418,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if str(body.get("text") or "").strip():
                 return _error_response("text_and_ack_are_mutually_exclusive", 400)
             return await self._handle_ack(installation, body)
+        if await asyncio.to_thread(self._bound_session_is_ended, installation):
+            return _error_response("session_read_only", 409)
         text = str(body.get("text") or "")
         if "attachments" in body:
             if isinstance(body.get("attachments"), list):
@@ -1671,6 +1712,24 @@ class KissneMobileAdapter(BasePlatformAdapter):
         })
 
     # -- bootstrap / cancel (the app's cold start, and its stop button) -----------------------------
+
+    def _bound_session_is_ended(self, installation: str) -> bool:
+        """Whether this device currently points at a durable, ended conversation."""
+        identity = self._conversation_identity(installation) or {}
+        session_id = str(identity.get("session_id") or "")
+        store = getattr(self, "_session_store", None)
+        if not session_id or store is None:
+            return False
+        try:
+            db = store._db_for_key(self.mobile_session_key(installation))
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            row = get_session(session_id) if callable(get_session) else None
+        except Exception:
+            logger.warning("[kissne_mobile] could not inspect bound session lifecycle", exc_info=True)
+            return True
+        if not isinstance(row, dict):
+            return True
+        return row.get("ended_at") is not None or bool(row.get("end_reason"))
 
     def _conversation_identity(self, installation: str) -> Optional[Dict[str, Any]]:
         """The Runtime Conversation this installation is joined to, or ``None`` when it joined none.
@@ -2026,42 +2085,71 @@ class KissneMobileAdapter(BasePlatformAdapter):
         store = getattr(self, "_session_store", None)
         if store is None:
             return _error_response("session_store_unavailable", 503)
-        try:
-            entries = await asyncio.to_thread(store.list_sessions)
-        except Exception:
-            logger.warning("[kissne_mobile] could not list sessions", exc_info=True)
-            return _error_response("session_list_unavailable", 503)
-
         current = self._conversation_identity(installation)
         current_id = str((current or {}).get("session_id") or "")
-        # Routing aliases can point at the same Conversation. Return one row per
-        # canonical session id, preferring a non-mobile key/title when available.
-        by_id: Dict[str, Dict[str, Any]] = {}
-        for entry in entries:
-            sid = str(getattr(entry, "session_id", "") or "")
+        mobile_key = self.mobile_session_key(installation)
+        db = store._db_for_key(mobile_key)
+        list_rich = getattr(db, "list_sessions_rich", None) if db is not None else None
+        get_session = getattr(db, "get_session", None) if db is not None else None
+        if not callable(list_rich):
+            return _error_response("session_list_unavailable", 503)
+        try:
+            rows = []
+            offset = 0
+            page_size = 500
+            while True:
+                page = await asyncio.to_thread(
+                    list_rich,
+                    limit=page_size, offset=offset, include_children=False,
+                    include_archived=False, order_by_last_active=True, compact_rows=True,
+                    include_pinned=True,
+                )
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+                offset += len(page)
+            if current_id and all(str(row.get("id") or "") != current_id for row in rows):
+                active_row = await asyncio.to_thread(get_session, current_id) if callable(get_session) else None
+                if isinstance(active_row, dict):
+                    # get_session() does not project list_sessions_rich.last_active. Recover it
+                    # from the transcript so an archived active row does not sort to the bottom.
+                    try:
+                        transcript = await asyncio.to_thread(store.load_transcript, current_id) or []
+                        stamps = [
+                            item.get("created_at", item.get("timestamp", item.get("ts")))
+                            for item in transcript if isinstance(item, dict)
+                        ]
+                        numeric_stamps = [float(stamp) for stamp in stamps if stamp not in (None, "")]
+                        if numeric_stamps:
+                            active_row["last_active"] = max(numeric_stamps)
+                    except (TypeError, ValueError):
+                        logger.debug("[kissne_mobile] active session has non-numeric transcript time")
+                    rows.append(active_row)
+        except Exception:
+            logger.warning("[kissne_mobile] could not list durable sessions", exc_info=True)
+            return _error_response("session_list_unavailable", 503)
+
+        projected: List[Dict[str, Any]] = []
+        for row in rows:
+            sid = str(row.get("id") or "")
             if not sid:
                 continue
-            key = str(getattr(entry, "session_key", "") or "")
-            display = str(getattr(entry, "display_name", "") or "")
-            updated = getattr(entry, "updated_at", None)
-            created = getattr(entry, "created_at", None)
-            row = {
+            title = str(row.get("title") or row.get("display_name") or "")
+            message_count = int(row.get("message_count") or 0)
+            if message_count == 0 and not title and sid != current_id:
+                continue
+            projected.append({
                 "session_id": sid,
-                "session_key": key,
-                "title": display,
-                "updated_at": updated.isoformat() if hasattr(updated, "isoformat") else str(updated or ""),
-                "created_at": created.isoformat() if hasattr(created, "isoformat") else str(created or ""),
+                "session_key": str(row.get("session_key") or ""),
+                "title": title,
+                "updated_at": row.get("last_active") or row.get("updated_at") or "",
+                "created_at": row.get("started_at") or row.get("created_at") or "",
+                "message_count": message_count,
+                "source": str(row.get("source") or ""),
                 "active": sid == current_id,
-            }
-            previous = by_id.get(sid)
-            mobile_key = key.startswith("kissne_mobile:")
-            previous_mobile = bool(previous and str(previous.get("session_key") or "").startswith("kissne_mobile:"))
-            if previous is None or (previous_mobile and not mobile_key):
-                by_id[sid] = row
-            elif sid == current_id:
-                previous["active"] = True
-        rows = list(by_id.values())
-        rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+            })
+        rows = projected
+        rows.sort(key=lambda row: float(row.get("updated_at") or 0), reverse=True)
         return _json_response({"ok": True, "sessions": rows, "active_session_id": current_id})
 
     async def _handle_select_admin_session(self, request: web.Request) -> web.Response:
@@ -2080,27 +2168,34 @@ class KissneMobileAdapter(BasePlatformAdapter):
         session_key = str(body.get("session_key") or "").strip()
         if not session_id and not session_key:
             return _error_response("session_identity_required", 400)
+        mobile_key = self.mobile_session_key(installation)
         try:
-            target = (await asyncio.to_thread(store.lookup_by_session_id, session_id)
-                      if session_id else await asyncio.to_thread(store.lookup_by_session_key, session_key))
+            target_entry = (await asyncio.to_thread(store.lookup_by_session_id, session_id)
+                            if session_id else await asyncio.to_thread(store.lookup_by_session_key, session_key))
+            target_id = str(session_id or getattr(target_entry, "session_id", "") or "")
+            db = store._db_for_key(mobile_key)
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            target_row = await asyncio.to_thread(get_session, target_id) if callable(get_session) and target_id else None
         except Exception:
             logger.warning("[kissne_mobile] could not resolve selected session", exc_info=True)
             return _error_response("session_select_unavailable", 503)
-        if target is None:
+        if not target_id or not isinstance(target_row, dict):
             return _error_response("session_not_found", 404)
-        mobile_key = self.mobile_session_key(installation)
         try:
             current = await asyncio.to_thread(store.lookup_by_session_key, mobile_key)
             if current is None:
-                bound = await asyncio.to_thread(
-                    self.bind_conversation, installation, str(target.session_key or "")
-                )
+                # A paired installation normally already has this alias. Fail closed rather than
+                # mutating the selected conversation's canonical/source alias.
+                return _error_response("mobile_session_alias_missing", 409)
             else:
-                switched = await asyncio.to_thread(store.switch_session, mobile_key, target.session_id)
-                bound = switched is not None and switched.session_id == target.session_id
+                switched = await asyncio.to_thread(
+                    store.repoint_source_alias_to_existing_session,
+                    self.source_for_installation(installation), target_id,
+                )
+                bound = switched is not None and switched.session_id == target_id
         except Exception:
             logger.warning("[kissne_mobile] failed to switch installation %s to %s",
-                           _fingerprint(installation), target.session_id, exc_info=True)
+                           _fingerprint(installation), target_id, exc_info=True)
             bound = False
         if not bound:
             return _error_response("session_select_failed", 409)

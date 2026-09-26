@@ -1158,6 +1158,58 @@ class SessionStore(
             )
         return new_entry
 
+    def repoint_source_alias_to_existing_session(
+        self, source: SessionSource, target_session_id: str,
+    ) -> SessionEntry:
+        """Re-point one existing routing alias without mutating either durable session row.
+
+        Alias-only counterpart of switch_session for multi-entry clients. It changes only
+        gateway_routing: neither the departed row nor target row is ended, reopened, created, or rewritten.
+        """
+        if not target_session_id:
+            raise RouteBindingError(
+                "repoint_source_alias_to_existing_session: target_session_id is required"
+            )
+        session_key = self._generate_session_key(source)
+        if not session_key:
+            raise RouteBindingError(
+                "repoint_source_alias_to_existing_session: cannot derive routing key"
+            )
+        with self._lock:
+            self._ensure_loaded_locked()
+            current = self._entries.get(session_key)
+            if current is None:
+                raise RouteBindingError(
+                    f"repoint_source_alias_to_existing_session: routing key {session_key!r} is not bound"
+                )
+            # Re-selecting the current alias is a true no-op, even when the durable row has
+            # since ended/archived. A read-only client must never fail merely for selecting itself.
+            if current.session_id == target_session_id:
+                return current
+            db = self._db_for_key(session_key)
+            get_row = getattr(db, "get_session", None)
+            raw = get_row(target_session_id) if callable(get_row) else None
+            row = dict(raw) if isinstance(raw, dict) else None
+            if row is None:
+                raise RouteBindingError(
+                    f"repoint_source_alias_to_existing_session: session {target_session_id} does not exist"
+                )
+            # Ended/reset conversations remain valid transcript targets. Repointing is routing-only:
+            # it deliberately does not reopen or mutate the durable row.
+            if row.get("archived"):
+                raise RouteBindingError(
+                    f"repoint_source_alias_to_existing_session: session {target_session_id} is archived"
+                )
+            alias = SessionEntry(
+                session_key=session_key, session_id=target_session_id,
+                created_at=current.created_at, updated_at=_now(),
+                origin=current.origin, display_name=current.display_name,
+                platform=current.platform, chat_type=current.chat_type,
+            )
+            self._entries[session_key] = alias
+            self._save_entry(session_key, lock_held=True)
+        return alias
+
     def bind_source_to_existing_session(
         self, source: SessionSource, target_session_id: str,
     ) -> SessionEntry:

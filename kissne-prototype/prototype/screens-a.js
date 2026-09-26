@@ -121,11 +121,13 @@
     return !!s.active;
   }
   function sessionMetaText(s, active) {
-    if (active) return '当前会话';
     var parts = [];
-    if (s && s.messageCount) parts.push(s.messageCount + ' 条消息');
+    if (active) parts.push('当前会话');
+    if (s && typeof s.messageCount === 'number') parts.push(s.messageCount + ' 条消息');
+    if (s && s.source) parts.push(s.source);
     if (s && s.updatedAt) {
-      var d = new Date(s.updatedAt);
+      var rawUpdated = s.updatedAt;
+      var d = new Date(typeof rawUpdated === 'number' && rawUpdated < 1000000000000 ? rawUpdated * 1000 : rawUpdated);
       parts.push(isNaN(d.getTime()) ? String(s.updatedAt) : d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
     }
     return parts.join(' · ') || '服务器会话';
@@ -1500,7 +1502,48 @@
         var match = /^turn:([^:]+):(user|assistant)$/.exec(String(ref || ''));
         return match ? match[1] : '';
       }
-      function hydrateHistory(history) {
+      var sessionHistoryRows = [];
+      var sessionHistoryNextBefore = '';
+      var sessionHistoryHasMore = false;
+      var sessionHistoryLoading = false;
+      async function loadInitialSessionHistory(sessionId, fallbackHistory, bootstrapTruncated) {
+        sessionHistoryRows = fallbackHistory || [];
+        sessionHistoryNextBefore = '';
+        sessionHistoryHasMore = !!bootstrapTruncated;
+        if (!T || typeof T.history !== 'function' || !sessionId) return sessionHistoryRows;
+        var payload = await T.history(50, '', sessionId);
+        sessionHistoryRows = payload && Array.isArray(payload.messages) ? payload.messages : [];
+        sessionHistoryHasMore = !!(payload && payload.has_more);
+        sessionHistoryNextBefore = String(payload && payload.next_before || '');
+        return sessionHistoryRows;
+      }
+      async function loadOlderSessionHistory() {
+        if (sessionHistoryLoading || !sessionHistoryHasMore || !sessionHistoryNextBefore
+            || !T || typeof T.history !== 'function' || !CURRENT_SESSION_ID) return;
+        sessionHistoryLoading = true;
+        var requestedBefore = sessionHistoryNextBefore;
+        try {
+          var payload = await T.history(50, requestedBefore, CURRENT_SESSION_ID);
+          var page = payload && Array.isArray(payload.messages) ? payload.messages : [];
+          sessionHistoryRows = page.concat(sessionHistoryRows);
+          sessionHistoryHasMore = !!(payload && payload.has_more);
+          var next = String(payload && payload.next_before || '');
+          if (sessionHistoryHasMore && (!next || next === requestedBefore)) {
+            throw new Error('history_cursor_stalled');
+          }
+          sessionHistoryNextBefore = next;
+          hydrateHistory(sessionHistoryRows, true);
+          setSessionStatus(sessionHistoryHasMore ? '还有更早的记录 · 上滑加载' : '');
+        } catch (err) {
+          setSessionStatus('更早的记录读取失败，请稍后重试。');
+        } finally {
+          sessionHistoryLoading = false;
+        }
+      }
+
+      function hydrateHistory(history, preserveScroll) {
+        var oldScrollHeight = list.scrollHeight;
+        var oldScrollTop = list.scrollTop;
         /* Never use role+text equality to reconcile fresh local messages. Repeated identical
            messages are valid, and stale bootstrap history can otherwise swallow the newest one.
            Local rows that have received a Hermes turn ref are matched by message_ref; rows still
@@ -1683,7 +1726,11 @@
         sortChatLogChronologically();
         persistChatLog();
         list.innerHTML = CHAT_LOG.length ? logRender() : liveEmpty();
-        jumpTo(list.scrollHeight);
+        if (preserveScroll) {
+          jumpTo(oldScrollTop + Math.max(0, list.scrollHeight - oldScrollHeight));
+        } else {
+          jumpTo(list.scrollHeight);
+        }
       }
 
       function liveSetCancel(on) {
@@ -2018,7 +2065,21 @@
             s.active = sessionIsCurrent(s);
           });
           paintSessionList();
-          hydrateHistory(boot.history || []);
+          var completeHistory = boot.history || [];
+          try {
+            completeHistory = await loadInitialSessionHistory(
+              CURRENT_SESSION_ID, completeHistory, !!boot.history_truncated
+            );
+            setSessionStatus(sessionHistoryHasMore ? '还有更早的记录 · 上滑加载' : '');
+          } catch (historyErr) {
+            sessionHistoryRows = completeHistory;
+            sessionHistoryHasMore = !!boot.history_truncated;
+            sessionHistoryNextBefore = '';
+            setSessionStatus(sessionHistoryHasMore
+              ? '还有更早的记录 · 上滑加载'
+              : '历史暂时读取失败，已显示最近消息。');
+          }
+          hydrateHistory(completeHistory);
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
@@ -2475,9 +2536,9 @@
         clearUnread();
       }
       function onScroll() {
-        if (!UNREAD.n) return;
         if (Date.now() < scrollGuard) return;      /* 自己滚的不算已读 */
-        if (list.scrollTop + list.clientHeight >= list.scrollHeight - 8) clearUnread();
+        if (list.scrollTop <= 24 && sessionHistoryHasMore) loadOlderSessionHistory();
+        if (UNREAD.n && list.scrollTop + list.clientHeight >= list.scrollHeight - 8) clearUnread();
       }
       if (upill) upill.addEventListener('click', onPill);
       list.addEventListener('scroll', onScroll);
