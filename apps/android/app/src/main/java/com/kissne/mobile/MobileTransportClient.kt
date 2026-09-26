@@ -69,10 +69,13 @@ class MobileTransportClient(
         return request("POST", "/admin/sessions", body)
     }
 
-    fun historyPayload(limit: Int = 50, before: String? = null): JSONObject {
+    fun historyPayload(limit: Int = 50, before: String? = null, sessionId: String? = null): JSONObject {
         val query = StringBuilder("/history?limit=").append(limit.coerceIn(1, 100))
         before?.takeIf { it.isNotBlank() }?.let {
             query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        sessionId?.takeIf { it.isNotBlank() }?.let {
+            query.append("&session_id=").append(java.net.URLEncoder.encode(it, "UTF-8"))
         }
         return request("GET", query.toString())
     }
