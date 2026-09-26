@@ -1,4 +1,5 @@
 """Regression coverage for Android read surfaces."""
+import asyncio
 from pathlib import Path
 
 from _transport_harness import (
@@ -96,6 +97,57 @@ def test_session_select_by_id_uses_authenticated_route_and_preserves_token(tmp_p
     assert unauth[0] == 401
 
 
+def test_selected_session_history_and_cold_boot_do_not_leak_other_session_attachments(tmp_path):
+    """An attachment-only recovery row must remain owned by its originating conversation."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            source = preexisting_conversation(sessions, chat_id="attachment-owner", user_id="owner")
+            other = preexisting_conversation(sessions, chat_id="attachment-other", user_id="other")
+            sessions.append_to_transcript(
+                other.session_id, {"role": "user", "content": "other conversation"},
+            )
+            turn_id = "kbm_turn_owned_by_source"
+            sessions.append_to_transcript(
+                source.session_id,
+                {"role": "user", "content": "photo from source", "message_id": turn_id},
+            )
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=source)
+                adapter.device_store().record_attachment_message(
+                    "inst-1", turn_id, "photo from source",
+                    [{"type": "image", "mime_type": "image/png", "label": "source.png"}],
+                )
+                owner_history = await http(
+                    port, "GET", f"/history?session_id={source.session_id}", token=token,
+                )
+                other_history = await http(
+                    port, "GET", f"/history?session_id={other.session_id}", token=token,
+                )
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": other.session_id},
+                )
+                boot = await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
+                return turn_id, owner_history, other_history, selected, boot
+            finally:
+                await stop(adapter)
+
+    turn_id, owner_history, other_history, selected, boot = run(scenario())
+    assert owner_history[0] == 200, owner_history
+    owner_rows = [row for row in owner_history[1]["messages"] if row.get("_turn_id") == turn_id]
+    assert len(owner_rows) == 1 and owner_rows[0]["attachments"][0]["label"] == "source.png"
+    assert other_history[0] == 200, other_history
+    assert not any(row.get("_turn_id") == turn_id for row in other_history[1]["messages"])
+    assert selected[0] == 200, selected
+    assert boot[0] == 200, boot
+    assert boot[1]["conversation"]["session_id"] == selected[1]["conversation"]["session_id"]
+    assert not any(row.get("_turn_id") == turn_id for row in boot[1]["history"])
+
+
 def test_pair_endpoint_rejects_installation_only_token_mint(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
@@ -112,6 +164,85 @@ def test_pair_endpoint_rejects_installation_only_token_mint(tmp_path):
     result = run(scenario())
     assert result[0] == 400, result
     assert result[1]["error"] == "pairing_code_and_installation_id_required"
+
+
+def test_unwired_gateway_rejects_inbound_without_leaving_a_pending_turn(tmp_path):
+    """A listener without the production message consumer must not acknowledge a dropped turn."""
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter(with_message_handler=False)
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                rejected = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "no-runtime-consumer", "text": "must not disappear"},
+                )
+                boot = await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
+                events = await http(port, "GET", "/messages?cursor=0", token=token)
+                return rejected, boot, events
+            finally:
+                await stop(adapter)
+
+    rejected, boot, events = run(scenario())
+    assert rejected[0] == 503, rejected
+    assert rejected[1]["error"] == "gateway_message_handler_unavailable"
+    assert boot[1]["pending_turn_id"] is None, boot
+    assert events[0] == 200 and events[1]["events"] == [], events
+
+
+def test_gateway_startup_wiring_reaches_mobile_runtime_handler(tmp_path):
+    """Exercise the Gateway adapter wiring with the real mobile HTTP listener."""
+    async def scenario():
+        from gateway.run_adapters import GatewayAdapterLifecycleMixin
+
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter(with_message_handler=False)
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            handled = asyncio.Event()
+            received = []
+
+            async def capture(event):
+                received.append(event)
+                handled.set()
+
+            class RunnerWiring:
+                session_store = sessions
+                _busy_text_mode = "default"
+
+                def _handle_reaction_event(self, *_args):
+                    return None
+
+                def _recover_telegram_topic_thread_id(self, *_args):
+                    return None
+
+            GatewayAdapterLifecycleMixin._wire_adapter_handlers(
+                RunnerWiring(), adapter,
+                message_handler=capture,
+                fatal_error_handler=lambda *_args: None,
+                busy_session_handler=lambda *_args: None,
+                authorization_check=lambda *_args: True,
+                platform_event_handler=lambda *_args: None,
+            )
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                accepted = await http(
+                    port, "POST", "/messages", token=token,
+                    body={"message_id": "gateway-wired", "text": "through production wiring"},
+                )
+                await asyncio.wait_for(handled.wait(), timeout=3)
+                return accepted, received
+            finally:
+                await stop(adapter)
+
+    accepted, received = run(scenario())
+    assert accepted[0] == 202, accepted
+    assert len(received) == 1 and received[0].text == "through production wiring"
 
 
 def test_connected_adapter_registers_mobile_read_routes(tmp_path):

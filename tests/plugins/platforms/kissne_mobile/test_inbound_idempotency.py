@@ -15,6 +15,7 @@ retry injects a second turn. Nothing is skipped.
 """
 
 import asyncio
+from pathlib import Path
 
 from _transport_harness import (
     build_session_store,
@@ -232,7 +233,58 @@ def test_real_photo_upload_reaches_runtime_as_media(tmp_path):
     assert event.message_type.value == "photo"
     assert event.media_types == ["image/png"]
     assert len(event.media_urls) == 1
-    from pathlib import Path
     path = Path(event.media_urls[0])
     assert path.exists() and path.read_bytes() == b"image-bytes"
     assert event.text == "[照片：羊羊照片.png]"
+
+
+def test_multipart_sticker_keeps_sticker_type_and_session_owner(tmp_path):
+    async def post_sticker(port, token):
+        import aiohttp
+
+        form = aiohttp.FormData()
+        form.add_field("message_id", "sticker-multipart-1")
+        form.add_field("kind", "sticker")
+        form.add_field("file_name", "开心.webp")
+        form.add_field("mime_type", "image/webp")
+        form.add_field("file", b"sticker-bytes", filename="sticker.webp", content_type="image/webp")
+        headers = {"Authorization": f"Bearer {token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{port}/messages", data=form, headers=headers,
+            ) as response:
+                return response.status, await response.json()
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions, chat_id="sticker-owner", user_id="sticker-owner")
+            adapter.set_session_store(sessions)
+            handled = asyncio.Event()
+            received = []
+
+            async def capture(event):
+                received.append(event)
+                handled.set()
+
+            adapter.set_message_handler(capture)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                response = await post_sticker(port, token)
+                await asyncio.wait_for(handled.wait(), timeout=3)
+                saved = adapter.device_store().attachment_messages("inst-1", 20)
+                return conversation.session_id, response, received, saved
+            finally:
+                await stop(adapter)
+
+    session_id, response, received, saved = run(scenario())
+    assert response[0] == 202, response
+    assert len(received) == 1
+    assert received[0].message_type.value == "sticker"
+    assert received[0].text == ""
+    assert received[0].media_types == ["image/webp"]
+    assert len(saved) == 1
+    assert "session_id" not in saved[0]
+    assert saved[0]["attachments"][0]["type"] == "sticker"

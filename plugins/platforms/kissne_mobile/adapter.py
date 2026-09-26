@@ -866,7 +866,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         from aiohttp import web
         from plugins.plugin_storage import plugin_data_dir
 
-        if self.bound_conversation(installation) is None:
+        identity = self._conversation_identity(installation) or {}
+        session_id = str(identity.get("session_id") or "")
+        if not session_id:
             return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
         if (request.content_length or 0) > DEFAULT_MEDIA_MAX_BYTES + 1024 * 1024:
             return _error_response("attachment_too_large", 413)
@@ -917,6 +919,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         mime_type = (mime_type or "application/octet-stream").strip()
         if mime_type.startswith("image/") and kind != "sticker":
             kind = "photo"
+        if kind == "sticker" and not mime_type.lower().startswith("image/"):
+            return _error_response("invalid_attachment", 400)
+        if not self._inbound_runtime_ready():
+            return _error_response("gateway_message_handler_unavailable", 503)
 
         store = self.device_store()
         client_message_id = message_id.strip()
@@ -968,11 +974,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
             store.enqueue_event, installation, EVENT_PENDING,
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
+        is_sticker = kind == "sticker"
         is_photo = kind == "photo"
-        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        marker = "" if is_sticker else (f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]")
         event = MessageEvent(
             text=marker,
-            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            message_type=(
+                MessageType.STICKER if is_sticker
+                else MessageType.PHOTO if is_photo
+                else MessageType.DOCUMENT
+            ),
             source=self.source_for_installation(installation),
             raw_message={
                 "kind": kind,
@@ -986,14 +997,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
             media_types=[mime_type],
             media_text_inlined=[False],
         )
+        self._set_inbound_attachment_metadata(
+            event, installation, turn_id, marker,
+            [{"type": "sticker" if is_sticker else "image" if is_photo else "file",
+              "mime_type": mime_type, "label": file_name}],
+            [str(disk_path)],
+        )
         try:
             await self.handle_message(event)
-            await asyncio.to_thread(
-                store.record_attachment_message,
-                installation, turn_id, marker,
-                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
-            )
         except Exception:
+            self._cleanup_inbound_media(event)
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
             return _error_response("inbound_injection_failed", 503)
 
@@ -1043,6 +1056,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
+        target_session_id = str(session_id or "")
+        if not target_session_id and not include_mobile_timeline:
+            identity = self._conversation_identity(installation) or {}
+            target_session_id = str(identity.get("session_id") or "")
         try:
             saved_attachments = self.device_store().attachment_messages(installation, 500)
         except Exception:
@@ -1062,34 +1079,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
             for item in saved_replies if str(item.get("turn_id") or "")
         }
         rows: List[Dict[str, Any]] = []
-        if session_id:
+        if target_session_id:
             mobile_key = self.mobile_session_key(installation)
             db = store._db_for_key(mobile_key)
             get_session = getattr(db, "get_session", None) if db is not None else None
-            target = get_session(session_id) if callable(get_session) else None
+            target = get_session(target_session_id) if callable(get_session) else None
             sessions = [target] if isinstance(target, dict) else []
         else:
             if include_mobile_timeline:
                 sessions = self._mobile_history_sessions(installation)
             else:
-                identity = self._conversation_identity(installation)
-                current_id = str((identity or {}).get("session_id") or "")
-                if not current_id:
-                    sessions = []
-                else:
-                    mobile_key = self.mobile_session_key(installation)
-                    db = store._db_for_key(mobile_key)
-                    get_session = getattr(db, "get_session", None) if db is not None else None
-                    current = get_session(current_id) if callable(get_session) else None
-                    sessions = [current] if isinstance(current, dict) else []
+                sessions = []
         for session in sessions:
-            session_id = str(session.get("id") or "")
-            if not session_id:
+            session_row_id = str(session.get("id") or "")
+            if not session_row_id:
                 continue
             try:
-                transcript = store.load_transcript(session_id) or []
+                transcript = store.load_transcript(session_row_id) or []
             except Exception:
-                logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
+                logger.warning("[kissne_mobile] history read failed for %s", session_row_id, exc_info=True)
                 continue
             active_mobile_turn = ""
             for index, row in enumerate(transcript):
@@ -1114,7 +1122,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     continue
                 stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
                 stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
-                message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
+                message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_row_id}:{index}"
                 item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
                 if mobile_turn:
                     item["_turn_id"] = mobile_turn
@@ -1129,23 +1137,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
                             "text": str(link.get("quoted_text") or ""),
                         }
                 rows.append(item)
-        seen_attachment_turns = {
-            str(row.get("_turn_id") or "") for row in rows if row.get("_turn_id")
-        }
-        for turn_id, attachment_list in attachments_by_turn.items():
-            if turn_id and turn_id not in seen_attachment_turns:
-                record = next((item for item in saved_attachments
-                               if str(item.get("turn_id") or "") == turn_id), {})
-                rows.append({
-                    "message_ref": f"turn:{turn_id}:user",
-                    "_turn_id": turn_id,
-                    "role": "user",
-                    "text": str(record.get("text") or ""),
-                    "created_at": float(record.get("created_at") or 0),
-                    "attachments": attachment_list,
-                })
+        # Conversation ownership comes from the Runtime transcript. Attachment metadata can
+        # decorate its matching turn, but cannot create an independent conversation row.
         try:
-            notices = [] if session_id else self.device_store().timeline_notices(installation)
+            notices = self.device_store().timeline_notices(installation) if include_mobile_timeline else []
         except Exception:
             notices = []
         for notice in notices:
@@ -1182,6 +1177,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("history_unavailable", 503)
             if not isinstance(target, dict):
                 return _error_response("session_not_found", 404)
+        else:
+            identity = self._conversation_identity(installation) or {}
+            session_id = str(identity.get("session_id") or "")
         rows = await asyncio.to_thread(self._mobile_history_rows, installation, session_id)
         end = len(rows)
         if before:
@@ -1325,8 +1323,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("invalid_attachment", 400)
         if not file_bytes or len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
             return _error_response("attachment_too_large", 413)
-        if self.bound_conversation(installation) is None:
+        identity = self._conversation_identity(installation) or {}
+        session_id = str(identity.get("session_id") or "")
+        if not session_id:
             return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+        if not self._inbound_runtime_ready():
+            return _error_response("gateway_message_handler_unavailable", 503)
 
         client_message_id = str(body.get("message_id") or "").strip()
         fingerprint = hashlib.sha256(
@@ -1437,6 +1439,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.warning("[kissne_mobile] inbound refused for unbound installation %s",
                            _fingerprint(installation))
             return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+        if not self._inbound_runtime_ready():
+            return _error_response("gateway_message_handler_unavailable", 503)
 
         store = self.device_store()
         client_message_id = str(body.get("message_id") or "").strip()
@@ -1508,6 +1512,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("inbound_injection_failed", 503)
         return _json_response(
             {"ok": True, "message_id": message_id, "turn_id": turn_id}, status=202)
+
+    def _inbound_runtime_ready(self) -> bool:
+        """Require a Gateway message consumer before acknowledging new inbound work."""
+        return callable(getattr(self, "_message_handler", None)) or callable(
+            self.__dict__.get("handle_message")
+        )
 
     @staticmethod
     def _duplicate_response(client_message_id: str, turn_id: str) -> web.Response:
@@ -2002,19 +2012,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 self.device_store().attachment_messages, installation, 500)
         except Exception:
             saved_attachments = []
+        history_by_turn = {
+            str(item.get("turn_id") or item.get("_turn_id") or ""): item
+            for item in history
+            if isinstance(item, dict) and str(item.get("turn_id") or item.get("_turn_id") or "")
+        }
         for record in saved_attachments:
             turn_id = str(record.get("turn_id") or "").strip()
-            if not turn_id or turn_id in represented_turn_ids:
+            if not turn_id:
                 continue
-            history.append({
-                "role": "user",
-                "text": str(record.get("text") or ""),
-                "_turn_id": turn_id,
-                "message_ref": f"turn:{turn_id}:user",
-                "attachments": list(record.get("attachments") or []),
-                "created_at": float(record.get("created_at") or 0),
-            })
-            represented_turn_ids.add(turn_id)
+            existing_message = history_by_turn.get(turn_id)
+            if existing_message is not None:
+                existing_message["attachments"] = list(record.get("attachments") or [])
+            # Do not resurrect attachment-only rows without Runtime transcript ownership.
         history.sort(key=lambda item: (float(item.get("created_at") or 0), str(item.get("message_ref") or "")))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         covered = await self._bootstrap_covered_event_seqs(
