@@ -331,23 +331,34 @@ def test_cross_lane_select_changes_only_mobile_alias(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=mobile)
                 before = sessions.lookup_by_session_key(foreign_key)
+                mobile_before = dict(db.get_session(mobile.session_id))
+                foreign_before = dict(db.get_session(foreign.session_id))
                 selected = await http(
                     port, "POST", "/admin/sessions", token=token,
                     body={"session_id": foreign.session_id},
                 )
                 after = sessions.lookup_by_session_key(foreign_key)
-                durable_after = db.get_session(foreign.session_id)
-                return foreign, before, selected, after, adapter.bound_conversation("inst-1"), durable_after
+                durable_after = dict(db.get_session(foreign.session_id))
+                mobile_after = dict(db.get_session(mobile.session_id))
+                return (
+                    foreign, before, selected, after, adapter.bound_conversation("inst-1"),
+                    foreign_before, durable_after, mobile_before, mobile_after,
+                )
             finally:
                 await stop(adapter)
 
-    foreign, before, selected, after, mobile_bound, durable_after = run(scenario())
+    (
+        foreign, before, selected, after, mobile_bound,
+        foreign_before, durable_after, mobile_before, mobile_after,
+    ) = run(scenario())
     assert selected[0] == 200, selected
     assert before.session_id == foreign.session_id
     assert after.session_id == foreign.session_id
     assert after.session_key == before.session_key
     assert mobile_bound.session_id == foreign.session_id
+    assert durable_after == foreign_before
     assert durable_after["source"] == "weixin"
+    assert mobile_after == mobile_before
 
 
 def test_history_rejects_unknown_target_session(tmp_path):
