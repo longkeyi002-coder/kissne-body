@@ -85,4 +85,12 @@ class TransportContractTest {
             currentInstallStamp = 3000L,
         ))
     }
+    @Test fun embedded_shell_uses_runtime_build_version_for_child_assets() {
+        val html = java.io.File("../../../kissne-prototype/prototype/index.html").readText()
+        assertTrue(html.contains("get('appVersion')"))
+        assertTrue(html.contains("encodeURIComponent(build)"))
+        assertFalse(html.contains("transport.js?v=20260922a"))
+        assertFalse(html.contains("screens-a.js?v=20260922a"))
+        assertFalse(html.contains("app.js?v=20260922a"))
+    }
 }
