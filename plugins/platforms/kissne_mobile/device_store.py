@@ -607,11 +607,8 @@ class DeviceStore:
             conn = self._db()
             try:
                 conn.execute(
-                    "INSERT INTO turns (turn_id, installation_id, conversation_id, state, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(turn_id) DO UPDATE SET "
-                    "state = excluded.state, updated_at = excluded.updated_at "
-                    "WHERE turns.installation_id = excluded.installation_id",
+                    "INSERT OR REPLACE INTO turns (turn_id, installation_id, conversation_id, state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (handle, installation, str(conversation_id or ""), str(state), now, now),
                 )
                 conn.commit()
