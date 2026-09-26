@@ -1176,6 +1176,16 @@ class SessionStore(
                 "repoint_source_alias_to_existing_session: cannot derive routing key"
             )
         with self._lock:
+            self._ensure_loaded_locked()
+            current = self._entries.get(session_key)
+            if current is None:
+                raise RouteBindingError(
+                    f"repoint_source_alias_to_existing_session: routing key {session_key!r} is not bound"
+                )
+            # Re-selecting the current alias is a true no-op, even when the durable row has
+            # since ended/archived. A read-only client must never fail merely for selecting itself.
+            if current.session_id == target_session_id:
+                return current
             db = self._db_for_key(session_key)
             get_row = getattr(db, "get_session", None)
             raw = get_row(target_session_id) if callable(get_row) else None
@@ -1184,22 +1194,12 @@ class SessionStore(
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: session {target_session_id} does not exist"
                 )
-            if row.get("ended_at") is not None or row.get("end_reason"):
-                raise RouteBindingError(
-                    f"repoint_source_alias_to_existing_session: session {target_session_id} is ended"
-                )
+            # Ended/reset conversations remain valid transcript targets. Repointing is routing-only:
+            # it deliberately does not reopen or mutate the durable row.
             if row.get("archived"):
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: session {target_session_id} is archived"
                 )
-            self._ensure_loaded_locked()
-            current = self._entries.get(session_key)
-            if current is None:
-                raise RouteBindingError(
-                    f"repoint_source_alias_to_existing_session: routing key {session_key!r} is not bound"
-                )
-            if current.session_id == target_session_id:
-                return current
             alias = SessionEntry(
                 session_key=session_key, session_id=target_session_id,
                 created_at=current.created_at, updated_at=_now(),
