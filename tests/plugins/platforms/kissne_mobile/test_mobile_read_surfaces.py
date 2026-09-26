@@ -336,13 +336,64 @@ def test_cross_lane_select_changes_only_mobile_alias(tmp_path):
                     body={"session_id": foreign.session_id},
                 )
                 after = sessions.lookup_by_session_key(foreign_key)
-                return foreign, before, selected, after, adapter.bound_conversation("inst-1")
+                durable_after = db.get_session(foreign.session_id)
+                return foreign, before, selected, after, adapter.bound_conversation("inst-1"), durable_after
             finally:
                 await stop(adapter)
 
-    foreign, before, selected, after, mobile_bound = run(scenario())
+    foreign, before, selected, after, mobile_bound, durable_after = run(scenario())
     assert selected[0] == 200, selected
     assert before.session_id == foreign.session_id
     assert after.session_id == foreign.session_id
     assert after.session_key == before.session_key
     assert mobile_bound.session_id == foreign.session_id
+    assert durable_after["source"] == "weixin"
+
+
+def test_history_rejects_unknown_target_session(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                return await http(port, "GET", "/history?session_id=does-not-exist&limit=50", token=token)
+            finally:
+                await stop(adapter)
+
+    result = run(scenario())
+    assert result[0] == 404
+    assert result[1]["error"] == "session_not_found"
+
+
+def test_history_cursor_cannot_cross_selected_session(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="cursor-active", user_id="active")
+            target = preexisting_conversation(sessions, chat_id="cursor-target", user_id="target")
+            seed_transcript(sessions, active.session_id, 2)
+            seed_transcript(sessions, target.session_id, 2)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                active_page = await http(
+                    port, "GET", f"/history?session_id={active.session_id}&limit=1", token=token,
+                )
+                foreign_cursor = active_page[1]["messages"][0]["message_ref"]
+                return await http(
+                    port, "GET",
+                    f"/history?session_id={target.session_id}&limit=1&before={foreign_cursor}",
+                    token=token,
+                )
+            finally:
+                await stop(adapter)
+
+    result = run(scenario())
+    assert result[0] == 400
+    assert result[1]["error"] == "history_cursor_not_found"
