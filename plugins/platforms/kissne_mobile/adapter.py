@@ -1407,6 +1407,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not installation:
             return _error_response("unauthorized", 401)
         if str(getattr(request, "content_type", "") or "").lower().startswith("multipart/"):
+            if await asyncio.to_thread(self._bound_session_is_ended, installation):
+                return _error_response("session_read_only", 409)
             return await self._handle_media_inbound(request, installation)
         payload, error = await self._payload(request)
         if error is not None:
@@ -1416,6 +1418,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if str(body.get("text") or "").strip():
                 return _error_response("text_and_ack_are_mutually_exclusive", 400)
             return await self._handle_ack(installation, body)
+        if await asyncio.to_thread(self._bound_session_is_ended, installation):
+            return _error_response("session_read_only", 409)
         text = str(body.get("text") or "")
         if "attachments" in body:
             if isinstance(body.get("attachments"), list):
@@ -1708,6 +1712,24 @@ class KissneMobileAdapter(BasePlatformAdapter):
         })
 
     # -- bootstrap / cancel (the app's cold start, and its stop button) -----------------------------
+
+    def _bound_session_is_ended(self, installation: str) -> bool:
+        """Whether this device currently points at a durable, ended conversation."""
+        identity = self._conversation_identity(installation) or {}
+        session_id = str(identity.get("session_id") or "")
+        store = getattr(self, "_session_store", None)
+        if not session_id or store is None:
+            return False
+        try:
+            db = store._db_for_key(self.mobile_session_key(installation))
+            get_session = getattr(db, "get_session", None) if db is not None else None
+            row = get_session(session_id) if callable(get_session) else None
+        except Exception:
+            logger.warning("[kissne_mobile] could not inspect bound session lifecycle", exc_info=True)
+            return True
+        if not isinstance(row, dict):
+            return True
+        return row.get("ended_at") is not None or bool(row.get("end_reason"))
 
     def _conversation_identity(self, installation: str) -> Optional[Dict[str, Any]]:
         """The Runtime Conversation this installation is joined to, or ``None`` when it joined none.
@@ -2080,6 +2102,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     list_rich,
                     limit=page_size, offset=offset, include_children=False,
                     include_archived=False, order_by_last_active=True, compact_rows=True,
+                    include_pinned=True,
                 )
                 rows.extend(page)
                 if len(page) < page_size:
@@ -2088,6 +2111,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if current_id and all(str(row.get("id") or "") != current_id for row in rows):
                 active_row = await asyncio.to_thread(get_session, current_id) if callable(get_session) else None
                 if isinstance(active_row, dict):
+                    # get_session() does not project list_sessions_rich.last_active. Recover it
+                    # from the transcript so an archived active row does not sort to the bottom.
+                    try:
+                        transcript = await asyncio.to_thread(store.load_transcript, current_id) or []
+                        stamps = [
+                            item.get("created_at", item.get("timestamp", item.get("ts")))
+                            for item in transcript if isinstance(item, dict)
+                        ]
+                        numeric_stamps = [float(stamp) for stamp in stamps if stamp not in (None, "")]
+                        if numeric_stamps:
+                            active_row["last_active"] = max(numeric_stamps)
+                    except (TypeError, ValueError):
+                        logger.debug("[kissne_mobile] active session has non-numeric transcript time")
                     rows.append(active_row)
         except Exception:
             logger.warning("[kissne_mobile] could not list durable sessions", exc_info=True)
