@@ -309,18 +309,21 @@
       return card('<div class="sessiondrawer__empty">没有匹配的会话</div>');
     }
 
+    function sessionTimeMs(value) {
+      if (typeof value === 'number' && value < 1000000000000) return value * 1000;
+      var parsed = new Date(value || 0).getTime();
+      return isNaN(parsed) ? 0 : parsed;
+    }
     sessions.sort(function (x, y) {
-      var ax = new Date(x.updatedAt || x.createdAt || 0).getTime() || 0;
-      var ay = new Date(y.updatedAt || y.createdAt || 0).getTime() || 0;
-      return ay - ax;
+      return sessionTimeMs(y.updatedAt || y.createdAt) - sessionTimeMs(x.updatedAt || x.createdAt);
     });
 
     return card(sessions.map(function (s) {
       var parts = [];
-      if (s.messageCount) parts.push(s.messageCount + ' 条消息');
+      if (typeof s.messageCount === 'number') parts.push(s.messageCount + ' 条消息');
       var when = s.updatedAt || s.createdAt;
       if (when) {
-        var d = new Date(when);
+        var d = new Date(sessionTimeMs(when));
         parts.push(isNaN(d.getTime()) ? String(when) : d.toLocaleString([], {
           month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
         }));
