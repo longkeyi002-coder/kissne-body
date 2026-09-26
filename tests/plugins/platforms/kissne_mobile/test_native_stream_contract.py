@@ -6,6 +6,36 @@ from gateway.platforms.base import SendResult
 from gateway.stream_consumer import GatewayStreamConsumer
 from plugins.platforms.kissne_mobile.adapter import KissneMobileAdapter
 
+from _transport_harness import (
+    build_session_store,
+    http,
+    isolated_runtime,
+    make_adapter,
+    pair,
+    preexisting_conversation,
+    run,
+    start,
+    stop,
+)
+
+INSTALLATION = "inst-1"
+
+
+async def _open_turn(port, token, *, text="ping", message_id="m-turn-native") -> dict:
+    status, payload, _ = await http(
+        port, "POST", "/messages", token=token,
+        body={"text": text, "message_id": message_id},
+    )
+    assert status == 202, payload
+    return payload
+
+
+async def _drain(port, token, cursor=0):
+    status, payload, _ = await http(port, "GET", f"/messages?cursor={cursor}", token=token)
+    assert status == 200, payload
+    return payload
+
+
 
 @pytest.mark.asyncio
 async def test_seed_call_time_error_is_contained_and_send_result_is_normalized():
