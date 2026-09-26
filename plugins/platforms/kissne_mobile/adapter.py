@@ -1036,8 +1036,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             by_id[bound_id] = canonical if isinstance(canonical, dict) else {"id": bound_id}
         return list(by_id.values())
 
-    def _mobile_history_rows(self, installation: str, session_id: str = "") -> List[Dict[str, Any]]:
-        """Read one canonical conversation, or the legacy Mobile-visible timeline when unspecified."""
+    def _mobile_history_rows(
+        self, installation: str, session_id: str = "", *, include_mobile_timeline: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Read one canonical conversation; aggregate the legacy Mobile timeline only for search."""
         store = getattr(self, "_session_store", None)
         if store is None:
             return []
@@ -1067,7 +1069,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
             target = get_session(session_id) if callable(get_session) else None
             sessions = [target] if isinstance(target, dict) else []
         else:
-            sessions = self._mobile_history_sessions(installation)
+            if include_mobile_timeline:
+                sessions = self._mobile_history_sessions(installation)
+            else:
+                identity = self._conversation_identity(installation)
+                current_id = str((identity or {}).get("session_id") or "")
+                if not current_id:
+                    sessions = []
+                else:
+                    mobile_key = self.mobile_session_key(installation)
+                    db = store._db_for_key(mobile_key)
+                    get_session = getattr(db, "get_session", None) if db is not None else None
+                    current = get_session(current_id) if callable(get_session) else None
+                    sessions = [current] if isinstance(current, dict) else []
         for session in sessions:
             session_id = str(session.get("id") or "")
             if not session_id:
@@ -1193,7 +1207,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("limit_must_be_an_integer", 400)
         limit = max(1, min(limit, 50))
         needle = query.casefold()
-        rows = await asyncio.to_thread(self._mobile_history_rows, installation)
+        rows = await asyncio.to_thread(
+            self._mobile_history_rows, installation, include_mobile_timeline=True
+        )
         matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]
         return _json_response({"ok": True, "results": matches[:limit]})
 
