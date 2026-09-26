@@ -446,4 +446,4 @@ internal fun shouldRefreshEmbeddedWebAssets(
 
 internal fun embeddedWebAssetEntryUrl(versionCode: Int, installStamp: Long): String =
     "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=" +
-        versionCode + "-" + installStamp
+        versionCode
