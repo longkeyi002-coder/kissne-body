@@ -123,10 +123,11 @@
   function sessionMetaText(s, active) {
     if (active) return '当前会话';
     var parts = [];
-    if (s && s.messageCount) parts.push(s.messageCount + ' 条消息');
+    if (s && typeof s.messageCount === 'number') parts.push(s.messageCount + ' 条消息');
     if (s && s.source) parts.push(s.source);
     if (s && s.updatedAt) {
-      var d = new Date(s.updatedAt);
+      var rawUpdated = s.updatedAt;
+      var d = new Date(typeof rawUpdated === 'number' && rawUpdated < 1000000000000 ? rawUpdated * 1000 : rawUpdated);
       parts.push(isNaN(d.getTime()) ? String(s.updatedAt) : d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
     }
     return parts.join(' · ') || '服务器会话';
