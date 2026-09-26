@@ -263,12 +263,12 @@ def test_session_index_keeps_active_archived_but_hides_other_archived(tmp_path):
             seed_transcript(sessions, active.session_id, 1)
             seed_transcript(sessions, other.session_id, 1)
             db = sessions._db_for_session_id(active.session_id)
-            db.set_session_archived(active.session_id, True)
-            db.set_session_archived(other.session_id, True)
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter, conversation=active)
+                db.set_session_archived(active.session_id, True)
+                db.set_session_archived(other.session_id, True)
                 return active.session_id, other.session_id, await http(port, "GET", "/admin/sessions", token=token)
             finally:
                 await stop(adapter)
