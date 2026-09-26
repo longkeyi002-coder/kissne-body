@@ -380,7 +380,7 @@ def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_pat
             db = sessions._db_for_session_id(ended.session_id)
             db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", ended.session_id))
             seed_transcript(sessions, ended.session_id, 3)
-            sessions._promote_session_reset(ended.session_key, ended.session_id, "session_reset")
+            sessions._promote_session_reset(ended.session_key, ended.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
             before = dict(db.get_session(ended.session_id))
             adapter.set_session_store(sessions)
             port = await start(adapter)
@@ -423,7 +423,7 @@ def test_reselect_current_ended_session_is_noop(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=current)
                 db = sessions._db_for_session_id(current.session_id)
-                sessions._promote_session_reset(current.session_key, current.session_id, "session_reset")
+                sessions._promote_session_reset(current.session_key, current.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
                 before = dict(db.get_session(current.session_id))
                 selected = await http(
                     port, "POST", "/admin/sessions", token=token,
