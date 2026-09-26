@@ -124,6 +124,7 @@
     if (active) return '当前会话';
     var parts = [];
     if (s && s.messageCount) parts.push(s.messageCount + ' 条消息');
+    if (s && s.source) parts.push(s.source);
     if (s && s.updatedAt) {
       var d = new Date(s.updatedAt);
       parts.push(isNaN(d.getTime()) ? String(s.updatedAt) : d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
@@ -1500,6 +1501,24 @@
         var match = /^turn:([^:]+):(user|assistant)$/.exec(String(ref || ''));
         return match ? match[1] : '';
       }
+      async function loadCompleteSessionHistory(sessionId, fallbackHistory) {
+        if (!T || typeof T.history !== 'function' || !sessionId) return fallbackHistory || [];
+        var before = '';
+        var pages = [];
+        var seenCursors = Object.create(null);
+        for (;;) {
+          var payload = await T.history(100, before, sessionId);
+          var page = payload && Array.isArray(payload.messages) ? payload.messages : [];
+          pages.unshift(page);
+          if (!payload || !payload.has_more) break;
+          var next = String(payload.next_before || '');
+          if (!next || seenCursors[next]) throw new Error('history_cursor_stalled');
+          seenCursors[next] = true;
+          before = next;
+        }
+        return Array.prototype.concat.apply([], pages);
+      }
+
       function hydrateHistory(history) {
         /* Never use role+text equality to reconcile fresh local messages. Repeated identical
            messages are valid, and stale bootstrap history can otherwise swallow the newest one.
@@ -2018,7 +2037,13 @@
             s.active = sessionIsCurrent(s);
           });
           paintSessionList();
-          hydrateHistory(boot.history || []);
+          var completeHistory = boot.history || [];
+          try {
+            completeHistory = await loadCompleteSessionHistory(CURRENT_SESSION_ID, completeHistory);
+          } catch (historyErr) {
+            setSessionStatus('完整历史暂时读取失败，已显示最近消息。');
+          }
+          hydrateHistory(completeHistory);
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
