@@ -93,4 +93,18 @@ class TransportContractTest {
         assertFalse(html.contains("screens-a.js?v=20260922a"))
         assertFalse(html.contains("app.js?v=20260922a"))
     }
+    @Test fun embedded_asset_url_changes_for_same_version_reinstall() {
+        val first = embeddedWebAssetEntryUrl(26, 1000L)
+        val replaced = embeddedWebAssetEntryUrl(26, 2000L)
+        assertNotEquals(first, replaced)
+        assertTrue(first.contains("appVersion=26-1000"))
+        assertTrue(replaced.contains("appVersion=26-2000"))
+    }
+
+    @Test fun embedded_asset_url_is_stable_for_ordinary_restart() {
+        assertEquals(
+            embeddedWebAssetEntryUrl(26, 2000L),
+            embeddedWebAssetEntryUrl(26, 2000L),
+        )
+    }
 }
