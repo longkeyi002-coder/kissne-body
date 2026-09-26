@@ -59,4 +59,30 @@ class TransportContractTest {
             currentInstallStamp = 3000L,
         ))
     }
+    @Test fun first_install_does_not_need_stale_asset_cleanup() {
+        assertFalse(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 0,
+            currentVersionCode = 26,
+            previousInstallStamp = 0L,
+            currentInstallStamp = 2000L,
+        ))
+    }
+
+    @Test fun same_version_with_same_install_stamp_does_not_clear_on_cold_start() {
+        assertFalse(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 26,
+            currentVersionCode = 26,
+            previousInstallStamp = 2000L,
+            currentInstallStamp = 2000L,
+        ))
+    }
+
+    @Test fun downgrade_or_replaced_build_also_refreshes_assets() {
+        assertTrue(shouldRefreshEmbeddedWebAssets(
+            previousVersionCode = 27,
+            currentVersionCode = 26,
+            previousInstallStamp = 2000L,
+            currentInstallStamp = 3000L,
+        ))
+    }
 }
