@@ -1,5 +1,5 @@
 name: Android
-# Manual rebuild trigger after mobile fix #45.
+# Manual rebuild trigger for verified PR #59 APK (c67ab5c4).
 
 on:
   workflow_dispatch:
