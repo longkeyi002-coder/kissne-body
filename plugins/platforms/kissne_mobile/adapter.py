@@ -677,6 +677,31 @@ class KissneMobileAdapter(BasePlatformAdapter):
         suffix = separator + progress
         return snapshot[:-len(suffix)] if snapshot.endswith(suffix) else snapshot
 
+    @staticmethod
+    def _conversation_turn_id(session_id: str) -> str:
+        """Create an opaque transport turn id that can recover its canonical SessionStore owner."""
+        import base64
+        raw = str(session_id or "").encode("utf-8")
+        owner = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return f"kbm_turn_v2.{owner}.{secrets.token_hex(8)}"
+
+    @staticmethod
+    def _turn_conversation_id(turn_id: str) -> str:
+        """Recover the canonical session id embedded by _conversation_turn_id; legacy ids return empty."""
+        import base64
+        value = str(turn_id or "")
+        prefix = "kbm_turn_v2."
+        if not value.startswith(prefix):
+            return ""
+        parts = value[len(prefix):].split(".", 1)
+        if len(parts) != 2 or not parts[0]:
+            return ""
+        try:
+            encoded = parts[0]
+            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return ""
+
     def _clear_draft_state(self, installation_id: str) -> None:
         installation = str(installation_id or "")
         keys = set(self._draft_text_last) | set(self._draft_activity_seen) | set(self._draft_tool_labels)
@@ -1111,7 +1136,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             outcome = await asyncio.to_thread(
                 store.record_inbound, installation, client_message_id, fingerprint, turn_id)
@@ -1132,10 +1158,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to persist inbound attachment")
             return _error_response("attachment_store_failed", 503)
 
-        identity = self._conversation_identity(installation) or {}
         await asyncio.to_thread(
-            store.open_turn, turn_id, installation,
-            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1539,7 +1563,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             outcome = await asyncio.to_thread(
                 store.record_inbound, installation, client_message_id, fingerprint, turn_id
@@ -1558,10 +1583,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.exception("[kissne_mobile] failed to materialize inbound attachment")
             return _error_response("attachment_store_failed", 503)
         row = materialized[0]
-        identity = self._conversation_identity(installation) or {}
         await asyncio.to_thread(
-            store.open_turn, turn_id, installation,
-            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
@@ -1655,7 +1678,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return _error_response("message_id_conflict", 409)
 
         message_id = client_message_id or f"kbm_in_{secrets.token_hex(8)}"
-        turn_id = f"kbm_turn_{secrets.token_hex(8)}"
+        identity = self._conversation_identity(installation) or {}
+        turn_id = self._conversation_turn_id(str(identity.get("session_id") or ""))
         if client_message_id:
             # The claim is the gate: whichever concurrent retry wins it is the one that injects the turn.
             outcome = await asyncio.to_thread(
@@ -1667,10 +1691,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if outcome == INBOUND_CONFLICT:
                 return _error_response("message_id_conflict", 409)
 
-        identity = self._conversation_identity(installation) or {}
         await asyncio.to_thread(
-            store.open_turn, turn_id, installation,
-            conversation_id=str(identity.get("session_id") or ""), state=TURN_PENDING)
+            store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
