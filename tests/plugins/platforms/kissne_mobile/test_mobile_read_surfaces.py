@@ -1,4 +1,6 @@
 """Regression coverage for Android read surfaces."""
+from pathlib import Path
+
 from _transport_harness import (
     build_session_store, http, isolated_runtime, make_adapter, pair,
     preexisting_conversation, run, seed_transcript, start, stop,
@@ -278,6 +280,48 @@ def test_session_index_keeps_active_archived_but_hides_other_archived(tmp_path):
     assert active_id in ids
     assert other_id not in ids
 
+
+
+def test_history_without_session_id_reads_only_current_bound_conversation(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(
+                sessions, chat_id="default-history-active", user_id="active-user"
+            )
+            other = preexisting_conversation(
+                sessions, chat_id="default-history-other", user_id="other-user"
+            )
+            seed_transcript(sessions, active.session_id, 3)
+            seed_transcript(sessions, other.session_id, 3)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                return active.session_id, other.session_id, await http(
+                    port, "GET", "/history?limit=50", token=token
+                )
+            finally:
+                await stop(adapter)
+
+    active_id, other_id, result = run(scenario())
+    assert result[0] == 200, result
+    refs = [str(row["message_ref"]) for row in result[1]["messages"]]
+    assert refs
+    assert all(ref.startswith(active_id + ":") for ref in refs)
+    assert not any(ref.startswith(other_id + ":") for ref in refs)
+
+
+def test_web_session_history_contract_is_lazy_and_keeps_active_metadata():
+    root = Path(__file__).resolve().parents[4]
+    source = (root / "kissne-prototype/prototype/screens-a.js").read_text(encoding="utf-8")
+    assert "T.history(50, '', sessionId)" in source
+    assert "T.history(50, requestedBefore, CURRENT_SESSION_ID)" in source
+    assert "还有更早的记录 · 上滑加载" in source
+    assert "list.scrollTop <= 24 && sessionHistoryHasMore" in source
+    assert "if (active) return '当前会话';" not in source
+    assert "if (active) parts.push('当前会话');" in source
 
 def test_history_session_id_pages_only_target_session_to_oldest_message(tmp_path):
     async def scenario():
