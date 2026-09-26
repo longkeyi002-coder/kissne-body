@@ -154,7 +154,6 @@ class DeviceStore:
             CREATE TABLE IF NOT EXISTS turns (
                 turn_id         TEXT PRIMARY KEY,
                 installation_id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL DEFAULT '',
                 state           TEXT NOT NULL,
                 created_at      REAL NOT NULL,
                 updated_at      REAL NOT NULL
@@ -214,12 +213,6 @@ class DeviceStore:
             );
             """
         )
-        # Existing installations may have been created before turn conversation provenance existed.
-        # This is transport correlation only: SessionStore remains the source of conversation truth.
-        turn_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(turns)").fetchall()}
-        if "conversation_id" not in turn_columns:
-            conn.execute("ALTER TABLE turns ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''")
-        conn.commit()
         self._conn = conn
 
     def _db(self) -> sqlite3.Connection:
@@ -596,7 +589,7 @@ class DeviceStore:
                      requested, upto, _fingerprint(installation), count)
         return count, upto
 
-    def open_turn(self, turn_id: str, installation_id: str, *, conversation_id: str = "", state: str = TURN_PENDING) -> None:
+    def open_turn(self, turn_id: str, installation_id: str, *, state: str = TURN_PENDING) -> None:
         """Record a newly accepted inbound turn (the handle the device correlates events with)."""
         handle = str(turn_id or "").strip()
         if not handle:
@@ -607,12 +600,12 @@ class DeviceStore:
             conn = self._db()
             try:
                 conn.execute(
-                    "INSERT INTO turns (turn_id, installation_id, conversation_id, state, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO turns (turn_id, installation_id, state, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(turn_id) DO UPDATE SET "
                     "state = excluded.state, updated_at = excluded.updated_at "
                     "WHERE turns.installation_id = excluded.installation_id",
-                    (handle, installation, str(conversation_id or ""), str(state), now, now),
+                    (handle, installation, str(state), now, now),
                 )
                 conn.commit()
             except Exception:
@@ -626,7 +619,7 @@ class DeviceStore:
             return None
         with self._lock:
             row = self._db().execute(
-                "SELECT turn_id, installation_id, conversation_id, state, created_at, updated_at FROM turns "
+                "SELECT turn_id, installation_id, state, created_at, updated_at FROM turns "
                 "WHERE turn_id = ?",
                 (handle,),
             ).fetchone()
