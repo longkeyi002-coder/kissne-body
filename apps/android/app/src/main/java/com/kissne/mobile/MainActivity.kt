@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        clearWebViewCacheAfterUpgrade()
+        clearWebViewCacheAfterUpgrade(packageManager.getPackageInfo(packageName, 0).lastUpdateTime)
         webView.loadUrl(
             "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}"
         )
@@ -378,18 +378,29 @@ class MainActivity : AppCompatActivity() {
         if (::bridge.isInitialized) bridge.resolveNative(requestId, ok, payload)
     }
 
-    private fun clearWebViewCacheAfterUpgrade() {
+    private fun clearWebViewCacheAfterUpgrade(currentInstallStamp: Long) {
         val prefs = getSharedPreferences("kissne_webview", MODE_PRIVATE)
-        val key = "asset_version_code"
-        val previousVersionCode = prefs.getInt(key, 0)
+        val versionKey = "asset_version_code"
+        val installKey = "asset_install_stamp"
+        val previousVersionCode = prefs.getInt(versionKey, 0)
+        val previousInstallStamp = prefs.getLong(installKey, 0L)
         val currentVersionCode = BuildConfig.VERSION_CODE
 
-        if (previousVersionCode != 0 && previousVersionCode != currentVersionCode) {
+        if (shouldRefreshEmbeddedWebAssets(
+                previousVersionCode,
+                currentVersionCode,
+                previousInstallStamp,
+                currentInstallStamp,
+            )
+        ) {
             webView.clearCache(true)
             webView.clearHistory()
         }
-        if (previousVersionCode != currentVersionCode) {
-            prefs.edit().putInt(key, currentVersionCode).apply()
+        if (previousVersionCode != currentVersionCode || previousInstallStamp != currentInstallStamp) {
+            prefs.edit()
+                .putInt(versionKey, currentVersionCode)
+                .putLong(installKey, currentInstallStamp)
+                .apply()
         }
     }
 
@@ -418,4 +429,15 @@ class MainActivity : AppCompatActivity() {
         }
         super.onDestroy()
     }
+}
+
+
+internal fun shouldRefreshEmbeddedWebAssets(
+    previousVersionCode: Int,
+    currentVersionCode: Int,
+    previousInstallStamp: Long,
+    currentInstallStamp: Long,
+): Boolean {
+    if (previousVersionCode == 0 || previousInstallStamp == 0L) return false
+    return previousVersionCode != currentVersionCode || previousInstallStamp != currentInstallStamp
 }
