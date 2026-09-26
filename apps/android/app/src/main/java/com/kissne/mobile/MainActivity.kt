@@ -163,9 +163,10 @@ class MainActivity : AppCompatActivity() {
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        clearWebViewCacheAfterUpgrade(packageManager.getPackageInfo(packageName, 0).lastUpdateTime)
+        val installStamp = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        clearWebViewCacheAfterUpgrade(installStamp)
         webView.loadUrl(
-            "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=${BuildConfig.VERSION_CODE}"
+            embeddedWebAssetEntryUrl(BuildConfig.VERSION_CODE, installStamp)
         )
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
@@ -441,3 +442,8 @@ internal fun shouldRefreshEmbeddedWebAssets(
     if (previousVersionCode == 0 || previousInstallStamp == 0L) return false
     return previousVersionCode != currentVersionCode || previousInstallStamp != currentInstallStamp
 }
+
+
+internal fun embeddedWebAssetEntryUrl(versionCode: Int, installStamp: Long): String =
+    "https://appassets.androidplatform.net/assets/index.html?native=1&appVersion=" +
+        versionCode + "-" + installStamp
