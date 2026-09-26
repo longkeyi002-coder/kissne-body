@@ -80,13 +80,19 @@ def adapter_module():
     return importlib.import_module(ADAPTER_MODULE)
 
 
-def make_adapter(*, host: str = "127.0.0.1", port: int = 0):
+def make_adapter(*, host: str = "127.0.0.1", port: int = 0, with_message_handler: bool = True):
     """A fresh adapter over the isolated home — a second call is the "Runtime restarted" case."""
     module = adapter_module()
     from gateway.config import Platform, PlatformConfig
 
     config = PlatformConfig(enabled=True, extra={"host": host, "port": port})
-    return module.KissneMobileAdapter(config, Platform(PLATFORM))
+    adapter = module.KissneMobileAdapter(config, Platform(PLATFORM))
+    if with_message_handler:
+        async def accept_for_transport_test(_event):
+            return None
+
+        adapter.set_message_handler(accept_for_transport_test)
+    return adapter
 
 
 async def start(adapter) -> int:
