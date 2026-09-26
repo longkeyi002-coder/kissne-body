@@ -1,7 +1,7 @@
 """Regression coverage for Android read surfaces."""
 from _transport_harness import (
-    build_session_store, http, isolated_runtime, make_adapter, pair,
-    preexisting_conversation, run, start, stop,
+    PAIRED_INSTALLATION, build_session_store, http, isolated_runtime, make_adapter, pair,
+    preexisting_conversation, run, seed_transcript, start, stop,
 )
 
 
@@ -92,6 +92,90 @@ def test_session_select_by_id_uses_authenticated_route_and_preserves_token(tmp_p
     assert bootstrap[0] == 200, bootstrap
     assert bootstrap[1]["conversation"]["session_id"] == second.session_id
     assert unauth[0] == 401
+
+
+def test_picker_lists_the_devices_own_conversations_with_their_titles(tmp_path):
+    """The picker is device-scoped and names each row after its own conversation.
+
+    Reading the host-wide routing index instead returned one row per routing alias —
+    labelled with the installation — and hid every conversation the device had
+    already used, so the Android picker had nothing readable to offer.
+    """
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            device_row = sessions.get_or_create_session(
+                adapter.source_for_installation(PAIRED_INSTALLATION)
+            )
+            sessions._db_for_key(device_row.session_key).set_session_title(
+                device_row.session_id, "哥哥我今天想你了"
+            )
+            seed_transcript(sessions, device_row.session_id, 2)
+            foreign = preexisting_conversation(sessions, chat_id="someone-else", user_id="user-else")
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=device_row)
+                listed = await http(port, "GET", "/admin/sessions", token=token)
+                return device_row, foreign, listed
+            finally:
+                await stop(adapter)
+
+    device_row, foreign, listed = run(scenario())
+    assert listed[0] == 200, listed
+    rows = {row["session_id"]: row for row in listed[1]["sessions"]}
+    assert foreign.session_id not in rows, "another lane's conversation is not this device's to pick"
+    assert device_row.session_id in rows
+    assert rows[device_row.session_id]["title"] == "哥哥我今天想你了"
+    assert rows[device_row.session_id]["active"] is True
+    assert listed[1]["active_session_id"] == device_row.session_id
+
+
+def test_picker_rejoins_a_conversation_whose_routing_alias_moved_on(tmp_path):
+    """A retired route must not make the device's own conversation unselectable.
+
+    ``/new`` keeps the routing key but points it at a fresh session, and a switch
+    away retires the alias the same way; the conversation itself stays a legitimate
+    picker target because the device already owns its row.
+    """
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            earlier = sessions.get_or_create_session(
+                adapter.source_for_installation(PAIRED_INSTALLATION)
+            )
+            sessions._db_for_key(earlier.session_key).set_session_title(
+                earlier.session_id, "更早的那次对话"
+            )
+            seed_transcript(sessions, earlier.session_id, 2)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=earlier)
+                later = sessions.reset_session(
+                    earlier.session_key, display_name=f"Kissne Mobile ({PAIRED_INSTALLATION})"
+                )
+                assert later is not None and later.session_id != earlier.session_id
+                assert sessions.lookup_by_session_id(earlier.session_id) is None
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": earlier.session_id},
+                )
+                bootstrap = await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
+                listed = await http(port, "GET", "/admin/sessions", token=token)
+                return earlier, later, selected, bootstrap, listed
+            finally:
+                await stop(adapter)
+
+    earlier, later, selected, bootstrap, listed = run(scenario())
+    assert selected[0] == 200, selected
+    assert selected[1]["conversation"]["session_id"] == earlier.session_id
+    assert bootstrap[0] == 200, bootstrap
+    assert bootstrap[1]["conversation"]["session_id"] == earlier.session_id
+    names = {row["session_id"]: row["title"] for row in listed[1]["sessions"]}
+    assert names.get(earlier.session_id) == "更早的那次对话"
 
 
 def test_pair_endpoint_rejects_installation_only_token_mint(tmp_path):
