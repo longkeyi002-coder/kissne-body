@@ -368,7 +368,7 @@ def test_history_session_id_pages_only_target_session_to_oldest_message(tmp_path
 
 
 
-def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_path):
+def test_select_ended_session_reopens_target_and_preserves_both_peers(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
@@ -378,8 +378,12 @@ def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_pat
             db = sessions._db_for_session_id(ended.session_id)
             db._write_sql("UPDATE sessions SET source = ? WHERE id = ?", ("weixin", ended.session_id))
             seed_transcript(sessions, ended.session_id, 3)
-            sessions._promote_session_reset(ended.session_key, ended.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
-            before = dict(db.get_session(ended.session_id))
+            sessions._promote_session_reset(
+                ended.session_key, ended.session_id, "session_reset",
+                log=lambda *_args, **_kwargs: None,
+            )
+            target_before = dict(db.get_session(ended.session_id))
+            mobile_before = dict(db.get_session(mobile.session_id))
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
@@ -388,29 +392,49 @@ def test_select_ended_session_is_alias_only_and_history_remains_readable(tmp_pat
                     port, "POST", "/admin/sessions", token=token,
                     body={"session_id": ended.session_id},
                 )
+                target_after_select = dict(db.get_session(ended.session_id))
                 history = await http(port, "GET", "/history?limit=50", token=token)
-                rejected_send = await http(
+                send = await http(
                     port, "POST", "/messages", token=token,
-                    body={"message_id": "must-not-reopen-ended", "text": "do not append"},
+                    body={"message_id": "continue-ended", "text": "continue this session"},
                 )
-                after = dict(db.get_session(ended.session_id))
-                return ended.session_id, before, selected, history, rejected_send, after
+                source = adapter.source_for_installation("inst-1")
+                routed = sessions.get_or_create_session(source, touch_activity=False)
+                sessions.update_session(routed.session_key)
+                target_after_turn = dict(db.get_session(ended.session_id))
+                mobile_after = dict(db.get_session(mobile.session_id))
+                original_lane = sessions.lookup_by_session_key(ended.session_key)
+                return (
+                    ended.session_id, target_before, mobile_before, selected,
+                    target_after_select, history, send, routed, original_lane,
+                    target_after_turn, mobile_after,
+                )
             finally:
                 await stop(adapter)
 
-    ended_id, before, selected, history, rejected_send, after = run(scenario())
+    (
+        ended_id, target_before, mobile_before, selected, target_after_select,
+        history, send, routed, original_lane, target_after_turn, mobile_after,
+    ) = run(scenario())
     assert selected[0] == 200, selected
     assert selected[1]["conversation"]["session_id"] == ended_id
-    assert after == before
-    assert after["end_reason"] == "session_reset"
+    assert target_before["end_reason"] == "session_reset"
+    assert target_after_select["ended_at"] is None
+    assert target_after_select["end_reason"] is None
+    for field in ("source", "user_id", "session_key", "origin_json"):
+        assert target_after_select[field] == target_before[field]
+        assert target_after_turn[field] == target_before[field]
+    assert original_lane.session_id == ended_id
+    assert mobile_after == mobile_before
+    assert routed.session_id == ended_id
+    assert target_after_turn["ended_at"] is None
     assert history[0] == 200, history
-    assert rejected_send[0] == 409, rejected_send
-    assert rejected_send[1]["error"] == "session_read_only"
     assert len(history[1]["messages"]) == 6
     assert all(str(row["message_ref"]).startswith(ended_id + ":") for row in history[1]["messages"])
+    assert send[0] == 202, send
 
 
-def test_reselect_current_ended_session_is_noop(tmp_path):
+def test_reselect_current_ended_session_reopens_it(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
             adapter = make_adapter()
@@ -421,7 +445,10 @@ def test_reselect_current_ended_session_is_noop(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=current)
                 db = sessions._db_for_session_id(current.session_id)
-                sessions._promote_session_reset(current.session_key, current.session_id, "session_reset", log=lambda *_args, **_kwargs: None)
+                sessions._promote_session_reset(
+                    current.session_key, current.session_id, "session_reset",
+                    log=lambda *_args, **_kwargs: None,
+                )
                 before = dict(db.get_session(current.session_id))
                 selected = await http(
                     port, "POST", "/admin/sessions", token=token,
@@ -435,7 +462,43 @@ def test_reselect_current_ended_session_is_noop(tmp_path):
     current_id, before, selected, after = run(scenario())
     assert selected[0] == 200, selected
     assert selected[1]["conversation"]["session_id"] == current_id
-    assert after == before
+    assert before["end_reason"] == "session_reset"
+    assert after["ended_at"] is None
+    assert after["end_reason"] is None
+    for field in ("source", "user_id", "session_key", "origin_json"):
+        assert after[field] == before[field]
+
+
+def test_reopen_failure_does_not_move_mobile_alias(tmp_path, monkeypatch):
+    with isolated_runtime(tmp_path) as home:
+        sessions = build_session_store(home)
+        adapter = make_adapter()
+        mobile = preexisting_conversation(sessions, chat_id="mobile", user_id="mobile-user")
+        ended = preexisting_conversation(sessions, chat_id="ended", user_id="weixin-user")
+        db = sessions._db_for_session_id(ended.session_id)
+        sessions._promote_session_reset(
+            ended.session_key, ended.session_id, "session_reset",
+            log=lambda *_args, **_kwargs: None,
+        )
+        source = adapter.source_for_installation("inst-1")
+        sessions.bind_source_to_existing_session(source, mobile.session_id)
+        key = sessions._generate_session_key(source)
+        before = dict(db.get_session(mobile.session_id))
+
+        def refuse_reopen(_session_id):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(db, "reopen_session", refuse_reopen)
+        try:
+            sessions.repoint_source_alias_to_existing_session(source, ended.session_id)
+        except RuntimeError as exc:
+            assert str(exc) == "database unavailable"
+        else:
+            raise AssertionError("selection must fail when the target cannot reopen")
+        assert sessions.lookup_by_session_key(key).session_id == mobile.session_id
+        assert dict(db.get_session(mobile.session_id)) == before
+        assert dict(db.get_session(ended.session_id))["end_reason"] == "session_reset"
+
 
 def test_cross_lane_select_changes_only_mobile_alias(tmp_path):
     async def scenario():

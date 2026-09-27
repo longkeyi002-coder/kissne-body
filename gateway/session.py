@@ -1049,7 +1049,16 @@ class SessionStore(
             peer_sid, peer_origin, peer_name = entry.session_id, entry.origin, entry.display_name
         # Metadata-only: single-row UPSERT, outside ``_lock``.
         self._save_entry(session_key)
-        self._record_gateway_session_peer(peer_sid, session_key, peer_origin, display_name=peer_name)
+        # A routing alias does not own the durable row. Per-turn peer refresh must not
+        # overwrite its original platform/user/session_key after a cross-lane select.
+        db = self._db_for_key(session_key)
+        get_row = getattr(db, "get_session", None)
+        try:
+            row = get_row(peer_sid) if callable(get_row) else None
+        except Exception:
+            row = None  # Keep the existing best-effort peer refresh on DB read failures.
+        if not isinstance(row, dict) or row.get("session_key") in (None, session_key):
+            self._record_gateway_session_peer(peer_sid, session_key, peer_origin, display_name=peer_name)
 
     def get_session_metadata(self, session_key: str, key: str, default: Any = None) -> Any:
         """Return a metadata value stored on a live session entry."""
@@ -1161,10 +1170,10 @@ class SessionStore(
     def repoint_source_alias_to_existing_session(
         self, source: SessionSource, target_session_id: str,
     ) -> SessionEntry:
-        """Re-point one existing routing alias without mutating either durable session row.
+        """Move an existing source alias and resume the selected conversation.
 
-        Alias-only counterpart of switch_session for multi-entry clients. It changes only
-        gateway_routing: neither the departed row nor target row is ended, reopened, created, or rewritten.
+        The departed row and the target's canonical peer identity stay untouched.
+        Only the target's lifecycle end stamps are cleared when it was ended.
         """
         if not target_session_id:
             raise RouteBindingError(
@@ -1182,10 +1191,6 @@ class SessionStore(
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: routing key {session_key!r} is not bound"
                 )
-            # Re-selecting the current alias is a true no-op, even when the durable row has
-            # since ended/archived. A read-only client must never fail merely for selecting itself.
-            if current.session_id == target_session_id:
-                return current
             db = self._db_for_key(session_key)
             get_row = getattr(db, "get_session", None)
             raw = get_row(target_session_id) if callable(get_row) else None
@@ -1194,20 +1199,33 @@ class SessionStore(
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: session {target_session_id} does not exist"
                 )
-            # Ended/reset conversations remain valid transcript targets. Repointing is routing-only:
-            # it deliberately does not reopen or mutate the durable row.
             if row.get("archived"):
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: session {target_session_id} is archived"
                 )
+            if row.get("ended_at") is not None or row.get("end_reason"):
+                reopen = getattr(db, "reopen_session", None)
+                if not callable(reopen):
+                    raise RouteBindingError(
+                        f"repoint_source_alias_to_existing_session: cannot reopen {target_session_id}"
+                    )
+                reopen(target_session_id)  # Strict: never bind to a still-ended row on failure.
+                reopened = get_row(target_session_id)
+                if not isinstance(reopened, dict) or reopened.get("ended_at") is not None or reopened.get("end_reason"):
+                    raise RouteBindingError(
+                        f"repoint_source_alias_to_existing_session: session {target_session_id} remains ended"
+                    )
+            if current.session_id == target_session_id:
+                return current
             alias = SessionEntry(
                 session_key=session_key, session_id=target_session_id,
                 created_at=current.created_at, updated_at=_now(),
                 origin=current.origin, display_name=current.display_name,
                 platform=current.platform, chat_type=current.chat_type,
             )
+            # Persist the candidate before publishing it to concurrent readers.
+            self._save_entry(session_key, entry_data=alias.to_dict(), lock_held=True)
             self._entries[session_key] = alias
-            self._save_entry(session_key, lock_held=True)
         return alias
 
     def bind_source_to_existing_session(
