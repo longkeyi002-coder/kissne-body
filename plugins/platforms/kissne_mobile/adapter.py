@@ -166,11 +166,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
     def supports_native_streaming(self, chat_type=None, metadata=None) -> bool:
         return True
 
-    async def send_stream_frame(self, chat_id: str, content: str, *,
-                                stream_id: str = "", final: bool = False,
-                                metadata: Optional[Dict[str, Any]] = None) -> SendResult:
-        draft_id = abs(hash(str(stream_id or "mobile"))) % 2147483647 or 1
-        return await self.send_draft(chat_id, draft_id, content, metadata=metadata)
+    # Gateway native-stream contract (gateway/stream_consumer_transport.py): the first
+    # positional is the frame TEXT and routing is keyword-only. Draft id derives from the
+    # turn so every frame of one turn updates the same bubble.
+    async def send_stream_frame(self, text: str, *, finalize: bool = False,
+                                chat_id: Optional[str] = None,
+                                reply_to: Optional[str] = None,
+                                turn_id: str = "",
+                                metadata: Optional[Dict[str, Any]] = None,
+                                **kwargs) -> SendResult:
+        target = str(chat_id or "").strip()
+        if not target:
+            return SendResult(success=False, error="missing target installation")
+        draft_id = abs(hash(str(turn_id or "mobile"))) % 2147483647 or 1
+        return await self.send_draft(target, draft_id, text, metadata=metadata)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -1037,9 +1046,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return list(by_id.values())
 
     def _mobile_history_rows(
-        self, installation: str, session_id: str = "", *, include_mobile_timeline: bool = False,
+        self, installation: str, session_id: str = "", *, include_mobile_timeline: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Read one canonical conversation; aggregate the legacy Mobile timeline only for search."""
+        """Read the continuous Mobile timeline; an explicit ``session_id`` scopes the read to that
+        one canonical conversation. The timeline is what keeps a phone chat readable across /new
+        and reset boundaries, so it is the default rather than an opt-in (search aggregates it too)."""
         store = getattr(self, "_session_store", None)
         if store is None:
             return []

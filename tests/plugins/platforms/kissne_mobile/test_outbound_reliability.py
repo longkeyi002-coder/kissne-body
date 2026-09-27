@@ -348,8 +348,8 @@ def test_native_stream_bridge_preserves_typed_tool_activity(tmp_path):
                     preview="inspect transport", index=1,
                 ))
                 await adapter.send_stream_frame(
-                    INSTALLATION, "Checking transport.\n\n---\n" + str(marker),
-                    stream_id="native-tool-stream",
+                    "Checking transport.\n\n---\n" + str(marker),
+                    chat_id=INSTALLATION, turn_id=turn["turn_id"],
                 )
                 payload = await _drain(port, token, 0)
             finally:

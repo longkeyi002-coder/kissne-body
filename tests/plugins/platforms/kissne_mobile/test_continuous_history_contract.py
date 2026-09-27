@@ -21,18 +21,37 @@ def _rows():
     ]
 
 
+def _record_scope(adapter, seen):
+    """Stub the history seam without blinding it: record the scope the route picked, so a test can
+    assert the DEFAULT read stays on the continuous timeline instead of scoping to one session."""
+
+    def fake_rows(_installation, session_id="", **_kwargs):
+        seen.append(session_id)
+        return _rows()
+
+    adapter._mobile_history_rows = fake_rows
+
+
+def _assert_unscoped(seen):
+    assert seen, "history seam was never reached"
+    assert not any(seen), f"default read scoped itself to a session: {seen}"
+
+
 def test_history_pages_across_hidden_session_boundaries(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
             adapter = make_adapter()
-            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
+            seen: list = []
+            _record_scope(adapter, seen)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter)
-                return await http(port, "GET", "/history?limit=2", token=token)
+                response = await http(port, "GET", "/history?limit=2", token=token)
+                return (*response, seen)
             finally:
                 await stop(adapter)
-    status, payload, _ = run(scenario())
+    status, payload, _, seen = run(scenario())
+    _assert_unscoped(seen)
     assert status == 200
     assert [m["message_ref"] for m in payload["messages"]] == ["old-session:1", "new-session:0"]
     assert payload["has_more"] is True
@@ -44,14 +63,17 @@ def test_search_crosses_hidden_session_boundaries(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path):
             adapter = make_adapter()
-            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
+            seen: list = []
+            _record_scope(adapter, seen)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter)
-                return await http(port, "GET", "/search?q=微信", token=token)
+                response = await http(port, "GET", "/search?q=微信", token=token)
+                return (*response, seen)
             finally:
                 await stop(adapter)
-    status, payload, _ = run(scenario())
+    status, payload, _, seen = run(scenario())
+    _assert_unscoped(seen)
     assert status == 200
     assert [m["message_ref"] for m in payload["results"]] == ["old-session:0"]
 
@@ -63,7 +85,8 @@ def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
             store = build_session_store(home)
             existing = preexisting_conversation(store)
             adapter.set_session_store(store)
-            adapter._mobile_history_rows = lambda _installation, *args, **kwargs: _rows()
+            seen: list = []
+            _record_scope(adapter, seen)
             captured = []
 
             async def capture(event):
@@ -78,10 +101,11 @@ def test_quote_old_session_message_reaches_runtime_reply_fields(tmp_path):
                     body={"message_id": "quote-1", "text": "这个继续处理",
                           "reply_to": "old-session:1"},
                 )
-                return status, payload, captured
+                return status, payload, captured, seen
             finally:
                 await stop(adapter)
-    status, payload, captured = run(scenario())
+    status, payload, captured, seen = run(scenario())
+    _assert_unscoped(seen)
     assert status == 202, payload
     assert len(captured) == 1
     event = captured[0]
@@ -216,6 +240,57 @@ def test_auxiliary_send_is_notice_and_does_not_complete_pending_turn(tmp_path):
     assert len(events) == 1
     assert events[0]["type"] == "notice"
     assert events[0]["text"] == "transcript/status echo"
+
+
+def test_default_history_reads_the_continuous_timeline(tmp_path):
+    """The DEFAULT read must take the timeline path, so a phone chat stays readable across /new and
+    reset boundaries; scoping to one conversation happens only on an explicit session_id."""
+    timeline_calls = []
+
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+
+        class TranscriptStore:
+            @staticmethod
+            def load_transcript(_session_id):
+                return [{"role": "user", "content": "reset 之前的旧消息", "created_at": 1.0}]
+
+        adapter._session_store = TranscriptStore()
+
+        def timeline(_installation):
+            timeline_calls.append(_installation)
+            return [{"id": "legacy-session"}]
+
+        adapter._mobile_history_sessions = timeline
+        rows = adapter._mobile_history_rows("phone-a")
+
+    assert timeline_calls == ["phone-a"], "default history scoped itself to one session"
+    assert [row["text"] for row in rows] == ["reset 之前的旧消息"]
+
+
+def test_explicit_session_id_scopes_the_read(tmp_path):
+    """An explicit session_id is the picker path: read that conversation only."""
+    timeline_calls = []
+
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+
+        class TranscriptStore:
+            @staticmethod
+            def load_transcript(session_id):
+                return [{"role": "user", "content": f"消息来自 {session_id}", "created_at": 1.0}]
+
+            @staticmethod
+            def _db_for_key(_key):
+                return type("DB", (), {"get_session": staticmethod(lambda sid: {"id": sid})})()
+
+        adapter._session_store = TranscriptStore()
+        adapter._mobile_history_sessions = lambda _installation: timeline_calls.append("timeline") or []
+
+        rows = adapter._mobile_history_rows("phone-a", "chosen-session")
+
+    assert timeline_calls == [], "an explicit session_id must not fall back to the timeline"
+    assert [row["text"] for row in rows] == ["消息来自 chosen-session"]
 
 
 def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_path):
