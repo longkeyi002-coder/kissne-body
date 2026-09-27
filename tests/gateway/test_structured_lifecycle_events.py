@@ -177,6 +177,9 @@ async def test_capability_adapter_receives_structured_lifecycle_and_no_text_prog
     assert events[0]["preview"]
     assert events[1]["is_error"] is False
     assert events[3]["is_error"] is True
+    # The completion also carries the tool's own text, so a client can show the result body.
+    assert events[1]["output"] == '{"success": true}'
+    assert events[3]["output"] == '{"error": "boom"}'
     assert adapter.structured_events[0]["chat_id"] == "12345"
 
     # The name-correlated text tool-progress rail is suppressed for this adapter.
@@ -298,3 +301,15 @@ async def test_structured_rail_delivers_lifecycle_events_and_keeps_the_rest():
 
     assert [entry["event"]["tool_call_id"] for entry in adapter.structured_events] == ["call-a"]
     assert progress_queue.get_nowait() == "💬 thinking out loud"
+
+
+def test_tool_output_body_is_capped_at_the_gateway():
+    """One bound, applied where the event is built: a client never gets an unbounded dump."""
+    from gateway.run_turn_runner import _TOOL_OUTPUT_MAX_CHARS, _tool_output_text
+
+    assert _tool_output_text(None) == ""
+    assert _tool_output_text("  ok\n") == "ok"
+
+    capped = _tool_output_text("x" * (_TOOL_OUTPUT_MAX_CHARS + 50))
+    assert len(capped) == _TOOL_OUTPUT_MAX_CHARS + 1
+    assert capped.endswith("…")

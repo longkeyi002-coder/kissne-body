@@ -506,7 +506,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         cls, *, kind: str, tool_call_id: str, tool_name: str,
         args: Optional[Dict[str, Any]] = None, preview: Optional[str] = None,
         status: str = "running", index: Optional[int] = None, label: Optional[str] = None,
-        duration: Optional[float] = None,
+        duration: Optional[float] = None, output: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build one Activity record — shared by the draft lane and the structured lifecycle lane.
 
@@ -542,6 +542,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 payload["duration"] = round(float(duration), 3)
             if label:
                 payload["label"] = str(label)
+            if output:
+                payload["output"] = str(output)
         return payload
 
     def format_tool_event(
@@ -775,6 +777,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 status="failed" if failed else "completed",
                 label=self._structured_tool_labels.pop(label_key, "")
                 or self._semantic_activity_label(tool_name, None, None),
+                output=str(event.get("output") or "").strip() or None,
             )
             presentation = "tool_result"
 

@@ -9,6 +9,8 @@ Contract frozen here:
   ``activity`` record the App renders as an inline tool row.
 * Structured tool events never touch the draft text lane: they must not clear live draft state
   (that lane belongs to the assistant reply being streamed) and must not arrive as assistant text.
+* The completion carries the tool's own text (bounded by the gateway) as the row's ``output`` so the
+  App can show a result body; the start carries arguments instead.
 """
 
 from _transport_harness import (
@@ -69,7 +71,7 @@ def test_tool_start_and_completion_arrive_as_correlated_typed_events(tmp_path):
                 await adapter.send_structured_tool_event(
                     INSTALLATION,
                     {"type": "tool.completed", "tool_call_id": "call-1", "tool_name": "read_file",
-                     "is_error": False},
+                     "is_error": False, "output": "1|\"\"\"gateway turn runner.\"\"\"\n2|import asyncio"},
                 )
 
                 payload = await _drain(port, token, 0)
@@ -96,6 +98,10 @@ def test_tool_start_and_completion_arrive_as_correlated_typed_events(tmp_path):
                 assert finished["activity"]["kind"] == "tool_result"
                 assert finished["activity"]["status"] == "completed"
                 assert finished["activity"]["label"] == started["activity"]["label"]
+                # The App's result row gets the tool's own text, not just a status.
+                assert finished["activity"]["output"].startswith('1|"""gateway turn runner')
+                assert finished["activity"]["output"].endswith("import asyncio")
+                assert "output" not in started["activity"]
 
                 # Not assistant text, and not the draft lane.
                 for event in tools:

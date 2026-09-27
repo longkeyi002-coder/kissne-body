@@ -55,6 +55,23 @@ class _ExecApprovalDeclined(RuntimeError):
     """
 
 
+_TOOL_OUTPUT_MAX_CHARS = 2000
+
+
+def _tool_output_text(result, *, max_chars: int = _TOOL_OUTPUT_MAX_CHARS) -> str:
+    """The tool's own text, bounded, for clients that render one row per tool call.
+
+    ``result`` arrives as the JSON-encoded string ``agent.display._detect_tool_failure`` already
+    takes, so this is a pass-through with a ceiling rather than a decoder: a client that wants
+    structure can parse it, while no single row can smuggle a 100 KB terminal dump into the event
+    stream. The cap is enforced here, once, so every sink inherits it.
+    """
+    if not isinstance(result, str):
+        return ""
+    text = result.strip()
+    return text[:max_chars] + "…" if len(text) > max_chars else text
+
+
 class TurnRunner:
     """Per-turn collaborator carrying ``GatewayRunner._run_agent_inner``'s tool-progress callbacks."""
 
@@ -505,6 +522,7 @@ class TurnRunner:
             "tool_name": name,
             "args": args if isinstance(args, dict) else None,
             "is_error": bool(is_error),
+            "output": _tool_output_text(result),
         })
 
     async def _send_structured_lifecycle_events(self, adapter) -> None:
