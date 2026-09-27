@@ -4,7 +4,7 @@ async function historyScope() {
   vi.resetModules();
   globalThis.window = { KissneNativeTransport: { request() {} } };
   await import('../kissne-prototype/prototype/transport.js');
-  return window.KissneHistoryScope;
+  return globalThis.window.KissneHistoryScope;
 }
 
 beforeEach(() => {
@@ -72,8 +72,8 @@ test('web history request forwards the chosen room to the server', async () => {
     return { ok: true, text: async () => '{"messages":[]}' };
   });
   await import('../kissne-prototype/prototype/transport.js');
-  await window.KissneHistoryScope.request(window.KissneTransport, 50, 'older-ref', 'chosen-room', 'chosen-room');
-  await window.KissneHistoryScope.request(window.KissneTransport, 50, '', '', 'chosen-room');
+  await globalThis.window.KissneHistoryScope.request(globalThis.window.KissneTransport, 50, 'older-ref', 'chosen-room', 'chosen-room');
+  await globalThis.window.KissneHistoryScope.request(globalThis.window.KissneTransport, 50, '', '', 'chosen-room');
   expect(urls[0]).toContain('before=older-ref&session_id=chosen-room');
   expect(urls[1]).toBe('https://example.test/mobile/history?limit=50');
 });

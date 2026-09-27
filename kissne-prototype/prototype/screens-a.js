@@ -11,6 +11,109 @@
       banner = K.banner, kv = K.kv, esc = K.esc;
 
   /* =====================================================================
+     引用历史消息 / 复制原文的纯逻辑 seam。
+     长按菜单（app.js）与聊天页（screens-a.js）都只通过它读写「待引用」状态，
+     这样引用规则只有一份：气泡取值、裁剪、发送参数组装、剪贴板都在这里。
+     只在被调用时才碰 DOM，所以能在 node 下单测。
+     ===================================================================== */
+  var REPLY_QUOTE_CLIP = 40;
+  var PENDING_QUOTE = null;
+  var quotePainters = [];
+  function paintPendingQuote() {
+    for (var qi = 0; qi < quotePainters.length; qi++) {
+      try { quotePainters[qi](); } catch (e) {}
+    }
+  }
+  function quoteClip(text, max) {
+    var limit = Number(max) > 0 ? Math.floor(Number(max)) : REPLY_QUOTE_CLIP;
+    var flat = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (flat.length <= limit) return flat;
+    return flat.slice(0, limit) + '…';
+  }
+  function quoteRole(value) {
+    return String(value || '') === 'user' ? 'user' : 'assistant';
+  }
+  function legacyCopyText(value) {
+    if (typeof document === 'undefined' || !document.body) return false;
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', 'readonly');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      if (ta.setSelectionRange) ta.setSelectionRange(0, ta.value.length);
+      var ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) {
+      return false;
+    }
+  }
+  window.KissneReplyQuote = {
+    CLIP: REPLY_QUOTE_CLIP,
+    /* 气泡 -> {ref, role, text}。没有 data-message-ref（服务端还没确认的本地行、
+       系统行）就没有可引用的目标，返回 null，菜单据此不显示「引用」。 */
+    fromBubble: function (el) {
+      var ref = String(el && el.getAttribute('data-message-ref') || '');
+      if (!ref) return null;
+      return {
+        ref: ref,
+        role: quoteRole(el.getAttribute('data-message-role')),
+        text: String(el.getAttribute('data-message-text') || '').trim()
+      };
+    },
+    clip: function (text, max) { return quoteClip(text, max); },
+    roleOf: quoteRole,
+    pending: function () { return PENDING_QUOTE; },
+    set: function (quote) {
+      PENDING_QUOTE = quote && quote.ref
+        ? { ref: String(quote.ref), role: quoteRole(quote.role), text: String(quote.text == null ? '' : quote.text) }
+        : null;
+      paintPendingQuote();
+      return PENDING_QUOTE;
+    },
+    clear: function () { return window.KissneReplyQuote.set(null); },
+    /* 聊天页挂载时登记重绘回调（切页/重渲染后靠它把引用条画到新的输入框上） */
+    onPaint: function (fn) {
+      quotePainters.push(fn);
+      return function () {
+        var at = quotePainters.indexOf(fn);
+        if (at >= 0) quotePainters.splice(at, 1);
+      };
+    },
+    /* 剪贴板：优先 async clipboard，缺失/被拒时退化到 execCommand。永远 resolve，不抛。 */
+    copyText: function (text) {
+      var value = String(text == null ? '' : text);
+      return new Promise(function (resolve) {
+        var nav = typeof navigator !== 'undefined' ? navigator : null;
+        if (nav && nav.clipboard && typeof nav.clipboard.writeText === 'function') {
+          nav.clipboard.writeText(value).then(
+            function () { resolve(true); },
+            function () { resolve(legacyCopyText(value)); }
+          );
+          return;
+        }
+        resolve(legacyCopyText(value));
+      });
+    },
+    /* 发送参数组装：有待引用时 reply_to = 引用那条的 ref，没有则空串。 */
+    sendArgs: function (text, messageId, quote) {
+      return {
+        text: String(text == null ? '' : text),
+        messageId: messageId,
+        replyTo: quote && quote.ref ? String(quote.ref) : ''
+      };
+    },
+    sendWithQuote: function (transport, text, messageId, quote) {
+      var args = window.KissneReplyQuote.sendArgs(text, messageId, quote);
+      return transport.sendText(args.text, args.messageId, args.replyTo);
+    }
+  };
+
+  /* =====================================================================
      04 首页 / 控制台
      ===================================================================== */
   var HOME_STATES = [
@@ -421,19 +524,41 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
-  function assistantBubbleHtml(html, cls) {
+  /* 气泡里的引用条：被引用那条的说话人 + 原文一行。role 来自服务端 reply_preview。 */
+  function quoteStripHtml(quote) {
+    if (!quote || !quote.ref) return '';
+    return '<div class="msg__quote" data-quote-ref="' + esc(String(quote.ref)) + '">'
+      + '<span class="msg__quote-who">' + (quote.role === 'user' ? '我' : '叶青栩') + '</span>'
+      + '<span class="msg__quote-text">' + esc(String(quote.text || '')) + '</span></div>';
+  }
+  /* 引用相关的气泡属性：data-message-ref = 这条自己的 ref（长按菜单靠它引用这条），
+     data-message-role = 说话人（菜单显示「我 / 叶青栩」用），data-reply-to = 这条回复的那条。 */
+  function msgQuoteAttrs(role, opts) {
+    var o = opts || {};
+    var out = '';
+    if (o.ref) {
+      out += ' data-message-ref="' + esc(String(o.ref)) + '"'
+        + ' data-message-role="' + (role === 'user' ? 'user' : 'assistant') + '"';
+    }
+    var replyTo = String(o.replyTo || (o.quote && o.quote.ref) || '');
+    if (replyTo) out += ' data-reply-to="' + esc(replyTo) + '"';
+    return out;
+  }
+  function assistantBubbleHtml(html, cls, lead) {
     var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
       return !!String(part || '').trim();
     });
     if (!parts.length) parts = [''];
-    return parts.map(function (part) {
-      return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
+    return parts.map(function (part, index) {
+      return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">'
+        + (index ? '' : (lead || '')) + part + '</div>';
     }).join('');
   }
-  function aiMsg(html, cls, time, tag, state, activity) {
-    return '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
+  function aiMsg(html, cls, time, tag, state, activity, opts) {
+    var o = opts || {};
+    return '<div class="msg msg--ai" data-chat-message' + msgQuoteAttrs('assistant', o) + ' data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">' + (activity || '')
-      + assistantBubbleHtml(html, cls)
+      + assistantBubbleHtml(html, cls, quoteStripHtml(o.quote))
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
   }
@@ -444,9 +569,10 @@
      省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
-  function meMsg(html, meta, time, state) {
-    return '<div class="msg msg--me" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
-      + '<div class="msg__body"><div class="bubble">' + html + '</div>'
+  function meMsg(html, meta, time, state, opts) {
+    var o = opts || {};
+    return '<div class="msg msg--me" data-chat-message' + msgQuoteAttrs('user', o) + ' data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
+      + '<div class="msg__body"><div class="bubble">' + quoteStripHtml(o.quote) + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
@@ -968,10 +1094,13 @@
       var day = m.day || chatDayKey(Date.now());
       var divider = day !== lastDay ? chatDivider(day, index) : '';
       lastDay = day;
+      /* 引用相关：messageRef 是这条自己的 ref（长按菜单可引用它），
+         quote 是这条回复的那条（气泡内那条引用条）。 */
+      var qref = { ref: m.messageRef || '', replyTo: m.replyTo || '', quote: m.quote || null };
       var row = m.who === 'sys' ? sysMsg(m.html, m.time)
         : (m.who === 'ai'
-          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
-          : meMsg(m.html, m.meta || '', m.time));
+          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '', qref)
+          : meMsg(m.html, m.meta || '', m.time, undefined, qref));
       return divider + row;
     }).join('');
   }
@@ -1092,6 +1221,12 @@
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
         + '</div>';
       var popLayer = plusPopLayer(origin);
+      /* 输入框上方的引用条：待引用时显示「谁 + 截断原文 + ✕」，由 mount 里的 painter 填内容。 */
+      var quoteBar = '<div class="composerquote" data-composer-quote hidden>'
+        + '<span class="composerquote__who" data-quote-who></span>'
+        + '<span class="composerquote__text" data-quote-text></span>'
+        + '<button class="composerquote__x" type="button" data-quote-clear aria-label="取消引用">' + icon('close', 12) + '</button>'
+        + '</div>';
       var composer = '<div class="composer">'
         + popLayer
         + '<button class="composer__btn" aria-label="添加" data-plus-toggle>' + icon('plus', 19) + '</button>'
@@ -1138,7 +1273,7 @@
           <button class="unread" data-unread type="button"${UNREAD.n ? '' : ' hidden'}>
             <span data-unread-n>${UNREAD.n || 0}</span> 条新消息 ↓
           </button>
-          ${stkPanel}${quickbar}${composer}</div>
+          ${stkPanel}${quickbar}${quoteBar}${composer}</div>
         <div data-chat-menu-host>${menuLayer}</div>
         ${sessionDrawerHtml()}
         ${bs === 'request-enter' ? modal({
@@ -1219,6 +1354,36 @@
       if (!input || !send || !list) return null;
       var p = ctx && ctx.params;      /* 放在最前面：下面的 find / sticker 都要用 */
 
+      /* —— 输入框上方的引用条：内容只来自 window.KissneReplyQuote 的待引用状态 ——
+         长按菜单（app.js）点「引用」时 set()，这里登记 painter 后立刻重画。 */
+      var quoteBarEl = root.querySelector('[data-composer-quote]');
+      var quoteWhoEl = root.querySelector('[data-quote-who]');
+      var quoteTextEl = root.querySelector('[data-quote-text]');
+      var RQ = window.KissneReplyQuote;
+      function paintQuoteBar() {
+        if (!quoteBarEl) return;
+        var quote = RQ.pending();
+        if (!quote) {
+          quoteBarEl.hidden = true;
+          if (quoteWhoEl) quoteWhoEl.textContent = '';
+          if (quoteTextEl) quoteTextEl.textContent = '';
+          return;
+        }
+        quoteBarEl.hidden = false;
+        if (quoteWhoEl) quoteWhoEl.textContent = quote.role === 'user' ? '我' : '叶青栩';
+        if (quoteTextEl) quoteTextEl.textContent = RQ.clip(quote.text, RQ.CLIP);
+      }
+      function onQuoteBarTap(e) {
+        var clearBtn = e.target && e.target.closest ? e.target.closest('[data-quote-clear]') : null;
+        if (!clearBtn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        RQ.clear();
+      }
+      if (quoteBarEl) quoteBarEl.addEventListener('click', onQuoteBarTap);
+      paintQuoteBar();
+      var offQuotePaint = RQ.onPaint(paintQuoteBar);
+
       /* 我们自己的"程序化滚动"（打开就到底 / 发完消息 / 点胶囊跳过去）**不算已读**，
          否则一进聊天页就自动把未读清掉了。400ms 内的滚动事件一律忽略。 */
       var scrollGuard = 0;
@@ -1271,6 +1436,14 @@
         var value = String(text || '');
         sessionStatus.textContent = value;
         sessionStatus.hidden = !value;
+      }
+      /* 「还有更早的记录 · 上滑加载」不常驻：只在真正加载的那一刻显示一行进度，
+         加载完就收掉。收的时候只认自己那行文字，免得擦掉别的状态（断线恢复、发送失败之类）。 */
+      var HISTORY_LOADING_TEXT = '正在加载更早的记录…';
+      function setHistoryLoading(on) {
+        if (!sessionStatus) return;
+        if (on) { setSessionStatus(HISTORY_LOADING_TEXT); return; }
+        if (String(sessionStatus.textContent || '') === HISTORY_LOADING_TEXT) setSessionStatus('');
       }
 
       function paintSessionList() {
@@ -1537,6 +1710,7 @@
             || !T || typeof T.history !== 'function') return;
         sessionHistoryLoading = true;
         var requestedBefore = sessionHistoryNextBefore;
+        setHistoryLoading(true);
         try {
           var payload = await window.KissneHistoryScope.request(T, 50, requestedBefore, sessionHistoryScopeId, CURRENT_SESSION_ID);
           var page = payload && Array.isArray(payload.messages) ? payload.messages : [];
@@ -1548,7 +1722,7 @@
           }
           sessionHistoryNextBefore = next;
           hydrateHistory(sessionHistoryRows, true);
-          setSessionStatus(sessionHistoryHasMore ? '还有更早的记录 · 上滑加载' : '');
+          setHistoryLoading(false);
         } catch (err) {
           setSessionStatus('更早的记录读取失败，请稍后重试。');
         } finally {
@@ -1596,6 +1770,15 @@
           if (role === 'user') rawText = visibleChatText(rawText);
           var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
+          /* 服务端给了 reply_preview 才在气泡里画引用条（原文一行）；reply_to 单独也给，
+             方便以后定位被引用那条。 */
+          var historyReplyTo = String(item.reply_to || '');
+          var historyPreview = item.reply_preview && typeof item.reply_preview === 'object' ? item.reply_preview : null;
+          var historyQuote = historyReplyTo && historyPreview ? {
+            ref: historyReplyTo,
+            role: window.KissneReplyQuote.roleOf(historyPreview.role),
+            text: String(historyPreview.text || '')
+          } : null;
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
           if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
@@ -1627,7 +1810,8 @@
             CHAT_LOG.push({
               who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
               time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
-              messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
+              messageRef: messageRef, replyTo: historyReplyTo, quote: historyQuote,
+              turnId: historyTurnId, localOwned: false, optimistic: false
             });
             return;
           }
@@ -1711,6 +1895,8 @@
             day: chatDayKey(item.created_at),
             sortAt: item.created_at,
             messageRef: messageRef,
+            replyTo: historyReplyTo,
+            quote: historyQuote,
             turnId: turnId,
             localOwned: false,
             optimistic: false
@@ -2087,14 +2273,12 @@
             completeHistory = await loadInitialSessionHistory(
               sessionHistoryScopeId, completeHistory, !!boot.history_truncated
             );
-            setSessionStatus(sessionHistoryHasMore ? '还有更早的记录 · 上滑加载' : '');
+            setSessionStatus('');
           } catch (historyErr) {
             sessionHistoryRows = completeHistory;
             sessionHistoryHasMore = !!boot.history_truncated;
             sessionHistoryNextBefore = '';
-            setSessionStatus(sessionHistoryHasMore
-              ? '还有更早的记录 · 上滑加载'
-              : '历史暂时读取失败，已显示最近消息。');
+            setSessionStatus('历史暂时读取失败，已显示最近消息。');
           }
           hydrateHistory(completeHistory);
           (boot.pending_approvals || []).forEach(showApproval);
@@ -2214,10 +2398,14 @@
         if (!CHAT_OUTBOX.length && !CHAT_OUTBOX_RETRY) return;
         liveOutboxTimer = setTimeout(drainOutbox, outboxWaitMs());
       }
-      function queueOutboundText(text, logEntry) {
+      /* 出站消息的引用 ref 归一：'' 表示这条不引用任何消息。规则只在 seam 里写一份。 */
+      function outboundReplyRef(quote) {
+        return window.KissneReplyQuote.sendArgs('', '', quote).replyTo;
+      }
+      function queueOutboundText(text, logEntry, quote) {
         var value = String(text || '').trim();
         if (!value) return;
-        CHAT_OUTBOX.push({ text: value, log: logEntry || null });
+        CHAT_OUTBOX.push({ text: value, log: logEntry || null, quote: quote || null });
         CHAT_OUTBOX_UPDATED_AT = Date.now();
         scheduleOutboxDrain();
       }
@@ -2256,12 +2444,17 @@
             scheduleOutboxDrain();
             return;
           }
-          var count = CHAT_OUTBOX.length;
+          var headQuote = CHAT_OUTBOX[0] ? CHAT_OUTBOX[0].quote : null;
+          /* 一条消息只能带一个 reply_to：只把「引用同一条（或都没引用）」的连续几条并成一批，
+             不同引用拆开发，免得第二条被安上别人的引用。 */
+          var count = 1;
+          while (count < CHAT_OUTBOX.length && outboundReplyRef(CHAT_OUTBOX[count].quote) === outboundReplyRef(headQuote)) count++;
           var pendingItems = CHAT_OUTBOX.slice(0, count);
           CHAT_OUTBOX_RETRY = {
             count: count,
             text: pendingItems.map(function (item) { return item.text; }).join('\n'),
             messageId: nextMessageId(),
+            quote: headQuote,
             logs: pendingItems.map(function (item) { return item.log; }).filter(Boolean)
           };
         }
@@ -2275,7 +2468,7 @@
                obsolete execution turn; liveSteeredTurns suppresses its cancelled UI. */
             await interruptForSteer();
           }
-          var accepted = await T.sendText(batch.text, batch.messageId);
+          var accepted = await window.KissneReplyQuote.sendWithQuote(T, batch.text, batch.messageId, batch.quote);
           CHAT_OUTBOX.splice(0, batch.count);
           CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
@@ -2321,9 +2514,13 @@
         input.value = '';
         /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
         CHAT_USER_INPUT_AT = 0;
-        append(meMsg(esc(v), '', clockNow()));
-        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
-        queueOutboundText(v, localLog);
+        /* 待引用只属于这一条：先取走并清掉引用条，再让乐观行与 outbox 都带上它
+           （重发时 CHAT_OUTBOX_RETRY 里仍留着同一个 ref）。 */
+        var quote = RQ.pending();
+        if (quote) RQ.clear();
+        append(meMsg(esc(v), '', clockNow(), undefined, { quote: quote }));
+        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow(), replyTo: quote ? quote.ref : '', quote: quote });
+        queueOutboundText(v, localLog, quote);
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
@@ -2803,6 +3000,8 @@
         list.removeEventListener('click', onActivityTap);
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
+        if (quoteBarEl) quoteBarEl.removeEventListener('click', onQuoteBarTap);
+        offQuotePaint();
         liveStopped = true;
         clearTimeout(livePollTimer);
         clearTimeout(liveOutboxTimer);

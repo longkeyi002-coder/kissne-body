@@ -1893,3 +1893,52 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   border:0;border-top:1px solid var(--line);background:transparent;font:inherit;font-size:13px;color:var(--ink);text-align:left}
 .webai-sheet__item span{font-size:10px;color:var(--ink-3);font-weight:400}
 .webai-sheet__note{padding:9px 4px 2px;border-top:1px solid var(--line);font-size:10px;line-height:1.45;color:var(--ink-3)}
+/* 长按菜单磁吸在被长按那条气泡上方（popover，不是底部弹层）：
+   面板位置由 app.js 的 anchorWebAiPanel 用气泡 rect 算出来（left/top 内联）。
+   贴着气泡时收成紧凑动作列表：去掉抓手、副标题和脚注，免得面板比气泡还高。 */
+.webai-sheet--anchored{align-items:flex-start;justify-content:flex-start}
+.webai-sheet--anchored .webai-sheet__panel{position:fixed;width:min(74vw,272px);padding:5px 10px 7px;
+  border-radius:14px;box-shadow:0 12px 30px rgba(20,20,25,.18)}
+.webai-sheet--anchored .webai-sheet__grab{display:none}
+.webai-sheet--anchored .webai-sheet__title{padding:1px 4px 6px;font-size:11px}
+.webai-sheet--anchored .webai-sheet__item{min-height:38px;font-size:12.5px}
+.webai-sheet--anchored .webai-sheet__item span,
+.webai-sheet--anchored .webai-sheet__note{display:none}
+.webai-sheet__panel--below{animation:kstoast-in .12s ease-out}
+
+/* —— 引用历史消息 ——
+   · .msg__quote：气泡里那条引用（原文一行，超出省略）
+   · .composerquote：输入框上方的待引用条（谁 + 摘要 + ✕）
+   · .kstoast：复制的轻提示 */
+.msg__quote{
+  display:flex;align-items:baseline;gap:5px;max-width:100%;margin:0 0 5px;
+  padding:3px 7px;border-left:2px solid var(--ink-3);border-radius:5px;
+  background:rgba(20,20,25,.05);font-size:10.5px;line-height:1.4;color:var(--ink-3)
+}
+.msg__quote-who{flex:none;font-weight:650;color:var(--ink-2)}
+.msg__quote-text{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3)
+}
+.composerquote{
+  flex:none;display:flex;align-items:center;gap:6px;margin:8px 14px 0;padding:6px 7px 6px 9px;
+  border:1px solid var(--line);border-left:2px solid var(--ink-3);border-radius:11px;
+  background:rgba(255,255,255,.97);box-shadow:0 -2px 12px rgba(20,20,25,.06)
+}
+.composerquote[hidden]{display:none!important}
+.composerquote__who{flex:none;font-size:10.5px;font-weight:650;color:var(--ink-2)}
+.composerquote__text{
+  min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;color:var(--ink-3)
+}
+.composerquote__x{
+  flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;
+  padding:0;border:0;border-radius:99px;background:transparent;color:var(--ink-3);cursor:pointer
+}
+.composerquote__x:active{background:var(--g3)}
+.kstoast{
+  position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:10000;
+  max-width:70%;padding:7px 13px;border-radius:999px;
+  background:rgba(20,20,25,.82);color:#fff;font-size:11.5px;line-height:1.3;
+  pointer-events:none;animation:kstoast-in .16s ease-out
+}
+@keyframes kstoast-in{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}

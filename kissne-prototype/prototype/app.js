@@ -257,20 +257,65 @@
     var old = document.querySelector('.webai-sheet');
     if (old) old.remove();
   }
+  /* 轻提示：复制成功/失败等一次性反馈，样式与原型其它浮层同一套（.kstoast） */
+  var toastTimer = null;
+  function showToast(text) {
+    var old = document.querySelector('.kstoast');
+    if (old) old.remove();
+    var el = document.createElement('div');
+    el.className = 'kstoast';
+    el.textContent = text;
+    document.body.appendChild(el);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.remove(); }, 1600);
+  }
   function openWebAiSheet(msg) {
     closeWebAiSheet();
     var text = msg && msg.getAttribute('data-message-text') || '';
     if (!text.trim()) return;
+    /* 气泡有没有服务端 ref 决定了能不能引用；没有就不显示「引用」，免得点了没反应。 */
+    var quote = window.KissneReplyQuote && window.KissneReplyQuote.fromBubble(msg);
     var sheet = document.createElement('div');
     sheet.className = 'webai-sheet';
     sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
       + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
-      + '<div class="webai-sheet__title">发送给…</div>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>临时网页 · 不共享上下文</span></button>'
+      + '<div class="webai-sheet__title">对这条消息</div>'
+      + (quote
+        ? '<button class="webai-sheet__item" type="button" data-webai-action="quote">引用<span>把这条放进输入框上方，再写你的话</span></button>'
+        : '')
+      + '<button class="webai-sheet__item" type="button" data-webai-action="copy">复制<span>把原文放进剪贴板</span></button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">发送给 DeepSeek<span>临时网页 · 不共享上下文</span></button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">发送给 ChatGPT<span>临时网页 · 不共享上下文</span></button>'
       + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
     sheet.dataset.messageText = text;
+    sheet.classList.add('webai-sheet--anchored');
     document.body.appendChild(sheet);
+    anchorWebAiPanel(sheet, msg);
+  }
+  /* 长按菜单磁吸在被长按那条气泡的上方（不是屏幕底部）：以气泡的 rect 定位面板，
+     水平居中于气泡并夹紧在屏幕内；上方放不下就翻到气泡下方，但仍紧贴气泡。
+     面板位置依赖气泡当时的位置，所以滚动时直接关掉（见下面的 scroll 监听），
+     不留一个飘在半空、已经和气泡对不上的菜单。 */
+  function anchorWebAiPanel(sheet, msg) {
+    var panel = sheet && sheet.querySelector('.webai-sheet__panel');
+    if (!panel || !msg || typeof msg.getBoundingClientRect !== 'function') return;
+    var rect = msg.getBoundingClientRect();
+    var view = document.documentElement || {};
+    var vw = window.innerWidth || view.clientWidth || 360;
+    var vh = window.innerHeight || view.clientHeight || 640;
+    var box = panel.getBoundingClientRect();
+    var GAP = 8, PAD = 12;
+    var left = rect.left + (rect.width - box.width) / 2;
+    left = Math.max(PAD, Math.min(left, vw - box.width - PAD));
+    var top = rect.top - box.height - GAP;
+    var below = top < PAD;                      /* 气泡太靠顶：翻到下方，仍贴着它 */
+    if (below) top = Math.min(rect.bottom + GAP, vh - box.height - PAD);
+    top = Math.max(PAD, top);
+    panel.style.left = Math.round(left) + 'px';
+    panel.style.top = Math.round(top) + 'px';
+    panel.style.bottom = 'auto';
+    panel.style.transform = 'none';
+    panel.classList.toggle('webai-sheet__panel--below', below);
   }
   document.addEventListener('pointerdown', function (e) {
     var msg = e.target.closest && e.target.closest('[data-chat-message]');
@@ -300,10 +345,30 @@
       webAiPressTimer = null;
     }
   }, { passive: true });
+  /* 菜单磁吸在气泡上，气泡一滚位置就对不上了：任何滚动（含聊天列表自己的滚动）直接关掉。
+     捕获阶段监听，页面里任意滚动容器都能拦住。 */
+  document.addEventListener('scroll', function () { closeWebAiSheet(); }, true);
 
   document.addEventListener('click', function (e) {
     var webAiClose = e.target.closest('[data-webai-close]');
     if (webAiClose) { closeWebAiSheet(); return; }
+    /* 引用 / 复制：都通过 screens-a.js 的 seam 记账，这里不重复实现取值与剪贴板逻辑。 */
+    var webAiAction = e.target.closest('[data-webai-action]');
+    if (webAiAction) {
+      var action = webAiAction.getAttribute('data-webai-action');
+      var actionSheet = webAiAction.closest('.webai-sheet');
+      var actionText = actionSheet ? actionSheet.dataset.messageText || '' : '';
+      if (action === 'quote' && window.KissneReplyQuote) {
+        var quoted = window.KissneReplyQuote.fromBubble(webAiPressTarget);
+        if (quoted) window.KissneReplyQuote.set(quoted);
+      } else if (action === 'copy' && window.KissneReplyQuote) {
+        window.KissneReplyQuote.copyText(actionText).then(function (ok) {
+          showToast(ok ? '已复制' : '复制失败');
+        });
+      }
+      closeWebAiSheet();
+      return;
+    }
     var webAiProvider = e.target.closest('[data-webai-provider]');
     if (webAiProvider) {
       var provider = webAiProvider.getAttribute('data-webai-provider');
