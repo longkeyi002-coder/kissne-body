@@ -1,0 +1,71 @@
+== live 事件分道表（type, presentation）→ 道 ==
+PASS · laneForLiveEvent("delta", "assistant_text") → assistant（实得 assistant）
+PASS · laneForLiveEvent("completed", "assistant_text") → assistant（实得 assistant）
+PASS · laneForLiveEvent("delta", "") → assistant（实得 assistant）
+PASS · laneForLiveEvent("completed", "") → assistant（实得 assistant）
+PASS · laneForLiveEvent("delta", "tool_call") → tool（实得 tool）
+PASS · laneForLiveEvent("delta", "tool_progress") → tool（实得 tool）
+PASS · laneForLiveEvent("completed", "tool_result") → tool（实得 tool）
+PASS · laneForLiveEvent("delta", "reasoning") → reasoning（实得 reasoning）
+PASS · laneForLiveEvent("delta", "commentary") → commentary（实得 commentary）
+PASS · laneForLiveEvent("notice", "") → notice（实得 notice）
+PASS · laneForLiveEvent("notice", "notice") → notice（实得 notice）
+PASS · laneForLiveEvent("completed", "session_reset") → notice（实得 notice）
+PASS · laneForLiveEvent("delta", "hidden") → ignore（实得 ignore）
+PASS · laneForLiveEvent("delta", "internal_notification") → ignore（实得 ignore）
+PASS · laneForLiveEvent("pending", "") → （实得 ）
+PASS · laneForLiveEvent("cancelled", "") → （实得 ）
+PASS · laneForLiveEvent("approval_required", "") → （实得 ）
+PASS · laneForLiveEvent("approval_resolved", "") → （实得 ）
+
+== 历史行分道表（role, presentation）→ 道 ==
+PASS · laneForHistoryRow("assistant", "assistant_text") → assistant（实得 assistant）
+PASS · laneForHistoryRow("assistant", "") → assistant（实得 assistant）
+PASS · laneForHistoryRow("assistant", "commentary") → commentary（实得 commentary）
+PASS · laneForHistoryRow("assistant", "reasoning") → reasoning（实得 reasoning）
+PASS · laneForHistoryRow("assistant", "tool_call") → tool（实得 tool）
+PASS · laneForHistoryRow("assistant", "notice") → notice（实得 notice）
+PASS · laneForHistoryRow("tool", "") → tool（实得 tool）
+PASS · laneForHistoryRow("tool", "tool_result") → tool（实得 tool）
+PASS · laneForHistoryRow("system", "") → notice（实得 notice）
+PASS · laneForHistoryRow("system", "notice") → notice（实得 notice）
+PASS · laneForHistoryRow("system", "session_reset") → notice（实得 notice）
+PASS · laneForHistoryRow("system", "tool_result") → tool（实得 tool）
+PASS · laneForHistoryRow("system", "hidden") → ignore（实得 ignore）
+PASS · laneForHistoryRow("user", "") → user（实得 user）
+PASS · laneForHistoryRow("user", "assistant_text") → user（实得 user）
+PASS · laneForHistoryRow("mystery", "") → （实得 ）
+
+== 分道判定看不见正文（多传正文也不改变结果） ==
+PASS · live delta+assistant_text 带工具长相正文仍 → assistant
+PASS · live delta+空 presentation 带工具长相正文仍 → assistant
+PASS · history assistant+空 presentation 带工具长相正文仍 → assistant
+PASS · history system+空 presentation 带工具长相正文仍 → notice（旧流水只在这里被抑制/折叠）
+
+== 源码事实：文本长相识类是否还在改判助手正文 ==
+PASS · 已移除改判点：looksLikeToolTranscript(deltaText)
+PASS · 已移除改判点：looksLikeToolTranscript(finalText)
+PASS · 已移除改判点：looksLikeToolTranscript(commentaryText)
+PASS · 已移除改判点：looksLikeToolTranscript(rawText) && role !== 
+PASS · 已移除改判点：history-commentary-tool:
+PASS · 已移除改判点：history-assistant-tool:
+仍存在的 looksLikeToolTranscript 调用点：
+  L1968: if (!historyPresentation && looksLikeToolTranscript(rawText)) {
+  L2238: if (!presentation && looksLikeToolTranscript(noticeText)) return;
+PASS · looksLikeToolTranscript 调用点只剩「抑制旧式原始工具流水」的 2 处（noticeText / rawText）
+PASS · 历史 notice 道里那处紧随 LANE_NOTICE 判定
+PASS · 两处旧流水抑制都以「没有结构化 presentation」为前提
+PASS · live 三条正文道都由 lane 常量分派
+PASS · sys 行只由 appendSystemNotice / 历史 notice 道产生
+PASS · 本地缓存恢复 sys 行要求 clientNotice 标记
+
+ALL PASS
+== 活动流持久化（源码断言：工具/思考块不许在重画后消失）==
+PASS · 落盘白名单必须带上 activity（否则本地缓存重建时活动块整块消失）
+PASS · 跟服务器对账时，缺活动流的本地行要能补回 activity
+PASS · 本地行若没有活动流时，还要能用最终正文兜底匹配
+探针结束：全部通过
+== 工具行不许在「完成」时消失（源码断言）==
+PASS · 收尾前先接管 pending 账本
+PASS · 目标账本已有内容时不接管
+PASS · 接管后清掉 pending
