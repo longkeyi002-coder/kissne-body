@@ -132,3 +132,8 @@ var localRowsBody = (/var localRows = messageRef[\s\S]*?delete localByRef\[messa
 assert('跟服务器对账时，缺活动流的本地行要能补回 activity', /m\.activity = activityMarkupForTurn/.test(localRowsBody));
 assert('本地行若没有活动流时，还要能用最终正文兜底匹配', /m\.activity = FINAL_ACTIVITY_BY_TEXT\[rawText\]/.test(localRowsBody));
 console.log('探针结束：' + (failures ? failures + ' 条失败' : '全部通过'));
+
+console.log('== 工具行不许在「完成」时消失（源码断言）==');
+assert('收尾前先接管 pending 账本', /adoptPendingActivity\(turnId\);\s*\n\s*finishActivities\(el, turnId\);/.test(srcText));
+assert('目标账本已有内容时不接管', /if \(activityHasRows\(TURN_ACTIVITY\[id\]\)\) return false;/.test(srcText));
+assert('接管后清掉 pending', /delete TURN_ACTIVITY\['pending'\];/.test(srcText));

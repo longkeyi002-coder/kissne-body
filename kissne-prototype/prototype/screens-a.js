@@ -817,6 +817,24 @@
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
   }
+  function activityHasRows(state) {
+    return !!(state && (state.reasoning || (state.toolOrder && state.toolOrder.length)));
+  }
+  /* 工具/思考事件有时不带 turn_id（落进 'pending' 账本），而收尾事件带 turn_id：
+     收尾时若目标账本是空的，就把刚画出来的那份接管过来，否则一「完成」
+     就被空账本覆盖 → 工具行整块消失，没得点。 */
+  function adoptPendingActivity(turnId) {
+    var id = String(turnId || '');
+    if (!id || id === 'pending') return false;
+    if (activityHasRows(TURN_ACTIVITY[id])) return false;
+    var pend = TURN_ACTIVITY['pending'];
+    if (!activityHasRows(pend)) return false;
+    if (Date.now() - (Number(pend.updatedAt) || 0) > 300000) return false;
+    TURN_ACTIVITY[id] = pend;
+    delete TURN_ACTIVITY['pending'];
+    persistTurnActivity();
+    return true;
+  }
   function loadTurnActivity(sessionId) {
     try {
       var keyName = turnActivityStorageKeyFor(sessionId || TURN_ACTIVITY_SESSION);
@@ -2203,6 +2221,7 @@
             scheduleOutboxDrain();
             return;
           }
+          adoptPendingActivity(turnId);
           finishActivities(el, turnId);
           var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
           liveText(el, finalText, false);
