@@ -363,3 +363,44 @@ def test_native_stream_bridge_preserves_typed_tool_activity(tmp_path):
     assert activity, f"native stream must expose typed tool activity: {events}"
     assert activity[-1].get("turn_id") == turn["turn_id"]
     assert visible and visible[-1].get("text") == "Checking transport."
+
+
+def test_metadata_turn_anchor_keeps_the_final_reply_out_of_the_notice_lane(tmp_path):
+    """A Runtime final send that names the turn only in ``reply_to_message_id`` metadata must still
+    close that turn.
+
+    Regression: the anchor was dropped, so a later send of the same turn fell through to the
+    auxiliary-notice lane and the app greys it (it renders every ``notice`` that is not a tool
+    transcript as a grey system line, never as the assistant's own message).
+    """
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                # A turn that the Runtime did not admit through HTTP (no admission marker): its
+                # reply has no ``reply_to`` param, only the ``reply_to_message_id`` metadata anchor.
+                turn_id = "turn-store-only-1"
+                adapter.device_store().open_turn(turn_id, INSTALLATION)
+                await adapter.send(
+                    INSTALLATION, "the real answer",
+                    metadata={"reply_to_message_id": turn_id, "notify": True},
+                )
+                payload = await _drain(port, token, 0)
+            finally:
+                await stop(adapter)
+        return turn_id, payload
+
+    turn_id, payload = run(scenario())
+    events = payload.get("events") or []
+    notices = [event for event in events if event.get("type") == "notice"]
+    assert not notices, f"an anchored final reply must never reach the notice lane: {notices}"
+    completed = [event for event in events if event.get("type") == "completed"]
+    assert completed and completed[-1].get("text") == "the real answer", (
+        f"the anchored final reply must be a 'completed' event: {events}")
+    assert completed[-1].get("turn_id") == turn_id, (
+        f"the final reply must stay on its originating turn: {completed[-1]!r}")

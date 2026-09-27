@@ -607,6 +607,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Queue final text, reset notices, or auxiliary notices without closing unrelated turns."""
         installation = str(chat_id or "").strip()
+        # Runtime sends without the ``reply_to`` param (fresh-final / fallback delivery) still name
+        # the originating turn in ``reply_to_message_id`` metadata. Adopt that anchor: without it the
+        # reply is demoted to the auxiliary-notice lane and reaches the app as a grey system line.
+        if not reply_to:
+            reply_to = str((metadata or {}).get("reply_to_message_id") or "").strip() or None
         reset_turn = self._session_reset_turns.get(installation)
         if installation in self._session_reset_pending and reset_turn and (
             reply_to == reset_turn or reply_to is None
@@ -641,6 +646,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 final_extra = {"presentation": "assistant_text"} if reply_to is None else None
                 message_id = await self._queue_event(
                     installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
+                    target_turn_id=reply_to or None,
                     extra=final_extra)
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
