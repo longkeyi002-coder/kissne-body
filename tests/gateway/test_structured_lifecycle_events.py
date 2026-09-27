@@ -12,10 +12,13 @@ Contract frozen here:
   ``tool_progress`` off.
 """
 
+import asyncio
 import importlib
+import queue
 import sys
 import time
 import types
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -217,3 +220,81 @@ async def test_structured_rail_works_with_tool_progress_off(monkeypatch, tmp_pat
     assert [entry["event"]["type"] for entry in adapter.structured_events] == [
         "tool.started", "tool.completed", "tool.started", "tool.completed",
     ]
+
+
+class TruthyProbeAdapter(CaptureAdapter):
+    """What a MagicMock adapter looks like: the attribute exists and returns a truthy non-bool."""
+
+    def structured_lifecycle_events_enabled(self):
+        return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_truthy_capability_probe_does_not_enable_the_structured_rail(monkeypatch, tmp_path):
+    """The opt-in is ``is True``, not truthiness.
+
+    MagicMock auto-creates every attribute and its call returns a truthy mock, so a truthiness
+    check would silently drag older test adapters (and any duck-typed fake) onto this rail.
+    """
+    adapter = TruthyProbeAdapter()
+    runner, source = _run_turn(adapter, PlainToolsAgent, monkeypatch, tmp_path,
+                               progress_mode="all")
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-truthy-probe", session_key="agent:main:telegram:dm:12345")
+
+    assert result["final_response"] == "done"
+    # PlainToolsAgent asserts the ID-bearing callbacks stay unwired; the text rail still speaks.
+    rendered = "\n".join([entry["content"] for entry in adapter.sent]
+                         + [entry["content"] for entry in adapter.edits])
+    assert "pwd" in rendered, f"expected the legacy text progress line, got: {rendered!r}"
+
+
+def _structured_rail_ctx(progress_queue):
+    from gateway.turn_context import TurnContext
+
+    return TurnContext(
+        source=SessionSource(platform=Platform.TELEGRAM, chat_id="12345", chat_type="dm",
+                             thread_id=None),
+        _run_still_current=lambda: True,
+        progress_queue=progress_queue,
+        _progress_metadata={"chat_id": "12345"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_structured_rail_hands_back_payloads_it_cannot_present():
+    """Thinking text and notices share this queue; the structured rail is not theirs to swallow.
+
+    Dropping them would make the App lose the assistant's scratch text the moment it opts into
+    structured tool rows (the text rail runs after this one and renders them).
+    """
+    from gateway.run_turn_runner import TurnRunner
+
+    adapter = StructuredLifecycleAdapter()
+    progress_queue: queue.Queue = queue.Queue()
+    runner = TurnRunner(_make_runner(adapter), _structured_rail_ctx(progress_queue))
+
+    progress_queue.put("💬 thinking out loud")
+    await asyncio.wait_for(runner._send_structured_lifecycle_events(adapter), timeout=5)
+
+    assert adapter.structured_events == [], "a text payload is not a tool lifecycle event"
+    assert progress_queue.get_nowait() == "💬 thinking out loud"
+
+
+@pytest.mark.asyncio
+async def test_structured_rail_delivers_lifecycle_events_and_keeps_the_rest():
+    """Lifecycle dicts are consumed and delivered; everything else comes back for the text rail."""
+    from gateway.run_turn_runner import TurnRunner
+
+    adapter = StructuredLifecycleAdapter()
+    progress_queue: queue.Queue = queue.Queue()
+    runner = TurnRunner(_make_runner(adapter), _structured_rail_ctx(progress_queue))
+
+    progress_queue.put({"type": "tool.started", "tool_call_id": "call-a", "tool_name": "terminal",
+                        "args": {"command": "pwd"}})
+    progress_queue.put("💬 thinking out loud")
+    await asyncio.wait_for(runner._send_structured_lifecycle_events(adapter), timeout=5)
+
+    assert [entry["event"]["tool_call_id"] for entry in adapter.structured_events] == ["call-a"]
+    assert progress_queue.get_nowait() == "💬 thinking out loud"

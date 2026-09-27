@@ -2804,9 +2804,13 @@ class GatewayTurnMixin:
         # Same rail as Slack's task cards, but the platform whitelist is replaced by a capability
         # probe, so every other platform keeps its existing name-correlated text progress.
         _structured_lifecycle_events = False
-        if hasattr(adapter, "structured_lifecycle_events_enabled"):
+        _structured_probe = getattr(adapter, "structured_lifecycle_events_enabled", None)
+        if callable(_structured_probe):
             try:
-                _structured_lifecycle_events = bool(adapter.structured_lifecycle_events_enabled())
+                # `is True`, not truthiness: a MagicMock adapter auto-creates every attribute and
+                # its call returns a truthy mock, which would silently switch this rail on for
+                # unrelated tests (same trap gateway/AGENTS.md documents for draft_stream_is_message).
+                _structured_lifecycle_events = _structured_probe() is True
             except Exception:
                 logger.debug("structured lifecycle opt-in check failed", exc_info=True)
         disp = self._RunAgentDisplay(

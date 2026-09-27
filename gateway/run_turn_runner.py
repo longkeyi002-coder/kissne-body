@@ -527,8 +527,6 @@ class TurnRunner:
             return
 
         async def _deliver(raw: Any) -> None:
-            if not isinstance(raw, dict) or self._agent_interrupted():
-                return
             await send(chat_id=ctx.source.chat_id, event=raw, metadata=ctx._progress_metadata)
 
         try:
@@ -538,24 +536,41 @@ class TurnRunner:
                 except queue.Empty:
                     await asyncio.sleep(0.1)
                     continue
+                if not isinstance(raw, dict):
+                    # Not ours: thinking text, notices and reset markers share this queue and the
+                    # text rail renders them. Put it back and let the caller fall through — this rail
+                    # must never swallow a payload it cannot present.
+                    ctx.progress_queue.put(raw)
+                    return
+                if self._agent_interrupted():
+                    continue
                 try:
                     await _deliver(raw)
                 except asyncio.CancelledError:
+                    ctx.progress_queue.put(raw)  # dequeued but undelivered: leave it for the flush
                     raise
                 except Exception as err:
                     logger.debug("structured tool-event delivery failed: %s", err)
         except asyncio.CancelledError:
             # Turn cleanup cancels this task; flush what the turn already produced. Mirrors the
-            # task-card drain (a re-raise here would skip the last tool's completion event).
-            try:
-                while True:
-                    await _deliver(ctx.progress_queue.get_nowait())
-            except queue.Empty:
-                pass
-            except asyncio.CancelledError:
-                pass
-            except Exception as err:
-                logger.debug("structured tool-event flush failed: %s", err)
+            # task-card drain's cancel path: same generation + interrupt guard (a superseded or
+            # stopped turn must not push its stragglers to the App), and one failed delivery must
+            # not abandon the rest of the flush.
+            if not ctx._run_still_current() or self._agent_interrupted():
+                return
+            while True:
+                try:
+                    raw = ctx.progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    await _deliver(raw)
+                except asyncio.CancelledError:
+                    break
+                except Exception as err:
+                    logger.debug("structured tool-event flush failed: %s", err)
 
     # ── editable progress bubbles (progress-queue drain) ────────────────────────────────────
 
@@ -743,7 +758,11 @@ class TurnRunner:
             return
         if getattr(ctx, "_structured_lifecycle_events", False):
             await self._send_structured_lifecycle_events(adapter)
-            return
+            # The structured rail re-queues payloads that are not tool lifecycle (thinking text,
+            # notices, reset markers) instead of swallowing them: when it hands any back, the text
+            # rail below owns them.
+            if ctx.progress_queue.empty():
+                return
         # Skip tool progress for platforms that can't edit messages (e.g. iMessage/BlueBubbles):
         # each update would be a separate bubble. getattr, not attribute access: duck-typed
         # adapters (test fakes, minimal plugins) may lack edit_message — treated as "can't edit".
@@ -760,6 +779,11 @@ class TurnRunner:
                     self._drain_progress_queue()
                     return
                 raw = ctx.progress_queue.get_nowait()
+                if isinstance(raw, dict):
+                    # ID-bearing lifecycle payloads belong to the rail that runs above this loop;
+                    # hand it back rather than rendering a dict repr into the bubble.
+                    ctx.progress_queue.put(raw)
+                    return
                 # Drain silently when interrupted: events queued in the window between tool parse
                 # and interrupt processing should not render as bubbles.
                 if self._agent_interrupted():

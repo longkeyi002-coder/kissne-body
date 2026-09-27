@@ -197,3 +197,49 @@ def test_unknown_event_types_are_ignored(tmp_path):
                 await stop(adapter)
 
     run(scenario())
+
+
+def test_tool_completion_lands_on_the_turn_its_start_belonged_to(tmp_path):
+    """A completion arriving after the next turn opened must not be filed under that new turn.
+
+    ``_queue_event`` resolves "newest pending turn" at delivery time, so an unpinned completion
+    would show the row inside whatever turn happens to be pending when it lands.
+    """
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            device_store = adapter.device_store()
+            device_store.open_turn("turn-a", INSTALLATION, state="pending")
+
+            targets = []
+            original = adapter._queue_event
+
+            async def _record(installation_id, event_type, **kwargs):
+                targets.append(kwargs.get("target_turn_id"))
+                return await original(installation_id, event_type, **kwargs)
+
+            adapter._queue_event = _record
+            try:
+                await adapter.send_structured_tool_event(
+                    INSTALLATION,
+                    {"type": "tool.started", "tool_call_id": "call-7", "tool_name": "terminal",
+                     "args": {"command": "ls"}},
+                )
+                # The next turn opens while the tool is still running.
+                device_store.open_turn("turn-b", INSTALLATION, state="pending")
+                assert device_store.pending_turn_id(INSTALLATION) == "turn-b"
+                await adapter.send_structured_tool_event(
+                    INSTALLATION,
+                    {"type": "tool.completed", "tool_call_id": "call-7", "tool_name": "terminal",
+                     "is_error": False},
+                )
+            finally:
+                adapter._queue_event = original
+
+            assert targets == ["turn-a", "turn-a"], targets
+
+    run(scenario())

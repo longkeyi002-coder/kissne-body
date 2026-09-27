@@ -207,6 +207,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Semantic labels for gateway-dispatched structured tool events, keyed by (installation,
         # real tool-call id) so a completion reuses the label its start showed.
         self._structured_tool_labels: Dict[Tuple[str, str], str] = {}
+        # The turn each structured tool call started in, same key: the completion must land on the
+        # turn its start belongs to, not on whatever turn happens to be pending when it arrives.
+        self._structured_tool_turns: Dict[Tuple[str, str], str] = {}
         self._session_reset_pending: set[str] = set()
         self._session_reset_turns: Dict[str, str] = {}
         # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
@@ -587,6 +590,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             self._draft_tool_labels.pop(key, None)
         for key in [key for key in list(self._structured_tool_labels) if key[0] == installation]:
             self._structured_tool_labels.pop(key, None)
+            self._structured_tool_turns.pop(key, None)
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
@@ -743,6 +747,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # The gateway had no real id (older core / synthetic call): correlate by name only.
             call_id = f"tool:{tool_name}"
         label_key = (installation, call_id)
+        # Pin the turn when the call starts and carry that anchor onto its completion. Without it
+        # `_queue_event` resolves "newest pending turn" at delivery time, so a completion that lands
+        # after the next turn opened (or a straggler flushed late) is filed under the wrong turn.
+        turn_id = self._structured_tool_turns.get(label_key)
+        if not turn_id:
+            try:
+                turn_id = str(await asyncio.to_thread(
+                    self.device_store().pending_turn_id, installation) or "")
+            except Exception:
+                turn_id = ""
+            if turn_id:
+                self._structured_tool_turns[label_key] = turn_id
 
         if kind == "tool.started":
             activity = self._tool_activity_payload(
@@ -753,6 +769,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             presentation = "tool_call"
         else:
             failed = bool(event.get("is_error"))
+            self._structured_tool_turns.pop(label_key, None)
             activity = self._tool_activity_payload(
                 kind="tool_result", tool_call_id=call_id, tool_name=tool_name,
                 status="failed" if failed else "completed",
@@ -762,7 +779,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             presentation = "tool_result"
 
         message_id = await self._queue_event(
-            installation, EVENT_DELTA, content="",
+            installation, EVENT_DELTA, content="", target_turn_id=turn_id or None,
             extra={"presentation": presentation, "tool_call_id": call_id, "activity": activity},
         )
         if message_id is None:
