@@ -724,6 +724,9 @@
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
+          /* 活动流（工具/思考）是这条消息的一部分：落盘时必须一起带走，
+             否则列表从本地缓存重建（切会话、冷启动、重画）时这一块会整块消失。 */
+          activity: m.activity || '',
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
           clientNotice: !!m.clientNotice,
           stableOrder: Number(m._stableOrder != null ? m._stableOrder : index),
@@ -1912,6 +1915,17 @@
               if (item.created_at != null) m.sortAt = item.created_at;
               m.day = chatDayKey(item.created_at || m.sortAt || Date.now());
               m.time = historyClock(item.created_at) || m.time;
+              /* 本地缓存行可能是旧格式、没带活动流：能补就补回来。
+                 否则列表重画（发下一条消息就会触发对账）时，工具/思考块会凭空消失。 */
+              if (!m.activity && role === 'assistant') {
+                var localTurnId = turnIdFromMessageRef(messageRef);
+                var localState = localTurnId ? TURN_ACTIVITY[localTurnId] : null;
+                if (localState && (localState.reasoning || (localState.toolOrder && localState.toolOrder.length))) {
+                  localState.done = true;
+                  m.activity = activityMarkupForTurn(localTurnId, true);
+                }
+                if (!m.activity) m.activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
+              }
               CHAT_LOG.push(m);
             });
             delete localByRef[messageRef];

@@ -123,3 +123,12 @@ assert('本地缓存恢复 sys 行要求 clientNotice 标记',
   src.indexOf("m.who === 'sys' && m.localOnly && m.clientNotice === true") > 0);
 
 console.log('\n' + (failures ? 'FAILED ' + failures + ' 条' : 'ALL PASS'));
+
+console.log('== 活动流持久化（源码断言：工具/思考块不许在重画后消失）==');
+var srcText = fs.readFileSync(path.join(base, 'screens-a.js'), 'utf8');
+var persistBody = (/function persistChatLog\(\)[\s\S]*?\n  \}/.exec(srcText) || [''])[0];
+assert('落盘白名单必须带上 activity（否则本地缓存重建时活动块整块消失）', /activity:\s*m\.activity/.test(persistBody));
+var localRowsBody = (/var localRows = messageRef[\s\S]*?delete localByRef\[messageRef\]/.exec(srcText) || [''])[0];
+assert('跟服务器对账时，缺活动流的本地行要能补回 activity', /m\.activity = activityMarkupForTurn/.test(localRowsBody));
+assert('本地行若没有活动流时，还要能用最终正文兜底匹配', /m\.activity = FINAL_ACTIVITY_BY_TEXT\[rawText\]/.test(localRowsBody));
+console.log('探针结束：' + (failures ? failures + ' 条失败' : '全部通过'));

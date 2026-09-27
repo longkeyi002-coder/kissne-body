@@ -50,8 +50,8 @@ PASS · 已移除改判点：looksLikeToolTranscript(rawText) && role !==
 PASS · 已移除改判点：history-commentary-tool:
 PASS · 已移除改判点：history-assistant-tool:
 仍存在的 looksLikeToolTranscript 调用点：
-  L1881: if (!historyPresentation && looksLikeToolTranscript(rawText)) {
-  L2139: if (!presentation && looksLikeToolTranscript(noticeText)) return;
+  L1884: if (!historyPresentation && looksLikeToolTranscript(rawText)) {
+  L2153: if (!presentation && looksLikeToolTranscript(noticeText)) return;
 PASS · looksLikeToolTranscript 调用点只剩「抑制旧式原始工具流水」的 2 处（noticeText / rawText）
 PASS · 历史 notice 道里那处紧随 LANE_NOTICE 判定
 PASS · 两处旧流水抑制都以「没有结构化 presentation」为前提
@@ -60,3 +60,8 @@ PASS · sys 行只由 appendSystemNotice / 历史 notice 道产生
 PASS · 本地缓存恢复 sys 行要求 clientNotice 标记
 
 ALL PASS
+== 活动流持久化（源码断言：工具/思考块不许在重画后消失）==
+PASS · 落盘白名单必须带上 activity（否则本地缓存重建时活动块整块消失）
+PASS · 跟服务器对账时，缺活动流的本地行要能补回 activity
+PASS · 本地行若没有活动流时，还要能用最终正文兜底匹配
+探针结束：全部通过
