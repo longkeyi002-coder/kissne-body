@@ -71,6 +71,41 @@ def test_bootstrap_reports_the_current_conversation_and_its_tail(tmp_path):
         f"history must be the tail of the Conversation (newest last), got {history[-1]!r}")
 
 
+def test_bootstrap_exposes_tool_activity_without_tool_result_body(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            store.append_to_transcript(existing.session_id, {"role": "user", "content": "remember this"})
+            store.append_to_transcript(existing.session_id, {
+                "role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-private", "function": {"name": "memory_read", "arguments": "{}"}}
+                ],
+            })
+            store.append_to_transcript(existing.session_id, {
+                "role": "tool", "content": "private-vision-and-memory-json",
+                "tool_call_id": "call-private", "tool_name": "memory_read",
+            })
+            store.append_to_transcript(existing.session_id, {"role": "assistant", "content": "Done."})
+            adapter.set_session_store(store)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                return await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
+            finally:
+                await stop(adapter)
+
+    status, payload, _ = run(scenario())
+    assert status == 200, payload
+    assert "private-vision-and-memory-json" not in str(payload)
+    tools = [item for item in payload["history"] if item.get("role") == "tool"]
+    assert len(tools) == 1
+    assert tools[0]["text"] == ""
+    assert tools[0]["tool_call_id"] == "call-private"
+    assert tools[0]["tool_name"] == "memory_read"
+
+
 def test_bootstrap_history_is_bounded_and_flags_truncation(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:

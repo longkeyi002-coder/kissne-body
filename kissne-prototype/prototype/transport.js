@@ -307,9 +307,10 @@
       base: adminBase()
     });
   }
-  function history(limit, before) {
+  function history(limit, before, sessionId) {
     var path = '/mobile/history?limit=' + encodeURIComponent(Number(limit) || 50);
     if (before) path += '&before=' + encodeURIComponent(String(before));
+    if (sessionId) path += '&session_id=' + encodeURIComponent(String(sessionId));
     return request(path, { method: 'GET' });
   }
   function searchHistory(q, limit) {

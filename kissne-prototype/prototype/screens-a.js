@@ -1648,7 +1648,6 @@
             upsertToolActivity(historyTurnId || 'history', {
               tool_call_id: item.tool_call_id || '',
               tool_name: item.tool_name || '',
-              result: rawText,
               status: 'completed'
             }, 'result');
             return;

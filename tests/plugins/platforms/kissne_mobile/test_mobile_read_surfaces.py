@@ -62,6 +62,51 @@ def test_paired_device_can_delete_inactive_session_but_not_active_session(tmp_pa
     assert protected[1]["error"] == "active_session_delete_forbidden"
 
 
+def test_delete_unindexed_session_hides_row_without_erasing_history_or_other_routes(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            active = preexisting_conversation(sessions, chat_id="mobile-active")
+            old = preexisting_conversation(sessions, chat_id="old-room")
+            seed_transcript(sessions, old.session_id, 2)
+            db = sessions._db_for_session_id(old.session_id)
+            with sessions._lock:
+                sessions._ensure_loaded_locked()
+                sessions._entries.pop(old.session_key)
+                sessions._save()
+            assert sessions.lookup_by_session_id(old.session_id) is None
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=active)
+                before = dict(db.get_session(old.session_id))
+                deleted = await http(port, "DELETE", "/admin/sessions", token=token,
+                                     body={"session_id": old.session_id})
+                listed = await http(port, "GET", "/admin/sessions", token=token)
+                selected = await http(port, "POST", "/admin/sessions", token=token,
+                                      body={"session_id": old.session_id})
+                after = dict(db.get_session(old.session_id))
+                replacement = sessions.get_or_create_session(old.origin, touch_activity=False)
+                return (
+                    old.session_id, before, deleted, listed, selected, after,
+                    sessions.load_transcript(old.session_id), replacement.session_id,
+                )
+            finally:
+                await stop(adapter)
+
+    old_id, before, deleted, listed, selected, after, transcript, replacement_id = run(scenario())
+    assert deleted[0] == 200, deleted
+    assert listed[0] == 200, listed
+    assert all(row["session_id"] != old_id for row in listed[1]["sessions"])
+    assert after["hidden"] == 1
+    assert after["end_reason"] == "session_deleted"
+    assert before["source"] == after["source"]
+    assert len(transcript) == 4
+    assert replacement_id != old_id
+    assert selected[0] in (404, 409), selected
+
+
 def test_session_select_by_id_uses_authenticated_route_and_preserves_token(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:

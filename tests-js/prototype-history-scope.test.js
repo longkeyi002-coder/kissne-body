@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 async function historyScope() {
   vi.resetModules();
@@ -10,6 +10,7 @@ async function historyScope() {
 beforeEach(() => {
   delete globalThis.window;
 });
+afterEach(() => vi.unstubAllGlobals());
 
 test('ordinary chat requests the continuous timeline on every page', async () => {
   const scope = await historyScope();
@@ -54,4 +55,25 @@ test('a stale picker selection does not scope a newly bound room', async () => {
   };
   await scope.request(transport, 50, '', 'previous-room', 'new-room');
   expect(calls).toEqual(['']);
+});
+
+test('web history request forwards the chosen room to the server', async () => {
+  vi.resetModules();
+  vi.stubGlobal('window', {});
+  vi.stubGlobal('location', { protocol: 'https:', origin: 'https://example.test' });
+  vi.stubGlobal('localStorage', {
+    getItem(key) { return key === 'kissne.web.device_token' ? 'paired' : ''; },
+    setItem() {},
+    removeItem() {}
+  });
+  const urls = [];
+  vi.stubGlobal('fetch', async (url) => {
+    urls.push(url);
+    return { ok: true, text: async () => '{"messages":[]}' };
+  });
+  await import('../kissne-prototype/prototype/transport.js');
+  await window.KissneHistoryScope.request(window.KissneTransport, 50, 'older-ref', 'chosen-room', 'chosen-room');
+  await window.KissneHistoryScope.request(window.KissneTransport, 50, '', '', 'chosen-room');
+  expect(urls[0]).toContain('before=older-ref&session_id=chosen-room');
+  expect(urls[1]).toBe('https://example.test/mobile/history?limit=50');
 });

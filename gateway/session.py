@@ -1199,9 +1199,9 @@ class SessionStore(
                 raise RouteBindingError(
                     f"repoint_source_alias_to_existing_session: session {target_session_id} does not exist"
                 )
-            if row.get("archived"):
+            if row.get("archived") or row.get("hidden") or row.get("end_reason") == "session_deleted":
                 raise RouteBindingError(
-                    f"repoint_source_alias_to_existing_session: session {target_session_id} is archived"
+                    f"repoint_source_alias_to_existing_session: session {target_session_id} is hidden or archived"
                 )
             if row.get("ended_at") is not None or row.get("end_reason"):
                 reopen = getattr(db, "reopen_session", None)

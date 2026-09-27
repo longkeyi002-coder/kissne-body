@@ -1875,15 +1875,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 current["items"].append(item)
                 continue
 
-            # Tool output is intentionally a bounded preview; binary/base64-sized payloads never
-            # travel wholesale through bootstrap.
+            # Keep tool activity metadata, but never ship raw tool output through bootstrap.
             tool_call_id = str(row.get("tool_call_id") or row.get("call_id") or "").strip()
             tool_name = str(row.get("tool_name") or row.get("name") or "").strip()
             if not tool_call_id and not tool_name and not text.strip():
                 continue
             item = {
                 "role": "tool",
-                "text": clipped(text, 4096),
+                "text": "",
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
             }
@@ -2121,7 +2120,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 offset += len(page)
             if current_id and all(str(row.get("id") or "") != current_id for row in rows):
                 active_row = await asyncio.to_thread(get_session, current_id) if callable(get_session) else None
-                if isinstance(active_row, dict):
+                if isinstance(active_row, dict) and not active_row.get("hidden") and active_row.get("end_reason") != "session_deleted":
                     # get_session() does not project list_sessions_rich.last_active. Recover it
                     # from the transcript so an archived active row does not sort to the bottom.
                     try:
@@ -2143,7 +2142,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         projected: List[Dict[str, Any]] = []
         for row in rows:
             sid = str(row.get("id") or "")
-            if not sid:
+            if not sid or row.get("hidden") or row.get("end_reason") == "session_deleted":
                 continue
             title = str(row.get("title") or row.get("display_name") or "")
             message_count = int(row.get("message_count") or 0)
@@ -2190,7 +2189,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except Exception:
             logger.warning("[kissne_mobile] could not resolve selected session", exc_info=True)
             return _error_response("session_select_unavailable", 503)
-        if not target_id or not isinstance(target_row, dict):
+        if not target_id or not isinstance(target_row, dict) or target_row.get("hidden") or target_row.get("end_reason") == "session_deleted":
             return _error_response("session_not_found", 404)
         try:
             current = await asyncio.to_thread(store.lookup_by_session_key, mobile_key)
@@ -2214,7 +2213,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         return _json_response({"ok": True, "conversation": identity})
 
     async def _handle_delete_admin_session(self, request: web.Request) -> web.Response:
-        """Delete one inactive canonical Hermes conversation selected by the paired device."""
+        """Hide an inactive conversation from the picker without destroying its history."""
         installation = await self._authenticated_installation(request)
         if not installation:
             return _error_response("unauthorized", 401)
@@ -2232,28 +2231,27 @@ class KissneMobileAdapter(BasePlatformAdapter):
         current_id = str((current or {}).get("session_id") or "")
         if session_id == current_id:
             return _error_response("active_session_delete_forbidden", 409)
+
+        mobile_key = self.mobile_session_key(installation)
         try:
-            target = await asyncio.to_thread(store.lookup_by_session_id, session_id)
-            if target is None:
+            db = store._db_for_key(mobile_key)
+            get_row = getattr(db, "get_session", None)
+            target = await asyncio.to_thread(get_row, session_id) if callable(get_row) else None
+            if not isinstance(target, dict) or target.get("hidden") or target.get("end_reason") == "session_deleted":
                 return _error_response("session_not_found", 404)
-            # SessionStore intentionally has no destructive delete API. Remove the
-            # inactive conversation from the active routing index and end its durable
-            # session row through the same lifecycle primitive used by resets/switches.
-            target_key = str(target.session_key or "")
-            db = store._db_for_key(target_key)
-            if db is not None:
-                promote = getattr(db, "promote_to_session_reset", None)
-                if callable(promote):
-                    promote(session_id, "session_deleted")
-                else:
-                    db.end_session(session_id, "session_deleted")
+            hide = getattr(db, "set_session_hidden", None)
+            if not callable(hide) or not await asyncio.to_thread(hide, session_id, True):
+                return _error_response("session_delete_unavailable", 503)
+            if target.get("ended_at") is None and not target.get("end_reason"):
+                await asyncio.to_thread(db.end_session, session_id, "session_deleted")
+            # Never evict the canonical route of another platform. The active
+            # installation is guarded above; this handles a stale mobile alias.
             with store._lock:
                 store._ensure_loaded_locked()
-                routed = store._entries.get(target_key)
-                if routed is None or routed.session_id != session_id:
-                    return _error_response("session_not_found", 404)
-                store._entries.pop(target_key, None)
-                store._save()
+                routed = store._entries.get(mobile_key)
+                if routed is not None and routed.session_id == session_id:
+                    store._entries.pop(mobile_key, None)
+                    store._save()
         except Exception:
             logger.warning("[kissne_mobile] could not delete session %s", _fingerprint(session_id), exc_info=True)
             return _error_response("session_delete_unavailable", 503)
