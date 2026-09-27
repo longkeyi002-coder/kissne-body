@@ -292,8 +292,10 @@ def test_bootstrap_preserves_tool_chain_and_final_turn_identity(tmp_path):
     assert represented == {"kbm_turn_tools"}
     assert history[1]["tool_calls"][0]["id"] == "call-1"
     assert history[2]["tool_call_id"] == "call-1"
-    assert history[2]["text"].endswith("…[truncated]")
-    assert len(history[2]["text"]) < 4200
+    # Bootstrap ships tool activity metadata only — raw tool output never leaves the server
+    # (the truncated-preview contract was retired when the picker history was rescoped).
+    assert history[2]["text"] == ""
+    assert not any("xxxxx" in str(row.get("text") or "") for row in history)
     assert all("reasoning" not in row and "reasoning_content" not in row for row in history)
     assert truncated is False
 
