@@ -204,6 +204,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
+        # Semantic labels for gateway-dispatched structured tool events, keyed by (installation,
+        # real tool-call id) so a completion reuses the label its start showed.
+        self._structured_tool_labels: Dict[Tuple[str, str], str] = {}
         self._session_reset_pending: set[str] = set()
         self._session_reset_turns: Dict[str, str] = {}
         # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
@@ -495,6 +498,49 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return None
         return value if isinstance(value, dict) else None
 
+    @classmethod
+    def _tool_activity_payload(
+        cls, *, kind: str, tool_call_id: str, tool_name: str,
+        args: Optional[Dict[str, Any]] = None, preview: Optional[str] = None,
+        status: str = "running", index: Optional[int] = None, label: Optional[str] = None,
+        duration: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build one Activity record — shared by the draft lane and the structured lifecycle lane.
+
+        Keeping a single builder means both rails emit the exact same payload shape, which is what
+        the App keys its tool-row rendering and start/result correlation off.
+        """
+        name = str(tool_name or "")
+        payload: Dict[str, Any] = {
+            "kind": str(kind),
+            "tool_call_id": str(tool_call_id or ""),
+            "tool_name": name,
+        }
+        if kind == "tool_call":
+            command = cls._tool_command(args)
+            if command:
+                detail = command
+            elif preview:
+                detail = str(preview)
+            elif args:
+                detail = json.dumps(args, ensure_ascii=False, default=str)
+            else:
+                detail = name
+            payload["label"] = str(label or "") or cls._semantic_activity_label(name, args, preview)
+            payload["arguments"] = cls._activity_detail(detail)
+            payload["status"] = str(status)
+            if index is not None:
+                payload["index"] = int(index)
+        else:
+            payload["status"] = str(status)
+            if index is not None:
+                payload["index"] = int(index)
+            if duration is not None:
+                payload["duration"] = round(float(duration), 3)
+            if label:
+                payload["label"] = str(label)
+        return payload
+
     def format_tool_event(
         self, event: Any, *, mode: str = "all", preview_max_len: int = 40,
     ) -> Optional[str]:
@@ -502,36 +548,20 @@ class KissneMobileAdapter(BasePlatformAdapter):
         from gateway.stream_events import ToolCallChunk, ToolCallFinished
         if isinstance(event, ToolCallFinished):
             index = int(event.index or 0)
-            return self._encode_activity_marker({
-                "kind": "tool_result",
-                "tool_call_id": f"draft-tool:{index}",
-                "tool_name": str(event.tool_name or ""),
-                "index": index,
-                "status": "completed" if bool(event.ok) else "failed",
-                "duration": round(float(event.duration or 0.0), 3),
-            })
+            return self._encode_activity_marker(self._tool_activity_payload(
+                kind="tool_result", tool_call_id=f"draft-tool:{index}",
+                tool_name=str(event.tool_name or ""), index=index,
+                status="completed" if bool(event.ok) else "failed",
+                duration=float(event.duration or 0.0),
+            ))
         if not isinstance(event, ToolCallChunk):
             return None
-        command = self._tool_command(event.args)
-        if command:
-            detail = command
-        elif event.preview:
-            detail = str(event.preview)
-        elif event.args:
-            detail = json.dumps(event.args, ensure_ascii=False, default=str)
-        else:
-            detail = str(event.tool_name or "")
         index = int(event.index or 0)
-        payload = {
-            "kind": "tool_call",
-            "tool_call_id": f"draft-tool:{index}",
-            "label": self._semantic_activity_label(event.tool_name, event.args, event.preview),
-            "tool_name": str(event.tool_name or ""),
-            "arguments": self._activity_detail(detail),
-            "index": index,
-            "status": "running",
-        }
-        return self._encode_activity_marker(payload)
+        return self._encode_activity_marker(self._tool_activity_payload(
+            kind="tool_call", tool_call_id=f"draft-tool:{index}",
+            tool_name=str(event.tool_name or ""), args=event.args, preview=event.preview,
+            status="running", index=index,
+        ))
 
     def _split_draft_frame(self, content: str) -> Tuple[str, List[Dict[str, Any]]]:
         """Separate internal Activity marker lines from the visible cumulative draft."""
@@ -555,6 +585,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             self._draft_text_last.pop(key, None)
             self._draft_activity_seen.pop(key, None)
             self._draft_tool_labels.pop(key, None)
+        for key in [key for key in list(self._structured_tool_labels) if key[0] == installation]:
+            self._structured_tool_labels.pop(key, None)
 
     async def _queue_event(self, installation_id: str, event_type: str, *,
                            content: Optional[str] = None, reply_to: Optional[str] = None,
@@ -669,6 +701,69 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 "presentation": "reasoning",
                 "interim": True,
             },
+        )
+        if message_id is None:
+            return SendResult(success=False, error="missing target installation")
+        return SendResult(success=True, message_id=message_id)
+
+    # -- structured lifecycle capability -----------------------------------------------------------
+
+    def structured_lifecycle_events_enabled(self) -> bool:
+        """Capability opt-in: let the gateway hand this adapter the ID-bearing tool lifecycle.
+
+        Declaring this makes the gateway pass ``agent.tool_start_callback`` /
+        ``tool_complete_callback`` through to :meth:`send_structured_tool_event` (the same rail
+        Slack's native task cards use) instead of the name-correlated *text* progress lines, and
+        suppresses the text tool-progress rail so a tool never arrives twice. Adapters that do not
+        declare it keep the text rail unchanged.
+        """
+        return True
+
+    async def send_structured_tool_event(self, chat_id: str, event: Dict[str, Any], *,
+                                         metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        """Deliver one gateway tool-start/completion as a typed App event.
+
+        The App renders ``presentation: tool_call`` / ``tool_result`` rows keyed by
+        ``tool_call_id`` and expands the ``arguments`` detail inline. This is *not* assistant text:
+        it must never touch the draft text lane (``_clear_draft_state`` would drop the live draft of
+        the reply being written), so it goes straight onto the event stream.
+        """
+        installation = str(chat_id or "").strip()
+        if not installation:
+            return SendResult(success=False, error="missing target installation")
+        kind = str((event or {}).get("type") or "")
+        if kind not in {"tool.started", "tool.completed"}:
+            # A non-lifecycle entry on this lane (e.g. a stray text progress bubble) is not ours.
+            return SendResult(success=True, message_id=None)
+        call_id = str((event or {}).get("tool_call_id") or "").strip()
+        tool_name = str((event or {}).get("tool_name") or "").strip()
+        args = event.get("args") if isinstance(event.get("args"), dict) else None
+        preview = str(event.get("preview") or "") or None
+        if not call_id:
+            # The gateway had no real id (older core / synthetic call): correlate by name only.
+            call_id = f"tool:{tool_name}"
+        label_key = (installation, call_id)
+
+        if kind == "tool.started":
+            activity = self._tool_activity_payload(
+                kind="tool_call", tool_call_id=call_id, tool_name=tool_name, args=args,
+                preview=preview, status="running",
+            )
+            self._structured_tool_labels[label_key] = str(activity.get("label") or "")
+            presentation = "tool_call"
+        else:
+            failed = bool(event.get("is_error"))
+            activity = self._tool_activity_payload(
+                kind="tool_result", tool_call_id=call_id, tool_name=tool_name,
+                status="failed" if failed else "completed",
+                label=self._structured_tool_labels.pop(label_key, "")
+                or self._semantic_activity_label(tool_name, None, None),
+            )
+            presentation = "tool_result"
+
+        message_id = await self._queue_event(
+            installation, EVENT_DELTA, content="",
+            extra={"presentation": presentation, "tool_call_id": call_id, "activity": activity},
         )
         if message_id is None:
             return SendResult(success=False, error="missing target installation")

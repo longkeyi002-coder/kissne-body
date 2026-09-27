@@ -2798,7 +2798,18 @@ class GatewayTurnMixin:
                 _native_slack_task_cards = bool(adapter.native_task_cards_enabled())
             except Exception:
                 logger.debug("Slack native task-card config check failed", exc_info=True)
-        return self._RunAgentDisplay(
+        # Structured tool lifecycle (capability opt-in, platform-agnostic): adapters that render the
+        # ID-bearing tool_start/tool_complete callbacks themselves (e.g. the mobile plugin, which
+        # turns each into a typed outbound App event) declare ``structured_lifecycle_events_enabled()``.
+        # Same rail as Slack's task cards, but the platform whitelist is replaced by a capability
+        # probe, so every other platform keeps its existing name-correlated text progress.
+        _structured_lifecycle_events = False
+        if hasattr(adapter, "structured_lifecycle_events_enabled"):
+            try:
+                _structured_lifecycle_events = bool(adapter.structured_lifecycle_events_enabled())
+            except Exception:
+                logger.debug("structured lifecycle opt-in check failed", exc_info=True)
+        disp = self._RunAgentDisplay(
             user_config=user_config, platform_key=platform_key, enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets, resolve_display_setting=resolve_display_setting,
             progress_mode=progress_mode, progress_grouping=progress_grouping,
@@ -2808,9 +2819,16 @@ class GatewayTurnMixin:
             log_queue=queue.Queue() if log_mode_enabled else None,
             interim_assistant_messages_enabled=interim_assistant_messages_enabled,
             _thinking_enabled=_thinking_enabled, _native_slack_task_cards=_native_slack_task_cards,
-            needs_progress_queue=tool_progress_enabled or _thinking_enabled or _native_slack_task_cards,
+            needs_progress_queue=(
+                tool_progress_enabled or _thinking_enabled or _native_slack_task_cards
+                or _structured_lifecycle_events
+            ),
             _generic_status_phrase=_generic_status_phrase,
         )
+        # Carried as an instance attribute (not a ``_RunAgentDisplay`` dataclass field, which
+        # gateway/run.py owns) — read back in ``_run_agent_build_turn_context``.
+        disp._structured_lifecycle_events = _structured_lifecycle_events
+        return disp
 
     # _RunAgentDisplay fields copied verbatim onto the TurnContext.
     _DISPLAY_TO_TURN_CTX = (
@@ -2858,6 +2876,7 @@ class GatewayTurnMixin:
             run_generation=run_generation, _cleanup_progress=_cleanup_progress,
             _run_still_current=self._run_still_current_fn(session_key, run_generation),
             progress_queue=queue.Queue() if disp.needs_progress_queue else None,
+            _structured_lifecycle_events=bool(getattr(disp, "_structured_lifecycle_events", False)),
             _voice_ack_guild=_voice_ack_guild, _voice_ack_loop=asyncio.get_running_loop(),
             **{name: getattr(disp, name) for name in self._DISPLAY_TO_TURN_CTX}, **turn_params,
         )
@@ -2866,7 +2885,7 @@ class GatewayTurnMixin:
         turn_ctx.progress_callback = turn_runner.progress_callback
         turn_ctx.voice_ack_callback = turn_runner.voice_ack_callback
         turn_ctx.native_tool_start_callback = turn_runner.combined_tool_start_callback
-        turn_ctx.native_tool_complete_callback = turn_runner.native_tool_complete_callback
+        turn_ctx.native_tool_complete_callback = turn_runner.combined_tool_complete_callback
         return turn_ctx, turn_runner, _cleanup_adapter
 
     def _thread_metadata_for_progress(

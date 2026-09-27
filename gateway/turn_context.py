@@ -93,3 +93,8 @@ class TurnContext:
     _native_slack_task_cards: bool = False
     native_tool_start_callback: Optional[Callable] = None
     native_tool_complete_callback: Optional[Callable] = None
+    # Structured tool lifecycle (capability opt-in, platform-agnostic): True when the turn's
+    # adapter declares ``structured_lifecycle_events_enabled()``. Same ID-bearing callbacks as the
+    # Slack rail, but the adapter owns the presentation (the mobile plugin turns each event into a
+    # typed outbound App event) and the name-correlated text tool-progress rail is suppressed.
+    _structured_lifecycle_events: bool = False

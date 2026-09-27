@@ -131,9 +131,12 @@ class TurnRunner:
             if thinking_text:
                 ctx.progress_queue.put(f"💬 {thinking_text}")
             return
-        # Native task cards consume the ID-bearing tool_start/tool_complete callbacks instead;
-        # name-correlated text events would duplicate cards and mispair concurrent same-tool calls.
-        if ctx._native_slack_task_cards and event_type in {"tool.started", "tool.completed"}:
+        # Native task cards and the structured lifecycle rail consume the ID-bearing
+        # tool_start/tool_complete callbacks instead; name-correlated text events would duplicate
+        # cards/App activity rows and mispair concurrent same-tool calls.
+        if (
+            ctx._native_slack_task_cards or getattr(ctx, "_structured_lifecycle_events", False)
+        ) and event_type in {"tool.started", "tool.completed"}:
             return
         # tool_progress off → only _thinking passes (above). Only tool.started renders. clarify:
         # send_clarify IS the user-facing rendering (a bubble would duplicate it, and verbose mode
@@ -469,6 +472,91 @@ class TurnRunner:
                 except Exception:
                     logger.debug("task-card stop failed during turn cleanup", exc_info=True)
 
+    # ── structured tool lifecycle (capability opt-in; progress-queue drain) ─────────────────
+
+    def structured_tool_start_callback(self, call_id, tool_name, args):
+        """Queue an ID-correlated structured tool-start for capability-declaring adapters.
+
+        The real tool-call id travels with the event so the adapter (and the App behind it) can
+        correlate start/completion even for concurrent calls of the same tool.
+        """
+        if not self._native_card_gate():
+            return
+        from agent.display import build_tool_preview
+        name = str(tool_name or "tool")
+        self._ctx.progress_queue.put({
+            "type": "tool.started",
+            "tool_call_id": str(call_id or ""),
+            "tool_name": name,
+            "args": args if isinstance(args, dict) else None,
+            "preview": build_tool_preview(name, args or {}, max_len=64) or "",
+        })
+
+    def structured_tool_complete_callback(self, call_id, tool_name, args, result):
+        """Queue the matching structured completion using the real tool-call ID."""
+        if not self._native_card_gate():
+            return
+        from agent.display import _detect_tool_failure
+        name = str(tool_name or "tool")
+        is_error, _ = _detect_tool_failure(name, result)
+        self._ctx.progress_queue.put({
+            "type": "tool.completed",
+            "tool_call_id": str(call_id or ""),
+            "tool_name": name,
+            "args": args if isinstance(args, dict) else None,
+            "is_error": bool(is_error),
+        })
+
+    async def _send_structured_lifecycle_events(self, adapter) -> None:
+        """Drain the progress queue into an adapter's structured tool-event lane.
+
+        Adapters opting in via ``structured_lifecycle_events_enabled()`` own the presentation: each
+        event carries the real tool-call id and the raw args, and the adapter decides how (and
+        whether) the App sees it. The name-correlated *text* tool-progress rail is suppressed for
+        these adapters in ``progress_callback``, so a tool never arrives twice.
+        """
+        ctx = self._ctx
+        send = getattr(adapter, "send_structured_tool_event", None)
+        if not callable(send):
+            # Declared the capability but exposes no delivery lane: don't silently strand the queue.
+            logger.warning(
+                "[%s] structured_lifecycle_events_enabled() without send_structured_tool_event(); "
+                "falling back to draining progress silently", getattr(adapter, "name", "adapter"),
+            )
+            self._drain_progress_queue()
+            return
+
+        async def _deliver(raw: Any) -> None:
+            if not isinstance(raw, dict) or self._agent_interrupted():
+                return
+            await send(chat_id=ctx.source.chat_id, event=raw, metadata=ctx._progress_metadata)
+
+        try:
+            while ctx._run_still_current():
+                try:
+                    raw = ctx.progress_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.1)
+                    continue
+                try:
+                    await _deliver(raw)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:
+                    logger.debug("structured tool-event delivery failed: %s", err)
+        except asyncio.CancelledError:
+            # Turn cleanup cancels this task; flush what the turn already produced. Mirrors the
+            # task-card drain (a re-raise here would skip the last tool's completion event).
+            try:
+                while True:
+                    await _deliver(ctx.progress_queue.get_nowait())
+            except queue.Empty:
+                pass
+            except asyncio.CancelledError:
+                pass
+            except Exception as err:
+                logger.debug("structured tool-event flush failed: %s", err)
+
     # ── editable progress bubbles (progress-queue drain) ────────────────────────────────────
 
     @dataclasses.dataclass
@@ -653,6 +741,9 @@ class TurnRunner:
         if ctx._native_slack_task_cards and hasattr(adapter, "send_native_task_card_progress"):
             await self._send_native_task_card_progress(adapter)
             return
+        if getattr(ctx, "_structured_lifecycle_events", False):
+            await self._send_structured_lifecycle_events(adapter)
+            return
         # Skip tool progress for platforms that can't edit messages (e.g. iMessage/BlueBubbles):
         # each update would be a separate bubble. getattr, not attribute access: duck-typed
         # adapters (test fakes, minimal plugins) may lack edit_message — treated as "can't edit".
@@ -754,11 +845,20 @@ class TurnRunner:
         })
 
     def combined_tool_start_callback(self, call_id, tool_name, args):
-        """Compose the voice ack + native task-card start consumers."""
+        """Compose the voice ack + native task-card + structured-lifecycle start consumers."""
         if self._ctx._voice_ack_guild[0] is not None:
             self.voice_ack_callback(call_id, tool_name, args)
         if self._ctx._native_slack_task_cards:
             self.native_tool_start_callback(call_id, tool_name, args)
+        if getattr(self._ctx, "_structured_lifecycle_events", False):
+            self.structured_tool_start_callback(call_id, tool_name, args)
+
+    def combined_tool_complete_callback(self, call_id, tool_name, args, result):
+        """Compose the native task-card + structured-lifecycle completion consumers."""
+        if self._ctx._native_slack_task_cards:
+            self.native_tool_complete_callback(call_id, tool_name, args, result)
+        if getattr(self._ctx, "_structured_lifecycle_events", False):
+            self.structured_tool_complete_callback(call_id, tool_name, args, result)
 
     # ── hook / status bridges (agent thread → gateway loop) ────────────────────────────────
 
@@ -1163,13 +1263,21 @@ class TurnRunner:
         # ALWAYS attached (never gated to None): its body gates each event class, and subagent-
         # failure notices must fire even with tool_progress/thinking off.
         agent.tool_progress_callback = ctx.progress_callback
-        # Discord's one-time voice ack and Slack's task cards both ride the authoritative start
-        # callback, so neither infers identity from tool names.
+        # Discord's one-time voice ack, Slack's task cards and the structured lifecycle rail all
+        # ride the authoritative start callback, so none infer identity from tool names.
+        _structured_lifecycle = bool(getattr(ctx, "_structured_lifecycle_events", False))
         agent.tool_start_callback = (
             (ctx.native_tool_start_callback or ctx.voice_ack_callback)
-            if (ctx._voice_ack_guild[0] is not None or ctx._native_slack_task_cards) else None
+            if (
+                ctx._voice_ack_guild[0] is not None
+                or ctx._native_slack_task_cards
+                or _structured_lifecycle
+            ) else None
         )
-        agent.tool_complete_callback = ctx.native_tool_complete_callback if ctx._native_slack_task_cards else None
+        agent.tool_complete_callback = (
+            ctx.native_tool_complete_callback
+            if (ctx._native_slack_task_cards or _structured_lifecycle) else None
+        )
         agent.step_callback = ctx._step_callback_sync if ctx._hooks_ref.loaded_hooks else None
         agent.stream_delta_callback = stream_delta_cb
         # Provider-visible reasoning stays out of assistant text and is sent only
