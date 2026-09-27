@@ -109,6 +109,20 @@
 
   var CURRENT_SESSION_ID = '';
   var CURRENT_SESSION_KEY = '';
+  var HISTORY_SCOPE_STORAGE_KEY = 'kissne:selected-history-session';
+  var historySelectionMemory = null;
+  function selectedHistorySessionId() {
+    if (historySelectionMemory !== null) return historySelectionMemory;
+    try { return String(localStorage.getItem(HISTORY_SCOPE_STORAGE_KEY) || ''); }
+    catch (_err) { return ''; }
+  }
+  function rememberSelectedHistorySession(id) {
+    historySelectionMemory = String(id || '');
+    try {
+      if (id) localStorage.setItem(HISTORY_SCOPE_STORAGE_KEY, historySelectionMemory);
+      else localStorage.removeItem(HISTORY_SCOPE_STORAGE_KEY);
+    } catch (_err) { /* Keep this visit's selection in memory. */ }
+  }
 
   function remoteSessions() {
     var idx = window.KissneSessionIndex || {};
@@ -1506,12 +1520,13 @@
       var sessionHistoryNextBefore = '';
       var sessionHistoryHasMore = false;
       var sessionHistoryLoading = false;
-      async function loadInitialSessionHistory(sessionId, fallbackHistory, bootstrapTruncated) {
+      var sessionHistoryScopeId = '';
+      async function loadInitialSessionHistory(scopeId, fallbackHistory, bootstrapTruncated) {
         sessionHistoryRows = fallbackHistory || [];
         sessionHistoryNextBefore = '';
         sessionHistoryHasMore = !!bootstrapTruncated;
-        if (!T || typeof T.history !== 'function' || !sessionId) return sessionHistoryRows;
-        var payload = await T.history(50, '', sessionId);
+        if (!T || typeof T.history !== 'function') return sessionHistoryRows;
+        var payload = await window.KissneHistoryScope.request(T, 50, '', scopeId, CURRENT_SESSION_ID);
         sessionHistoryRows = payload && Array.isArray(payload.messages) ? payload.messages : [];
         sessionHistoryHasMore = !!(payload && payload.has_more);
         sessionHistoryNextBefore = String(payload && payload.next_before || '');
@@ -1519,11 +1534,11 @@
       }
       async function loadOlderSessionHistory() {
         if (sessionHistoryLoading || !sessionHistoryHasMore || !sessionHistoryNextBefore
-            || !T || typeof T.history !== 'function' || !CURRENT_SESSION_ID) return;
+            || !T || typeof T.history !== 'function') return;
         sessionHistoryLoading = true;
         var requestedBefore = sessionHistoryNextBefore;
         try {
-          var payload = await T.history(50, requestedBefore, CURRENT_SESSION_ID);
+          var payload = await window.KissneHistoryScope.request(T, 50, requestedBefore, sessionHistoryScopeId, CURRENT_SESSION_ID);
           var page = payload && Array.isArray(payload.messages) ? payload.messages : [];
           sessionHistoryRows = page.concat(sessionHistoryRows);
           sessionHistoryHasMore = !!(payload && payload.has_more);
@@ -2065,10 +2080,13 @@
             s.active = sessionIsCurrent(s);
           });
           paintSessionList();
+          var selectedHistoryId = selectedHistorySessionId();
+          sessionHistoryScopeId = selectedHistoryId === CURRENT_SESSION_ID ? selectedHistoryId : '';
+          if (selectedHistoryId && !sessionHistoryScopeId) rememberSelectedHistorySession('');
           var completeHistory = boot.history || [];
           try {
             completeHistory = await loadInitialSessionHistory(
-              CURRENT_SESSION_ID, completeHistory, !!boot.history_truncated
+              sessionHistoryScopeId, completeHistory, !!boot.history_truncated
             );
             setSessionStatus(sessionHistoryHasMore ? '还有更早的记录 · 上滑加载' : '');
           } catch (historyErr) {
@@ -2662,6 +2680,10 @@
           : (CURRENT_SESSION_KEY && key && key === CURRENT_SESSION_KEY);
         if (alreadyCurrent) {
           setSessionDrawer(false);
+          if (id && selectedHistorySessionId() !== id) {
+            rememberSelectedHistorySession(id);
+            await liveBootstrap();
+          }
           return;
         }
         if (liveSendInFlight || liveCurrentTurn || Object.keys(livePendingTurns).length
@@ -2682,8 +2704,11 @@
         clearTimeout(liveBootstrapTimer);
         var previousSessionId = CURRENT_SESSION_ID;
         var previousSessionKey = CURRENT_SESSION_KEY;
+        var previousHistoryScope = selectedHistorySessionId();
         try {
-          await T.selectSession(key, id);
+          var selected = await T.selectSession(key, id);
+          var chosenId = String(selected && selected.conversation && selected.conversation.session_id || id || '');
+          rememberSelectedHistorySession(chosenId);
           CURRENT_SESSION_ID = '';
           CURRENT_SESSION_KEY = '';
           /* 解绑旧会话：只清内存，绝不清空后回写旧 key（旧会话缓存必须原样保留）；
@@ -2702,6 +2727,7 @@
         } catch (err) {
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
+          rememberSelectedHistorySession(previousHistoryScope);
           bindChatLogSession(previousSessionId || previousSessionKey || '');
           bindTurnActivitySession(previousSessionId || previousSessionKey || '');
           paintSessionList();

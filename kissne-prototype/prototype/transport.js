@@ -4,6 +4,15 @@
 
   /* Android app shell: keep credentials/networking in the native layer.
      The browser/file:// prototype below remains as a standalone fallback. */
+  /* A selected room is scoped; the ordinary chat reads the continuous /new timeline. */
+  window.KissneHistoryScope = {
+    request: function (transport, limit, before, selectedId, currentId) {
+      var selected = String(selectedId || '');
+      var current = String(currentId || '');
+      return transport.history(limit, before, selected && selected === current ? selected : '');
+    }
+  };
+
   var Native = window.KissneNativeTransport;
   if (Native && typeof Native.request === 'function') {
     var nativeSeq = 0;

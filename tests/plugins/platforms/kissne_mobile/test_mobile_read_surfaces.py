@@ -316,8 +316,6 @@ def test_history_without_session_id_reads_only_current_bound_conversation(tmp_pa
 def test_web_session_history_contract_is_lazy_and_keeps_active_metadata():
     root = Path(__file__).resolve().parents[4]
     source = (root / "kissne-prototype/prototype/screens-a.js").read_text(encoding="utf-8")
-    assert "T.history(50, '', sessionId)" in source
-    assert "T.history(50, requestedBefore, CURRENT_SESSION_ID)" in source
     assert "还有更早的记录 · 上滑加载" in source
     assert "list.scrollTop <= 24 && sessionHistoryHasMore" in source
     assert "if (active) return '当前会话';" not in source
