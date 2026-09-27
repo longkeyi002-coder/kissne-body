@@ -50,8 +50,8 @@ PASS · 已移除改判点：looksLikeToolTranscript(rawText) && role !==
 PASS · 已移除改判点：history-commentary-tool:
 PASS · 已移除改判点：history-assistant-tool:
 仍存在的 looksLikeToolTranscript 调用点：
-  L1902: if (!historyPresentation && looksLikeToolTranscript(rawText)) {
-  L2171: if (!presentation && looksLikeToolTranscript(noticeText)) return;
+  L1968: if (!historyPresentation && looksLikeToolTranscript(rawText)) {
+  L2238: if (!presentation && looksLikeToolTranscript(noticeText)) return;
 PASS · looksLikeToolTranscript 调用点只剩「抑制旧式原始工具流水」的 2 处（noticeText / rawText）
 PASS · 历史 notice 道里那处紧随 LANE_NOTICE 判定
 PASS · 两处旧流水抑制都以「没有结构化 presentation」为前提

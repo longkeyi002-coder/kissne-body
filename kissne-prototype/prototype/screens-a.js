@@ -806,6 +806,71 @@
     if (/running|progress|start|pending|call/.test(raw)) return 'running';
     return fallback || 'running';
   }
+  /* ── 临时诊断开关：点右下角 ◉ 看每行被标成了哪条道（排查完可整块删掉） ── */
+  var DIAG_LOG = [];
+  var DIAG_ON = false;
+  function diagPush(rec) {
+    try {
+      rec.at = new Date().toTimeString().slice(0, 8);
+      rec.text = String(rec.text == null ? '' : rec.text).replace(/\s+/g, ' ').slice(0, 18);
+      DIAG_LOG.push(rec);
+      if (DIAG_LOG.length > 60) DIAG_LOG.shift();
+      if (DIAG_ON) diagRender();
+    } catch (e) {}
+  }
+  function diagLedger() {
+    try {
+      var keys = Object.keys(TURN_ACTIVITY);
+      if (!keys.length) return '（空）';
+      return keys.map(function (k) {
+        var s = TURN_ACTIVITY[k] || {};
+        var n = (s.toolOrder || []).length;
+        return k.slice(0, 16) + '×工具' + n + (s.reasoning ? '+思考' : '') + (s.done ? '(完成)' : '(进行)');
+      }).join(' | ');
+    } catch (e) { return '读取失败'; }
+  }
+  function diagRender() {
+    var box = document.getElementById('kissne-diag');
+    if (!box) return;
+    var rows = DIAG_LOG.slice(-40).map(function (r) {
+      return '[' + r.lane + '] ' + r.src + ' ' + r.type + (r.pres ? '/' + r.pres : '')
+        + ' t=' + String(r.turn || '-').slice(0, 16) + ' · ' + r.at + '\n    ' + r.text;
+    });
+    box.textContent = '分道诊断（' + rows.length + ' 条，新在下）\n\n' + rows.join('\n')
+      + '\n\n回合账本：' + diagLedger();
+  }
+  function diagToggle() {
+    var box = document.getElementById('kissne-diag');
+    if (!box) return;
+    DIAG_ON = !DIAG_ON;
+    box.style.display = DIAG_ON ? 'block' : 'none';
+    if (DIAG_ON) diagRender();
+  }
+  function diagMount() {
+    try {
+      if (!document.createElement || !document.body) return;
+      if (document.getElementById('kissne-diag-ctrl')) return;
+      var chip = document.createElement('button');
+      chip.id = 'kissne-diag-ctrl';
+      chip.type = 'button';
+      chip.textContent = '◉';
+      chip.setAttribute('style', 'position:fixed;right:6px;bottom:96px;z-index:9999;width:30px;height:30px;'
+        + 'border-radius:15px;border:1px solid rgba(255,255,255,.35);background:rgba(20,20,24,.72);'
+        + 'color:#fff;font-size:13px;line-height:1;opacity:.75');
+      chip.onclick = diagToggle;
+      document.body.appendChild(chip);
+      var box = document.createElement('div');
+      box.id = 'kissne-diag';
+      box.setAttribute('style', 'display:none;position:fixed;left:4px;right:4px;top:60px;bottom:118px;z-index:9999;'
+        + 'overflow:auto;background:rgba(12,12,16,.94);color:#e8e8ee;font:10px/1.45 monospace;white-space:pre-wrap;'
+        + 'padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.2)');
+      document.body.appendChild(box);
+    } catch (e) {}
+  }
+  try {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', diagMount);
+    else diagMount();
+  } catch (e) {}
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
@@ -1859,6 +1924,7 @@
           var historyTurnId = explicitTurnId || historyTurnCursor;
           /* 历史行的分道同样只认结构化字段（role + presentation），不看文本长相。 */
           var historyLane = historyLaneFor(role, historyPresentation);
+          diagPush({ src: 'hist', lane: historyLane || 'ignore', type: role, pres: historyPresentation, turn: historyTurnId, text: rawText });
           if (!historyLane || historyLane === LANE_IGNORE) return;
           if (historyLane === LANE_TOOL) {
             /* 工具道：有结构化 presentation 的用完整字段，老式 role=tool 行保持原来的简版。 */
@@ -2115,6 +2181,7 @@
         /* 分道只看结构化字段：presentation/type 决定这条事件去哪一道，正文长相不参与判定。
            Hidden/internal frames never enter user-visible chat. */
         var lane = liveLaneFor(type, presentation);
+        diagPush({ src: 'live', lane: lane, type: type, pres: presentation, turn: turnId, text: event.text });
         if (lane === LANE_IGNORE) return;
         if (lane === LANE_REASONING) {
           var reasoningText = cleanActivityText(event.text || '', '');
