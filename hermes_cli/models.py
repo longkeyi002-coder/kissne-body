@@ -1704,7 +1704,7 @@ def _model_requires_account_discovery(provider: Optional[str], model: str) -> bo
 
 def cached_provider_model_ids(
     provider: Optional[str], *, force_refresh: bool = False,
-    ttl_seconds: int = _PROVIDER_MODELS_CACHE_TTL) -> list[str]:
+    ttl_seconds: int = _PROVIDER_MODELS_CACHE_TTL, cache_only: bool = False) -> list[str]:
     """Disk-cached :func:`provider_model_ids`: fresh cache hit, else live fetch persisting a non-empty
     result. Always returns a list."""
     normalized = _normalized_cache_slug(provider)
@@ -1729,6 +1729,14 @@ def cached_provider_model_ids(
         if entry["models"] and age < _PROVIDER_MODELS_STALE_SERVE_MAX:
             _spawn_swr_refresh(normalized)
             return list(entry["models"])
+
+    if cache_only and not force_refresh:
+        # A picker read can render curated models while a cold/degraded provider
+        # refreshes in the background; never wait on its remote catalog.
+        _spawn_swr_refresh(normalized)
+        if isinstance(entry, dict) and entry.get("fp") == fp and isinstance(entry.get("models"), list):
+            return list(entry["models"])
+        return []
 
     live = provider_model_ids(normalized, force_refresh=force_refresh)
     if live:

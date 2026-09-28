@@ -77,7 +77,7 @@ def build_models_payload(
     pricing_cache_only: bool = False,
     capabilities: bool = False, featured: bool = False, force_fresh_nous_tier: bool = False,
     refresh: bool = False, probe_custom_providers: bool = True, probe_current_custom_provider: bool = False,
-    for_picker: bool = False, max_models: int | None = None,
+    for_picker: bool = False, max_models: int | None = None, cache_only: bool = False,
 ) -> dict:
     """Build the ``{providers, model, provider}`` shape every consumer needs. ``explicit_only`` keeps
     only providers the user explicitly configured — hides ambient/auto-seeded credentials from
@@ -89,7 +89,8 @@ def build_models_payload(
         current_provider=ctx.current_provider, current_base_url=ctx.current_base_url,
         current_model=ctx.current_model, user_providers=ctx.user_providers,
         custom_providers=ctx.custom_providers, force_fresh_nous_tier=force_fresh_nous_tier,
-        max_models=max_models, refresh=refresh, probe_custom_providers=probe_custom_providers,
+        max_models=max_models, refresh=refresh, cache_only=cache_only,
+        probe_custom_providers=probe_custom_providers,
         probe_current_custom_provider=probe_current_custom_provider, for_picker=for_picker,
         excluded_providers=ctx.excluded_providers or [],
     )
@@ -181,7 +182,7 @@ def _strip_aggregator_overlaps(rows: list[dict]) -> None:
 
 def build_model_options_payload(
     ctx: ConfigContext, *, explicit_only: bool = False, include_unconfigured: bool = False,
-    refresh: bool = False,
+    refresh: bool = False, probe_current_custom_provider: bool = True,
 ) -> dict:
     """Shared API-server/dashboard/TUI payload. Normal open probes only the current custom provider so
     offline saved endpoints don't block the picker; explicit refresh probes all and busts the cache."""
@@ -190,7 +191,8 @@ def build_model_options_payload(
         ctx, explicit_only=bool(explicit_only), include_unconfigured=bool(include_unconfigured),
         picker_hints=True, canonical_order=True, pricing=True, pricing_cache_only=not refresh,
         capabilities=True, featured=True,
-        refresh=refresh, probe_custom_providers=refresh, probe_current_custom_provider=not refresh,
+        refresh=refresh, cache_only=not refresh, probe_custom_providers=refresh,
+        probe_current_custom_provider=not refresh and probe_current_custom_provider,
     )
     if not refresh:
         _prewarm_pricing_async(payload["providers"], current_provider=ctx.current_provider,

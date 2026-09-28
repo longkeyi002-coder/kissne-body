@@ -1050,115 +1050,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "live_devices": devices,
         })
 
-    # ---- /model-options & /set-model ----
-
-    @staticmethod
-    def _read_hermes_config() -> dict:
-        """Read ~/.hermes/config.yaml (non-mutating)."""
-        import yaml
-        cfg_path = _Path.home() / ".hermes" / "config.yaml"
-        with open(cfg_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-
-    @staticmethod
-    def _write_hermes_config(cfg: dict) -> None:
-        """Write ~/.hermes/config.yaml."""
-        import yaml
-        cfg_path = _Path.home() / ".hermes" / "config.yaml"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-    async def _handle_model_options(self, request: web.Request) -> web.Response:
-        """GET /model-options — all models from the same inventory used by the dashboard."""
-        identity = await self._authenticated_installation(request)
-        if not identity:
-            return _json_response({"error": "unauthorized"}, 401)
-
-        cfg = self._read_hermes_config()
-        models: list[str] = []
-        current_model = cfg.get("model", {}).get("default", "")
-        try:
-            from hermes_cli.inventory import build_model_options_payload, load_picker_context
-            payload = await asyncio.to_thread(
-                build_model_options_payload, load_picker_context()
-            )
-            for provider in payload.get("providers", []):
-                if provider.get("is_current"):
-                    current_model = provider.get("current_model", current_model)
-                for item in provider.get("models", []):
-                    model_id = item.get("id", "") if isinstance(item, dict) else str(item)
-                    if model_id and model_id not in models:
-                        models.append(model_id)
-        except Exception as exc:
-            logger.warning("[kissne_mobile] model-options: hermes_cli fallback (%s)", exc)
-            for _provider_name, provider_def in cfg.get("providers", {}).items():
-                if isinstance(provider_def, dict):
-                    for item in provider_def.get("models", []):
-                        model_id = item.get("id", "") if isinstance(item, dict) else str(item)
-                        if model_id and model_id not in models:
-                            models.append(model_id)
-            if current_model and current_model not in models:
-                models.insert(0, current_model)
-
-        current_effort = (
-            cfg.get("agent", {}).get("reasoning_effort")
-            or cfg.get("model", {}).get("reasoning_effort")
-            or "minimal"
-        )
-
-        return _json_response({
-            "ok": True,
-            "models": models,
-            "efforts": ["minimal", "low", "medium", "high"],
-            "current_model": current_model,
-            "current_effort": current_effort,
-        })
-
-    async def _handle_set_model(self, request: web.Request) -> web.Response:
-        """POST /set-model — switch model or reasoning effort."""
-        identity = await self._authenticated_installation(request)
-        if not identity:
-            return _json_response({"error": "unauthorized"}, 401)
-
-        try:
-            body = await request.json()
-        except Exception:
-            return _json_response({"error": "invalid_json"}, 400)
-
-        cfg = self._read_hermes_config()
-        changed: list[str] = []
-
-        new_model = body.get("model")
-        if new_model:
-            providers = cfg.get("providers", {})
-            matched_provider = ""
-            for pname, pdef in providers.items():
-                if isinstance(pdef, dict) and new_model in pdef.get("models", []):
-                    matched_provider = pname
-                    break
-            if matched_provider:
-                cfg.setdefault("model", {})["default"] = new_model
-                cfg["model"]["provider"] = matched_provider
-            else:
-                cfg.setdefault("model", {})["default"] = new_model
-            changed.append("model")
-
-        new_effort = body.get("reasoning_effort") or body.get("effort")
-        if new_effort:
-            cfg.setdefault("agent", {})["reasoning_effort"] = new_effort
-            changed.append("reasoning_effort")
-
-        if changed:
-            self._write_hermes_config(cfg)
-            logger.info("[kissne_mobile] config updated via /set-model: %s", changed)
-
-        return _json_response({
-            "ok": True,
-            "changed": changed,
-            "current_model": cfg.get("model", {}).get("default", ""),
-            "current_effort": cfg.get("agent", {}).get("reasoning_effort", "minimal"),
-        })
-
     def _client_address(self, request: web.Request) -> str:
         """The address the pairing throttle counts against.
 
@@ -2161,6 +2052,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         runner = getattr(self, "gateway_runner", None)
         overrides = getattr(runner, "_session_model_overrides", {}) or {}
         keys = [self.mobile_session_key(installation)]
+        runtime_key = self._runtime_session_key(installation)
+        if runtime_key not in keys:
+            keys.insert(0, runtime_key)
         identity = self._conversation_identity(installation)
         canonical = str((identity or {}).get("session_key") or "")
         if canonical and canonical not in keys:
@@ -2175,6 +2069,17 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 break
         return model, provider
 
+    def _runtime_session_key(self, installation: str) -> str:
+        """Use the key the Gateway will read on the next inbound Mobile turn."""
+        runner = getattr(self, "gateway_runner", None)
+        resolve = getattr(runner, "_session_key_for_source", None)
+        if callable(resolve):
+            try:
+                return str(resolve(self.source_for_installation(installation)))
+            except Exception:
+                logger.debug("[kissne_mobile] could not derive Gateway session key", exc_info=True)
+        return self.mobile_session_key(installation)
+
     def _live_reasoning_effort(self, installation: str, model: str = "") -> str:
         """Read the effective reasoning effort from the same Gateway resolver used for the next turn."""
         runner = getattr(self, "gateway_runner", None)
@@ -2185,7 +2090,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         try:
             config = resolver(
                 source=source,
-                session_key=self.mobile_session_key(installation),
+                session_key=self._runtime_session_key(installation),
                 model=str(model or ""),
             )
         except Exception:
@@ -2228,8 +2133,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # same profile, same inventory builder, same filtering.
                 # include_unconfigured mirrors the Dashboard's opt-in so the
                 # full provider universe is visible (same as #56974 on web).
+                # Opening the picker must not probe a remote custom endpoint:
+                # Android gives this request eight seconds before reporting failure.
                 payload = build_model_options_payload(
-                    load_picker_context(), include_unconfigured=True
+                    load_picker_context(), include_unconfigured=True,
+                    probe_current_custom_provider=False,
                 )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
@@ -2290,6 +2198,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     return _json_response({"ok": False, "error": "model_switch_failed", "detail": model_reply}, 409)
                 if model_reply.startswith("⚠"):
                     return _json_response({"ok": False, "error": "model_confirmation_required", "detail": model_reply}, 409)
+                # A slash command can return None after registering a confirmation, or a
+                # localized error without either prefix. Only an applied override proves
+                # that the following Mobile turn will actually use this selection.
+                applied = (getattr(runner, "_session_model_overrides", {}) or {}).get(
+                    self._runtime_session_key(installation)) or {}
+                if applied.get("model") != model or applied.get("provider") != provider:
+                    return _json_response({
+                        "ok": False, "error": "model_switch_not_applied", "detail": model_reply,
+                    }, 409)
 
             reasoning_reply = ""
             if effort:
@@ -2304,6 +2221,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 reasoning_reply = str(await runner._handle_reasoning_command(event) or "")
                 if reasoning_reply.startswith("❌"):
                     return _json_response({"ok": False, "error": "reasoning_switch_failed", "detail": reasoning_reply}, 409)
+                actual_effort = self._live_reasoning_effort(installation, model)
+                if actual_effort != effort:
+                    return _json_response({
+                        "ok": False, "error": "reasoning_switch_not_applied", "detail": reasoning_reply,
+                    }, 409)
         except Exception:
             logger.exception("[kissne_mobile] model control failed")
             return _error_response("model_control_failed", 503)
