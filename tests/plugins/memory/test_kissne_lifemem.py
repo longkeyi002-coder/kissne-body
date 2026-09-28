@@ -1,4 +1,4 @@
-from pathlib import Path
+# CI probe: Lifemem timeline integration\nfrom pathlib import Path
 import importlib
 
 def test_lifemem_is_single_external_provider_contract():
