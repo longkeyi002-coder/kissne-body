@@ -418,3 +418,65 @@ def test_history_keeps_a_reset_notice_out_of_conversations_it_did_not_open(tmp_p
     old_system = [row for row in old_history[1]["messages"] if row["role"] == "system"]
     assert fresh_system, fresh_history[1]
     assert not old_system, old_system
+
+
+def test_memory_timeline_requires_auth_and_active_lifemem(tmp_path, monkeypatch):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter=make_adapter()
+            sessions=build_session_store(home)
+            conversation=preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port=await start(adapter)
+            try:
+                token=await pair(port,adapter,conversation=conversation)
+                unauth=await http(port,"GET","/memory/timeline")
+                inactive=await http(port,"GET","/memory/timeline",token=token)
+                return unauth,inactive
+            finally:
+                await stop(adapter)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"builtin"}})
+    unauth,inactive=run(scenario())
+    assert unauth[0]==401,unauth
+    assert inactive[0]==503,inactive
+    assert inactive[1]["error"]=="lifemem_not_active"
+
+
+def test_memory_timeline_reads_lifemem_with_filters_and_evidence_refs(tmp_path, monkeypatch):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            from plugins.memory.lifemem.store import MemoryStore
+            db_path=home/"kissne-lifemem"/"memory.db"
+            db_path.parent.mkdir(parents=True,exist_ok=True)
+            store=MemoryStore(str(db_path))
+            try:
+                store.add_memory("现实决定","证据A",memory_space="reality",
+                                 session_id="s1",turn_id=11,event_time=100)
+                world_id=store.add_memory("小机星事件","证据B",memory_space="ai_world",
+                                          session_id="s2",turn_id=22,event_time=200)
+            finally:
+                store.close()
+            adapter=make_adapter()
+            sessions=build_session_store(home)
+            conversation=preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port=await start(adapter)
+            try:
+                token=await pair(port,adapter,conversation=conversation)
+                page=await http(port,"GET","/memory/timeline?limit=1",token=token)
+                world=await http(port,"GET","/memory/timeline?space=ai_world&q=%E8%AF%81%E6%8D%AEB",token=token)
+                bad=await http(port,"GET","/memory/timeline?space=fiction_leak",token=token)
+                return world_id,page,world,bad
+            finally:
+                await stop(adapter)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"lifemem"}})
+    world_id,page,world,bad=run(scenario())
+    assert page[0]==200,page
+    assert page[1]["items"][0]["id"]==world_id
+    assert page[1]["has_more"] is True
+    assert page[1]["next_before"]==world_id
+    assert world[0]==200,world
+    assert [x["memory_space"] for x in world[1]["items"]]==["ai_world"]
+    assert world[1]["items"][0]["source_ref"]=={"session_id":"s2","turn_id":22}
+    assert bad[0]==400,bad
+    assert bad[1]["error"]=="invalid_memory_space"
