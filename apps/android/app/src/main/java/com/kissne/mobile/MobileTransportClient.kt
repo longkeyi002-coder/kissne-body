@@ -81,6 +81,25 @@ class MobileTransportClient(
         request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
             "&limit=" + limit.coerceIn(1, 50))
 
+    fun memoryTimelinePayload(
+        limit: Int = 50,
+        before: String? = null,
+        space: String? = null,
+        queryText: String? = null,
+    ): JSONObject {
+        val query = StringBuilder("/memory/timeline?limit=").append(limit.coerceIn(1, 100))
+        before?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        space?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&space=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        queryText?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&q=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        return request("GET", query.toString())
+    }
+
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
