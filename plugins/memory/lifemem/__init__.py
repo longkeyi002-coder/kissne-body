@@ -49,6 +49,16 @@ def _tokens(text: str) -> int:
     return cjk + int((len(text) - cjk) * 0.34) + 1
 
 
+def _recall_spaces(query: str) -> list[str]:
+    """Choose allowed spaces while keeping one physical Lifemem store."""
+    text = (query or "").lower()
+    ai_world_cues = ("小机星", "ai world", "世界观", "剧情", "设定里", "房间里")
+    if any(cue in text for cue in ai_world_cues):
+        return ["ai_world", "relationship", "ai_self"]
+    # Reality-facing recall must never treat fictional AI World facts as reality.
+    return ["reality", "relationship", "ai_self"]
+
+
 def _pack(rows, budget: int) -> str:
     lines, used = [], 0
     for row in rows:
@@ -121,12 +131,14 @@ class LifememProvider(MemoryProvider):
         self._last_recall = None
         if not self._store or is_trivial_prompt(query):
             return ""
+        candidate_limit = max(30, int(self._config.get("recall_memories") or 4) * 6)
         rows = self._store.recall(
             query,
             self._embedder.encode(query),
-            limit=max(12, int(self._config.get("recall_memories") or 4) * 6),
+            limit=candidate_limit,
+            memory_spaces=_recall_spaces(query),
         )
-        rows = rows[: int(self._config.get("recall_memories") or 4)]
+        rows = rows[: max(3, min(5, int(self._config.get("recall_memories") or 4)))]
         text = _pack(rows, int(self._config.get("recall_token_budget") or 300))
         if not text:
             return ""
