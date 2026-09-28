@@ -110,6 +110,15 @@
       sessions: function () { return nativeCall('sessions', {}); },
       history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
       search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
+      memoryTimeline: function (options) {
+        options = options || {};
+        return nativeCall('memoryTimeline', {
+          limit: Number(options.limit) || 50,
+          before: String(options.before || ''),
+          space: String(options.space || ''),
+          q: String(options.q || '')
+        });
+      },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
