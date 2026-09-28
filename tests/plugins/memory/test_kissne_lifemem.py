@@ -132,3 +132,18 @@ def test_recall_space_policy_keeps_ai_world_out_of_reality_context():
     world=_recall_spaces("小机星的设定里狐狸住在哪里")
     assert "ai_world" in world
     assert "reality" not in world
+
+
+def test_timeline_cursor_follows_event_time_not_insertion_id(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    db=MemoryStore(str(tmp_path/"memory.db"))
+    newest=db.add_memory("后来补录但发生更晚","n",event_time=300)
+    oldest_inserted_later=db.add_memory("后插入但发生更早","o",event_time=100)
+    middle=db.add_memory("最后插入但时间居中","m",event_time=200)
+    first=db.timeline(limit=1)
+    assert [x["id"] for x in first["items"]]==[newest]
+    second=db.timeline(limit=1,before=first["next_before"])
+    assert [x["id"] for x in second["items"]]==[middle]
+    third=db.timeline(limit=1,before=second["next_before"])
+    assert [x["id"] for x in third["items"]]==[oldest_inserted_later]
+    db.close()
