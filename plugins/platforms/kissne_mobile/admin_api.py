@@ -469,8 +469,9 @@ async def _run_deploy(deploy_type: str, cmd: list[str], log_path: Path) -> None:
 CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
 
 def _read_config_yaml() -> dict:
-    from hermes_cli.config import read_user_config_raw
-    return read_user_config_raw(CONFIG_PATH)
+    import yaml
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 def _write_config_yaml(cfg: dict) -> None:
     import yaml
