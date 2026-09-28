@@ -39,6 +39,7 @@ class ToolRoundVerdict:
     failed: Any
     _turn_exit_reason: Any
     truncated_tool_call_retries: Any
+    current_turn_user_idx: Any
     result: Optional[Dict[str, Any]] = None
 
 
@@ -47,7 +48,7 @@ def run_tool_round(
     conversation_history: Any, api_call_count: Any, effective_task_id: Any, user_message: Any,
     system_message: Any, active_system_prompt: Any, compression_attempts: Any,
     max_compression_attempts: Any, final_response: Any, failed: Any, _turn_exit_reason: Any,
-    truncated_tool_call_retries: Any,
+    truncated_tool_call_retries: Any, current_turn_user_idx: Any,
 ) -> ToolRoundVerdict:
     """Execute one tool round in the exact original order. Persist-before-execute is a
     durability invariant: resume must see the executed block if a destructive tool restarts
@@ -60,7 +61,8 @@ def run_tool_round(
             action=action, messages=messages, conversation_history=conversation_history,
             active_system_prompt=active_system_prompt, compression_attempts=compression_attempts,
             final_response=final_response, failed=failed, _turn_exit_reason=_turn_exit_reason,
-            truncated_tool_call_retries=truncated_tool_call_retries, result=result,
+            truncated_tool_call_retries=truncated_tool_call_retries,
+            current_turn_user_idx=current_turn_user_idx, result=result,
         )
 
     if not agent.quiet_mode:
@@ -163,7 +165,7 @@ def run_tool_round(
         decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"
         final_response = agent._toolguard_controlled_halt_response(decision)
-        agent._emit_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
+        agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
         append_message(messages, {"role": "assistant", "content": final_response})
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still
         # alive, so SSE/TUI clients see the explanation.
@@ -191,6 +193,7 @@ def run_tool_round(
         compression_attempts=compression_attempts,
         max_compression_attempts=max_compression_attempts, effective_task_id=effective_task_id,
         final_response=final_response, turn_exit_reason=_turn_exit_reason,
+        current_turn_user_idx=current_turn_user_idx,
     )
     messages = _ptc.messages
     active_system_prompt = _ptc.active_system_prompt
@@ -198,6 +201,7 @@ def run_tool_round(
     compression_attempts = _ptc.compression_attempts
     final_response = _ptc.final_response
     _turn_exit_reason = _ptc.turn_exit_reason
+    current_turn_user_idx = _ptc.current_turn_user_idx
     if _ptc.end_turn:
         return _verdict("break")
 
@@ -272,16 +276,6 @@ def stage_tool_call_message(
     while messages and isinstance(messages[-1], dict) and messages[-1].get("_thinking_prefill"):
         messages.pop()
         _had_prefill = True
-
-    # A tool call is successful recovery from the degenerate-response nudge. Remove
-    # the synthetic assistant/user pair before durable tool-call persistence.
-    from agent.degenerate_response_guard import SYNTHETIC_FLAG as _DEGENERATE_SYNTHETIC_FLAG
-    while (
-        messages
-        and isinstance(messages[-1], dict)
-        and messages[-1].get(_DEGENERATE_SYNTHETIC_FLAG)
-    ):
-        messages.pop()
     if _had_prefill:
         agent._thinking_prefill_retries = 0
         agent._empty_content_retries = 0

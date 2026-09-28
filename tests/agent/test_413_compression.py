@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 
 from agent.context_compressor import SUMMARY_PREFIX, _DB_PERSISTED_MARKER
 from agent.conversation_compression import COMPACTION_DONE_STATUS, COMPACTION_STATUS
-from agent.kissne_context import KISSNE_USER_MESSAGE_CLOSE, KISSNE_USER_MESSAGE_OPEN
 from hermes_state import SessionDB
 from run_agent import AIAgent
 import run_agent
@@ -437,15 +436,10 @@ class TestHTTP413Compression:
             "role": "system",
             "content": "compressed prompt",
         }
-        # The live turn is wrapped in the fixed mechanical separators (02 §Live Delta):
-        #   <kissne_live_context>…</kissne_live_context>\n\n<user_message>\n…\n</user_message>
-        # The canonical words are unchanged; the envelope plus the live delta are what
-        # the send path adds for the current turn only.
-        retry_turn = request_payloads[1]["messages"][1]
-        assert retry_turn["role"] == "user"
-        assert "compressed summary" in retry_turn["content"]
-        assert KISSNE_USER_MESSAGE_OPEN in retry_turn["content"]
-        assert KISSNE_USER_MESSAGE_CLOSE in retry_turn["content"]
+        assert request_payloads[1]["messages"][1] == {
+            "role": "user",
+            "content": "compressed summary",
+        }
 
 
 
@@ -504,6 +498,44 @@ class TestPreflightCompression:
             ("compress", "started"),
             ("compacted", COMPACTION_DONE_STATUS),
         ]
+
+    def test_compress_context_announces_before_lazy_feasibility_probe(self, agent):
+        """The compacting status must land BEFORE the first-attempt feasibility probe (live catalog /
+        provider lookups): a slow probe otherwise leaves the Desktop working row on a bare spinner with no
+        \"Summarizing thread\" label (#111294). The probe's hard rejection still retires the phase."""
+        import agent.conversation_compression as cc
+
+        agent.compression_enabled = True
+        agent._compression_feasibility_checked = False
+        events = []
+        agent.status_callback = lambda ev, msg: events.append((ev, msg))
+
+        def _fake_compress(messages, current_tokens=None, focus_topic=None, force=False, memory_context=""):
+            events.append(("compress", "started"))
+            return [{"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"}]
+
+        with (
+            patch.object(cc, "check_compression_model_feasibility",
+                         side_effect=lambda a: events.append(("probe", "feasibility"))),
+            patch.object(agent.context_compressor, "compress", side_effect=_fake_compress),
+            patch.object(agent, "_build_system_prompt", return_value="new system prompt"),
+            patch("agent.conversation_compression.estimate_request_tokens_rough", return_value=42),
+        ):
+            agent._compress_context([{"role": "user", "content": "hello"}], "system prompt", approx_tokens=1234)
+
+        assert events[:2] == [("lifecycle", COMPACTION_STATUS), ("probe", "feasibility")]
+        assert events[-1] == ("compacted", COMPACTION_DONE_STATUS)
+        assert agent._compression_feasibility_checked is True
+
+        # Hard rejection (aux window below minimum) propagates AND retires the announced phase.
+        agent._compression_feasibility_checked = False
+        events.clear()
+        with (
+            patch.object(cc, "check_compression_model_feasibility", side_effect=ValueError("aux too small")),
+            pytest.raises(ValueError),
+        ):
+            agent._compress_context([{"role": "user", "content": "hello"}], "system prompt", approx_tokens=1234)
+        assert events == [("lifecycle", COMPACTION_STATUS), ("compacted", COMPACTION_DONE_STATUS)]
 
     def test_compress_context_emits_one_terminal_status_when_lock_is_unavailable(self, agent):
         """A rejected lock must retire the started desktop compaction phase."""
@@ -1326,6 +1358,9 @@ class TestPreflightCompression:
         agent.context_compressor.threshold_tokens = 130_000
         # Exercise the idle pass too: it runs before threshold preflight and must honor
         # the same one-response checkpoint latch on a long-idle restored session.
+        from agent.usage_anchor import capture_usage_anchor, set_usage_anchor
+
+        set_usage_anchor(agent, capture_usage_anchor(180_000, 100, history[:1]))
         agent.compression_idle_compact_after_seconds = 1
         agent._last_activity_ts = 0
         response = SimpleNamespace(
@@ -1535,4 +1570,5 @@ class TestOverflowWithCompactionDisabled:
         mock_persist.assert_called()
         assert result.get("failed") is True
         assert result.get("compaction_disabled") is True
-        assert "auto-compaction is disabled" in result["error"]
+        assert result["failure_reason"] == "context_overflow" and result["failure_retryable"] is False
+        assert "/compress" in result["error"] and "compression.enabled" in result["error"]

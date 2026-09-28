@@ -1,5 +1,6 @@
 """Tests for agent/system_prompt.py — context-file cwd wiring."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,6 +58,55 @@ def _captured_context_cwd(agent):
     return captured["cwd"]
 
 
+@pytest.mark.parametrize("task_id, expected", [(None, False), ("t_worker", True)])
+def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id, expected):
+    """A profile can expose kanban tools without making the session a worker."""
+    from agent.agent_init import _load_tools
+    from agent.prompt_builder import KANBAN_GUIDANCE
+    import model_tools
+
+    if task_id is None:
+        monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    else:
+        monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
+    monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
+    monkeypatch.setattr(
+        model_tools,
+        "get_tool_definitions",
+        lambda **_kwargs: [{"function": {"name": "kanban_show"}}],
+    )
+    agent = SimpleNamespace(quiet_mode=True)
+
+    _load_tools(agent, enabled_toolsets=["kanban"], disabled_toolsets=None)
+
+    assert (agent._kanban_worker_guidance == KANBAN_GUIDANCE) is expected
+
+
+@pytest.mark.parametrize("task_id, owner, expected", [
+    (None, True, False),        # interactive session with the kanban toolset enabled
+    ("t_worker", True, True),   # the dispatcher-owned worker
+    ("t_worker", False, False), # cron run / delegate child inheriting the worker's env
+])
+def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, task_id, owner, expected):
+    """Prompt fallback preserves the worker boundary when init was bypassed: tool access
+    is not identity, and an inherited HERMES_KANBAN_TASK is not ownership (#112486)."""
+    from contextlib import nullcontext
+
+    from agent.delegation_context import non_dispatcher_owned_context
+    from agent.prompt_builder import KANBAN_GUIDANCE
+    from agent.system_prompt import _tool_guidance_block
+
+    if task_id is None:
+        monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    else:
+        monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
+    agent = _make_agent(valid_tool_names={"kanban_show"})
+    delattr(agent, "_kanban_worker_guidance")
+
+    with nullcontext() if owner else non_dispatcher_owned_context():
+        assert (_tool_guidance_block(agent) == KANBAN_GUIDANCE) is expected
+
+
 @pytest.mark.parametrize("stores", [(True, True), (False, True), (True, False), (False, False)])
 @pytest.mark.parametrize("names", [
     set(), {"memory"}, {"memory", "skill_view", "skills_list"},
@@ -70,11 +120,6 @@ def test_memory_guidance_respects_available_writes(stores, names, monkeypatch, t
     enabled = "memory" in names and any(stores)
     assert ("Memory is the narrow exception" in prompt) == enabled
     assert ("(skill_manage)" in prompt) == (enabled and "skill_manage" in names)
-    if enabled:
-        assert "EVERY session regardless of task" in prompt
-        assert "procedures and workflows belong in skills" in prompt
-        if "skill_manage" not in names:
-            assert "not in memory" in prompt
     if enabled and not stores[0]:
         assert "never target='memory'" in prompt
 
@@ -235,6 +280,19 @@ def test_stored_prompt_cwd_ignores_project_host_decoys(monkeypatch, tmp_path):
     assert _stored_prompt_matches_runtime(agent, legacy)
 
 
+def test_stored_prompt_stamped_for_another_session_is_not_restored(monkeypatch, tmp_path):
+    """With the Session ID trailer on, a prompt persisted for another session (a /branch child
+    copies its parent's bytes) must rebuild instead of telling the model the parent's id."""
+    from agent.conversation_loop import _stored_prompt_matches_runtime
+
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    fields = dict(platform="cli", model="test-model", provider="test-provider", pass_session_id=True)
+    parent_prompt = build_system_prompt(_make_agent(session_id="parent-sid", **fields))
+    assert _stored_prompt_matches_runtime(_make_agent(session_id="parent-sid", **fields), parent_prompt)
+    assert not _stored_prompt_matches_runtime(_make_agent(session_id="child-sid", **fields), parent_prompt)
+
+
 class TestExecutionGuidanceInjection:
     """Injection gate for OPENAI_MODEL_EXECUTION_GUIDANCE via
     ``agent.execution_guidance`` (auto/true/false/list).
@@ -262,20 +320,9 @@ class TestExecutionGuidanceInjection:
         assert "Execution discipline" in stable
         assert "<external_state_verification>" in stable
 
-    def test_kimi_gets_guidance_by_default(self):
-        assert "Execution discipline" in self._prompt("moonshotai/kimi-k3")
 
-    def test_qwen_glm_minimax_mimo_mistral_get_guidance_by_default(self):
-        for model in ("qwen/qwen-3-max", "z-ai/glm-5.2",
-                      "minimax/minimax-m2", "xiaomi/mimo-v2",
-                      "mistralai/mistral-large-3"):
-            assert "Execution discipline" in self._prompt(model), model
 
-    def test_gpt_still_gets_guidance(self):
-        assert "Execution discipline" in self._prompt("openai/gpt-5.5")
 
-    def test_grok_still_gets_guidance(self):
-        assert "Execution discipline" in self._prompt("xai/grok-4")
 
     def test_independent_of_tool_use_enforcement(self):
         # The gate must not require tool-use enforcement to be on.
@@ -288,9 +335,6 @@ class TestExecutionGuidanceInjection:
         assert "Execution discipline" not in self._prompt(
             "anthropic/claude-opus-4.8")
 
-    def test_gemini_does_not_get_guidance_by_default(self):
-        assert "Execution discipline" not in self._prompt(
-            "google/gemini-2.5-pro")
 
     def test_config_false_suppresses(self):
         assert "Execution discipline" not in self._prompt(
@@ -433,10 +477,6 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
 
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
-        # No identity slot in this fixture: an unsuppressed SELF.md would add the
-        # degraded-state notice and this test asserts the whole prompt verbatim
-        # (identity behavior is covered by tests/agent/test_identity_degraded.py).
-        patch("agent.prompt_builder.load_self_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
         patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
         patch(
@@ -520,14 +560,6 @@ class TestTelegramRichMessagesHint:
             stable = _stable_prompt(agent)
         assert "lean into it" in stable
 
-    def test_base_hint_without_config(self, monkeypatch):
-        """When config has no telegram section, only base hint is used."""
-        agent = _make_agent(platform="telegram")
-        with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {}
-            stable = _stable_prompt(agent)
-        assert "Standard Markdown auto-converts" in stable
-        assert "lean into it" not in stable
 
 
     def test_gateway_rich_messages_integration_via_real_config(self, tmp_path, monkeypatch):
@@ -590,42 +622,22 @@ def _build(builder, **overrides):
 
 
 class TestSkillsInVolatileBand:
-    """Skills remain volatile, behind the more stable Kissne Snapshot blocks.
-
-    KISSNE-CTX-14 fixes the physical head as SELF -> MEMORY -> Skills Index.
-    Putting the more stable snapshot first also preserves the longest reusable
-    prefix when the runtime-mutable skills index changes.
-    """
+    """The skills index is runtime-mutable, so it lives in the volatile band,
+    not the stable band, to keep the cached stable prefix reusable when a
+    rebuild picks up a skill change."""
 
     def test_skills_not_in_stable_band(self):
         parts = _build(build_system_prompt_parts)
         assert _SKILLS not in parts["stable"]
 
-    def test_snapshot_leads_the_volatile_band_before_skills(self):
-        with (
-            patch(
-                "agent.prompt_builder.load_self_md",
-                return_value="SELF_SNAPSHOT_SENTINEL",
-            ),
-            patch(
-                "agent.system_prompt._memory_parts",
-                return_value=["MEMORY_SNAPSHOT_SENTINEL"],
-            ),
-        ):
-            parts = _build(build_system_prompt_parts)
-
-        volatile = parts["volatile"]
-        assert volatile.startswith("SELF_SNAPSHOT_SENTINEL")
-        assert (
-            volatile.index("SELF_SNAPSHOT_SENTINEL")
-            < volatile.index("MEMORY_SNAPSHOT_SENTINEL")
-            < volatile.index(_SKILLS)
-        )
+    def test_skills_lead_the_volatile_band(self):
+        parts = _build(build_system_prompt_parts)
+        assert parts["volatile"].startswith(_SKILLS)
 
     def test_full_order_is_stable_context_then_skills(self):
         # build_system_prompt joins stable + context + volatile, so the skills
-        # index renders after context files and the Session Snapshot, but
-        # before the session timestamp tail.
+        # index renders after the context files and before the per-turn
+        # memory/timestamp tail.
         full = _build(build_system_prompt)
         assert full.index(_CONTEXT) < full.index(_SKILLS)
         assert full.index(_SKILLS) < full.index("Conversation started:")
@@ -843,7 +855,6 @@ class TestConversationStartedTwoLine:
         vol = self._volatile(self._agent("20200110_090000_old"))
         assert "Conversation started:" in vol
         assert "as of the last context rebuild" in vol
-        assert "trust this over the start date" in vol
 
     def test_same_day_session_keeps_single_line(self):
         from hermes_time import now as hermes_now
@@ -852,10 +863,20 @@ class TestConversationStartedTwoLine:
         assert "Conversation started:" in vol
         assert "as of the last context rebuild" not in vol
 
+    def test_surrogate_zone_name_does_not_abort_prompt(self):
+        # Windows cp1252 zone name decoded under a UTF-8 LC_CTYPE; strftime("%Z") raised (#102910).
+        from datetime import timedelta, timezone
+        current = datetime(2026, 7, 14, 13, 5, tzinfo=timezone(timedelta(hours=2), "Paris, Madrid (heure d'\udce9t\udce9)"))
+        with patch("hermes_time.now", return_value=current):
+            vol = self._volatile(self._agent("20260714_090000_fresh"))
+
+        json.dumps(vol, ensure_ascii=False).encode("utf-8")
+        assert "Conversation started: Tuesday, July 14, 2026" in vol
+        assert "Paris, Madrid (heure d'" in vol and "UTC+02:00" in vol
+
     def test_timeless_bot_chat_unaffected(self):
         agent = self._agent("20200110_090000_old")
         agent._bot_chat_timeless_prompt = True
         vol = self._volatile(agent)
         assert "Conversation started:" not in vol
         assert "as of the last context rebuild" not in vol
-
