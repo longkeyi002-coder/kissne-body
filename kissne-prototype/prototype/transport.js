@@ -313,16 +313,13 @@
     if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
     return request('/admin/sessions', { method: 'DELETE', body: { session_id: id }, base: adminBase() });
   }
-  function memories() {
-    return request('/admin/memory', { method: 'GET', base: adminBase() });
-  }
-  function deleteMemory(memoryId) {
-    var id = String(memoryId || '').trim();
-    if (!id) throw new ApiError(400, { error: 'memory_id_required' }, 'memory_id_required');
-    return request('/admin/memory/' + encodeURIComponent(id), {
-      method: 'DELETE',
-      base: adminBase()
-    });
+  function memoryTimeline(options) {
+    options = options || {};
+    var path = '/mobile/memory/timeline?limit=' + encodeURIComponent(Number(options.limit) || 50);
+    if (options.before) path += '&before=' + encodeURIComponent(String(options.before));
+    if (options.space) path += '&space=' + encodeURIComponent(String(options.space));
+    if (options.q) path += '&q=' + encodeURIComponent(String(options.q));
+    return request(path, { method: 'GET' });
   }
   async function selectSession(sessionKey, sessionId) {
     var key = String(sessionKey || '').trim();
@@ -425,6 +422,7 @@
     sessions: sessions,
     history: history,
     search: searchHistory,
+    memoryTimeline: memoryTimeline,
     deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
