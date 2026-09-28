@@ -137,12 +137,18 @@ class MemoryStore:
         return [dict(r,score=s) for s,r in ranked[:max(1,min(int(limit),100))]]
 
     def timeline(self, *, limit=50, before=None, memory_space=None, query=""):
-        """Project active memories into the Kissne journal timeline."""
+        """Project the one Lifemem store into a journal timeline."""
         cap=max(1,min(int(limit),100))
         sql="SELECT * FROM memories WHERE status='active'"
         args=[]
-        if before is not None:
-            sql+=" AND id < ?"; args.append(int(before))
+        if before:
+            try:
+                cursor_time,cursor_id=str(before).rsplit("|",1)
+                cursor_time=float(cursor_time); cursor_id=int(cursor_id)
+            except (TypeError,ValueError):
+                raise ValueError("invalid cursor")
+            sql+=" AND (event_time < ? OR (event_time = ? AND id < ?))"
+            args.extend([cursor_time,cursor_time,cursor_id])
         if memory_space:
             if memory_space not in {"reality","relationship","ai_self","ai_world"}:
                 raise ValueError("invalid memory_space")
@@ -165,8 +171,11 @@ class MemoryStore:
             "source_type":"hermes_turn" if row.get("session_id") else row.get("source",""),
             "source_ref":{"session_id":row.get("session_id") or "","turn_id":row.get("turn_id") or 0},
         } for row in rows]
-        return {"items":items,"has_more":has_more,
-                "next_before":items[-1]["id"] if has_more and items else None}
+        next_before=None
+        if has_more and rows:
+            last=rows[-1]
+            next_before=f"{float(last['event_time'])}|{int(last['id'])}"
+        return {"items":items,"has_more":has_more,"next_before":next_before}
 
     def reinforce(self,ids):
         ids=[int(x) for x in ids if x]
