@@ -1462,6 +1462,7 @@
       var liveSteeredTurns = Object.create(null);
       var liveSendInFlight = 0;
       var liveBootstrapTimer = null;
+      var bootstrapVersion = 0;
       var liveOutboxTimer = null;
       var liveApprovals = Object.create(null);
       var bootstrapStatusEl = null;
@@ -1586,7 +1587,8 @@
           return;
         }
         if (MODEL_OPTIONS_LOADING) return;
-        if (!force && MODEL_OPTIONS_LOADED_AT && Date.now() - MODEL_OPTIONS_LOADED_AT < 30000) return;
+        if (!force && !MODEL_OPTIONS_ERROR && MODEL_OPTIONS_LOADED_AT
+            && Date.now() - MODEL_OPTIONS_LOADED_AT < 30000) return;
         MODEL_OPTIONS_LOADING = true;
         var modelTimeout = null;
         var timeoutPromise = new Promise(function (_, reject) {
@@ -1606,11 +1608,14 @@
             ? '模型列表读取超时，聊天仍可正常使用'
             : (status === 401
                 ? '模型控制接口认证失败，聊天状态不受影响'
-                : '无法读取 Hermes 模型列表');
-          PROVIDERS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
-          MODELS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR, p: '' }];
-          EFFORTS = [{ k: '', v: err && err.code === 'timeout' ? '读取超时' : '读取失败', d: MODEL_OPTIONS_ERROR }];
-          MODEL_OPTIONS_LOADED_AT = Date.now();
+                : (status === 404 ? '网关尚未提供模型列表接口（HTTP 404）'
+                  : (status ? '模型列表接口返回 HTTP ' + status : '无法连接模型列表接口')));
+          /* A failed refresh must not erase a previously confirmed selection. */
+          if (!PROVIDERS.some(function (p) { return !!p.k; })) {
+            PROVIDERS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
+            MODELS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR, p: '' }];
+            EFFORTS = [{ k: '', v: '读取失败', d: MODEL_OPTIONS_ERROR }];
+          }
           updateHeaderControls();
           if (openMenu) paintChatMenu(openMenu);
         }).finally(function () {
@@ -1737,19 +1742,41 @@
       var sessionHistoryHasMore = false;
       var sessionHistoryLoading = false;
       var sessionHistoryScopeId = '';
-      async function loadInitialSessionHistory(scopeId, fallbackHistory, bootstrapTruncated) {
+      var historyRequestVersion = 0;
+      var pendingInitialHistory = null;
+      var latestPendingApprovals = [];
+      function applyPendingInitialHistory() {
+        if (!pendingInitialHistory || liveStopped || liveCurrentTurn
+            || Object.keys(livePendingTurns).length) return;
+        var payload = pendingInitialHistory;
+        pendingInitialHistory = null;
+        sessionHistoryRows = Array.isArray(payload.messages) ? payload.messages : [];
+        sessionHistoryHasMore = !!payload.has_more;
+        sessionHistoryNextBefore = String(payload.next_before || '');
+        hydrateHistory(sessionHistoryRows, true);
+        latestPendingApprovals.forEach(showApproval);
+      }
+      function loadInitialSessionHistory(scopeId, fallbackHistory, bootstrapTruncated) {
         sessionHistoryRows = fallbackHistory || [];
         sessionHistoryNextBefore = '';
         sessionHistoryHasMore = !!bootstrapTruncated;
-        if (!T || typeof T.history !== 'function') return sessionHistoryRows;
-        var payload = await window.KissneHistoryScope.request(T, 50, '', scopeId, CURRENT_SESSION_ID);
-        sessionHistoryRows = payload && Array.isArray(payload.messages) ? payload.messages : [];
-        sessionHistoryHasMore = !!(payload && payload.has_more);
-        sessionHistoryNextBefore = String(payload && payload.next_before || '');
-        return sessionHistoryRows;
+        pendingInitialHistory = null;
+        var version = ++historyRequestVersion;
+        if (!T || typeof T.history !== 'function') return;
+        var targetSessionId = CURRENT_SESSION_ID;
+        window.KissneHistoryScope.request(T, 50, '', scopeId, targetSessionId)
+          .then(function (payload) {
+            if (liveStopped || version !== historyRequestVersion
+                || targetSessionId !== CURRENT_SESSION_ID || scopeId !== sessionHistoryScopeId) return;
+            pendingInitialHistory = payload || {};
+            applyPendingInitialHistory();
+          }).catch(function () {
+            if (liveStopped || version !== historyRequestVersion) return;
+            setSessionStatus('历史暂时读取失败，已显示最近消息。');
+          });
       }
       async function loadOlderSessionHistory() {
-        if (sessionHistoryLoading || !sessionHistoryHasMore || !sessionHistoryNextBefore
+        if (pendingInitialHistory || sessionHistoryLoading || !sessionHistoryHasMore || !sessionHistoryNextBefore
             || !T || typeof T.history !== 'function') return;
         sessionHistoryLoading = true;
         var requestedBefore = sessionHistoryNextBefore;
@@ -2052,6 +2079,9 @@
       function showApproval(approval) {
         var id = String(approval && approval.approval_id || '');
         if (!id) return null;
+        if (!latestPendingApprovals.some(function (item) { return String(item.approval_id || '') === id; })) {
+          latestPendingApprovals.push(approval);
+        }
         var current = liveApprovals[id];
         if (current && current.isConnected) return current;
         var html = approvalCard(approval);
@@ -2063,6 +2093,9 @@
       }
       function resolveApprovalCard(id, decision) {
         id = String(id || '');
+        latestPendingApprovals = latestPendingApprovals.filter(function (item) {
+          return String(item.approval_id || '') !== id;
+        });
         var el = liveApprovals[id];
         if (!el || !el.isConnected) return;
         var status = el.querySelector('[data-approval-status]');
@@ -2182,6 +2215,7 @@
             liveText(el, '', false);
             if (turnId) delete livePendingTurns[turnId];
             if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+            applyPendingInitialHistory();
             scheduleOutboxDrain();
             return;
           }
@@ -2207,6 +2241,7 @@
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          applyPendingInitialHistory();
           scheduleOutboxDrain();
         } else if (type === 'cancelled') {
           livePresence(el, false);
@@ -2217,6 +2252,7 @@
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
+          applyPendingInitialHistory();
           scheduleOutboxDrain();
         }
       }
@@ -2244,8 +2280,10 @@
       }
       async function livePoll() {
         if (!live || liveStopped) return;
+        var version = bootstrapVersion;
         try {
           var payload = await T.poll();
+          if (liveStopped || version !== bootstrapVersion) return;
           var events = (payload && payload.events) || [];
           for (var ei = 0; ei < events.length; ei++) {
             var ev = events[ei], seq = Number(ev && ev.seq);
@@ -2253,8 +2291,10 @@
             else applyLiveEvent(ev);
           }
           if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
+          if (liveStopped || version !== bootstrapVersion) return;
           scheduleLivePoll(payload && payload.has_more ? 30 : 850);
         } catch (err) {
+          if (liveStopped || version !== bootstrapVersion) return;
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
@@ -2264,8 +2304,10 @@
       }
       async function liveBootstrap() {
         if (!live) return;
+        var version = ++bootstrapVersion;
         try {
           var boot = await T.bootstrap();
+          if (liveStopped || version !== bootstrapVersion) return;
           if (!boot || !boot.bound) {
             setSessionStatus('会话准备中…');
             scheduleLiveBootstrap(1800);
@@ -2286,20 +2328,10 @@
           var selectedHistoryId = selectedHistorySessionId();
           sessionHistoryScopeId = selectedHistoryId === CURRENT_SESSION_ID ? selectedHistoryId : '';
           if (selectedHistoryId && !sessionHistoryScopeId) rememberSelectedHistorySession('');
-          var completeHistory = boot.history || [];
-          try {
-            completeHistory = await loadInitialSessionHistory(
-              sessionHistoryScopeId, completeHistory, !!boot.history_truncated
-            );
-            setSessionStatus('');
-          } catch (historyErr) {
-            sessionHistoryRows = completeHistory;
-            sessionHistoryHasMore = !!boot.history_truncated;
-            sessionHistoryNextBefore = '';
-            setSessionStatus('历史暂时读取失败，已显示最近消息。');
-          }
-          hydrateHistory(completeHistory);
-          (boot.pending_approvals || []).forEach(showApproval);
+          /* Bootstrap contains recent messages. Restore them before the slower timeline request. */
+          hydrateHistory(boot.history || []);
+          latestPendingApprovals = boot.pending_approvals || [];
+          latestPendingApprovals.forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
           liveCurrentTurn = restoredPendingTurn;
@@ -2321,7 +2353,9 @@
           }
           scheduleOutboxDrain();
           scheduleLivePoll(0);
+          loadInitialSessionHistory(sessionHistoryScopeId, boot.history || [], !!boot.history_truncated);
         } catch (err) {
+          if (liveStopped || version !== bootstrapVersion) return;
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
@@ -2937,6 +2971,9 @@
         setSessionDrawer(false);
         clearTimeout(livePollTimer);
         clearTimeout(liveBootstrapTimer);
+        ++bootstrapVersion;
+        ++historyRequestVersion;
+        pendingInitialHistory = null;
         var previousSessionId = CURRENT_SESSION_ID;
         var previousSessionKey = CURRENT_SESSION_KEY;
         var previousHistoryScope = selectedHistorySessionId();
@@ -2958,7 +2995,7 @@
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
           await liveBootstrap();
-          await refreshSessions();
+          refreshSessions().catch(function () {});
         } catch (err) {
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
@@ -3042,6 +3079,8 @@
         if (quoteBarEl) quoteBarEl.removeEventListener('click', onQuoteBarTap);
         offQuotePaint();
         liveStopped = true;
+        ++bootstrapVersion;
+        ++historyRequestVersion;
         clearTimeout(livePollTimer);
         clearTimeout(liveOutboxTimer);
         clearTimeout(hitT);

@@ -116,22 +116,22 @@
       ensureToken: function (force) {
         return nativeCall('ensureToken', { force: !!force });
       },
-      sessions: function () { return nativeCall('sessions', {}); },
+      sessions: function () { return nativeCall('sessions', {}, 40000); },
       toolDetails: function (turn, call, field, offset) { return nativeCall('toolDetails', {turn_id: turn, tool_call_id: call, field: field, offset: offset || 0}); },
-      history: function (limit, before, sessionId) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || ''), session_id: String(sessionId || '') }); },
+      history: function (limit, before, sessionId) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || ''), session_id: String(sessionId || '') }, 40000); },
       search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
           session_key: String(sessionKey || ''),
           session_id: String(sessionId || '')
-        });
+        }, 40000);
       },
       bootstrap: function (force) {
         return nativeCall('bootstrap', {
           cursor: Number(Native.getCursor()) || 0,
           force: !!force
-        });
+        }, 40000);
       },
       sendText: function (text, messageId, replyTo) {
         return nativeCall('sendText', {
