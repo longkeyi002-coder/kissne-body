@@ -13,6 +13,7 @@ def test_paired_device_can_read_deduplicated_session_index_and_status(tmp_path):
             adapter = make_adapter()
             sessions = build_session_store(home)
             conversation = preexisting_conversation(sessions)
+            seed_transcript(sessions, conversation.session_id, 2)
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
@@ -28,6 +29,7 @@ def test_paired_device_can_read_deduplicated_session_index_and_status(tmp_path):
     assert session_result[0] == 200, session_result
     rows = session_result[1]["sessions"]
     assert sum(row["session_id"] == conversation.session_id for row in rows) == 1
+    assert next(row for row in rows if row["session_id"] == conversation.session_id)["message_count"] >= 4
     assert session_result[1]["active_session_id"] == conversation.session_id
     assert status_result[0] == 200, status_result
     assert status_result[1]["mobile"]["connected"] is True
@@ -249,6 +251,8 @@ def test_session_select_reaches_rows_the_routing_index_never_held(tmp_path):
                 db = SessionDB()
                 try:
                     db.create_session("20260101_000000_deadbee1", "telegram")
+                    db.create_session("20260101_000001_deadbee2", "telegram")
+                    db.end_session("20260101_000001_deadbee2", "session_reset")
                 finally:
                     db.close()
                 listed_before = await http(port, "GET", "/admin/sessions", token=token)
@@ -256,6 +260,10 @@ def test_session_select_reaches_rows_the_routing_index_never_held(tmp_path):
                     row["session_id"] == "20260101_000000_deadbee1"
                     for row in listed_before[1]["sessions"]
                 ), "the list is the session DB, so an unindexed row must still show up"
+                assert "message_count" in next(row for row in listed_before[1]["sessions"]
+                                               if row["session_id"] == "20260101_000000_deadbee1")
+                assert any(row["session_id"] == "20260101_000001_deadbee2"
+                           for row in listed_before[1]["sessions"]), "ended conversations remain browsable"
                 selected = await http(
                     port, "POST", "/admin/sessions", token=token,
                     body={"session_id": "20260101_000000_deadbee1"},

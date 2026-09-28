@@ -2533,8 +2533,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 "history": [], "history_truncated": False, "pending_turn_id": None,
                 "covered_event_seqs": [],
             })
-        history, truncated, represented_turn_ids = self._bootstrap_history_snapshot(
-            identity["session_id"])
+        # A long transcript is decoded from SQLite here. Keep the listener responsive
+        # to polling, model controls and other installations during that read.
+        history, truncated, represented_turn_ids = await asyncio.to_thread(
+            self._bootstrap_history_snapshot, identity["session_id"])
         # Attachment-only turns may not yet exist in the Hermes transcript during a cold start;
         # restore their durable presentation metadata so the device can render them.
         try:
@@ -2706,6 +2708,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("session_store_unavailable", 503)
         try:
             entries = await asyncio.to_thread(store.list_sessions)
+            db = store._db_for_key(self.mobile_session_key(installation))
+            durable_rows = (await asyncio.to_thread(
+                db.list_sessions_rich, limit=1000, offset=0, compact_rows=True,
+                include_children=True, project_compression_tips=False,
+            )) if db is not None else []
         except Exception:
             logger.warning("[kissne_mobile] could not list sessions", exc_info=True)
             return _error_response("session_list_unavailable", 503)
@@ -2715,6 +2722,19 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Routing aliases can point at the same Conversation. Return one row per
         # canonical session id, preferring a non-mobile key/title when available.
         by_id: Dict[str, Dict[str, Any]] = {}
+        for session in durable_rows:
+            sid = str(session.get("id") or "")
+            if not sid or session.get("end_reason") == "session_deleted":
+                continue
+            by_id[sid] = {
+                "session_id": sid,
+                "session_key": str(session.get("session_key") or ""),
+                "title": str(session.get("title") or ""),
+                "updated_at": str(session.get("last_active") or session.get("started_at") or ""),
+                "created_at": str(session.get("started_at") or ""),
+                "message_count": int(session.get("message_count") or 0),
+                "active": sid == current_id,
+            }
         for entry in entries:
             sid = str(getattr(entry, "session_id", "") or "")
             if not sid:
@@ -2736,6 +2756,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             previous_mobile = bool(previous and str(previous.get("session_key") or "").startswith("kissne_mobile:"))
             if previous is None or (previous_mobile and not mobile_key):
                 by_id[sid] = row
+            elif previous is not None and not previous.get("title") and display:
+                previous["title"] = display
             elif sid == current_id:
                 previous["active"] = True
         rows = list(by_id.values())

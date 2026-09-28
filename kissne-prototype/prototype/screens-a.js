@@ -2637,7 +2637,9 @@
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
           await liveBootstrap();
-          await refreshSessions();
+          // The new conversation is already rendered. Updating drawer metadata
+          // can read hundreds of sessions and must not extend the switch wait.
+          refreshSessions().catch(function () {});
         } catch (err) {
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
