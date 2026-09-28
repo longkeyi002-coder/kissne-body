@@ -135,6 +135,7 @@ BOOTSTRAP_PATH = "/bootstrap"
 MESSAGES_PATH = "/messages"
 HISTORY_PATH = "/history"
 SEARCH_PATH = "/search"
+MEMORY_TIMELINE_PATH = "/memory/timeline"
 CANCEL_PATH = "/cancel"
 REVOKE_PATH = "/revoke"
 HEALTH_PATH = "/health"
@@ -500,6 +501,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
         app.router.add_get(HISTORY_PATH, self._handle_history)
         app.router.add_get(SEARCH_PATH, self._handle_history_search)
+        app.router.add_get(MEMORY_TIMELINE_PATH, self._handle_memory_timeline)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post("/approval", self._handle_approval)
         app.router.add_post("/sticker-index", self._handle_sticker_index)
@@ -1604,6 +1606,49 @@ class KissneMobileAdapter(BasePlatformAdapter):
         page = rows[start:end]
         return _json_response({"ok": True, "messages": page, "has_more": start > 0,
                                "next_before": page[0]["message_ref"] if start > 0 and page else None})
+
+    async def _handle_memory_timeline(self, request: web.Request) -> web.Response:
+        """Authenticated read-only projection of the active Lifemem database."""
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        try:
+            from hermes_cli.config import cfg_get, load_config_readonly
+            provider = str(cfg_get(load_config_readonly(), "memory", "provider", default="") or "").strip()
+        except Exception:
+            provider = ""
+        if provider != "lifemem":
+            return _error_response("lifemem_not_active", 503)
+        try:
+            limit = max(1, min(int(request.query.get("limit", "50")), 100))
+            raw_before = str(request.query.get("before") or "").strip()
+            before = int(raw_before) if raw_before else None
+        except (TypeError, ValueError):
+            return _error_response("invalid_pagination", 400)
+        memory_space = str(request.query.get("space") or "").strip() or None
+        query = str(request.query.get("q") or "").strip()
+        try:
+            from hermes_constants import get_hermes_home
+            from plugins.memory.lifemem.store import MemoryStore
+            db_path = _Path(get_hermes_home()) / "kissne-lifemem" / "memory.db"
+            if not db_path.exists():
+                return _json_response({"ok": True, "items": [], "has_more": False, "next_before": None})
+            store = MemoryStore(str(db_path))
+            try:
+                page = await asyncio.to_thread(
+                    store.timeline, limit=limit, before=before,
+                    memory_space=memory_space, query=query,
+                )
+            finally:
+                store.close()
+        except ValueError as exc:
+            if str(exc) == "invalid memory_space":
+                return _error_response("invalid_memory_space", 400)
+            return _error_response("invalid_memory_query", 400)
+        except Exception:
+            logger.exception("[kissne_mobile] Lifemem timeline read failed")
+            return _error_response("memory_timeline_unavailable", 503)
+        return _json_response({"ok": True, **page})
 
     async def _handle_history_search(self, request: web.Request) -> web.Response:
         installation = await self._authenticated_installation(request)
