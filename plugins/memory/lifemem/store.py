@@ -50,6 +50,11 @@ class MemoryStore:
             """)
             self._conn.commit()
 
+    @property
+    def path(self):
+        row=self._conn.execute("PRAGMA database_list").fetchone()
+        return str(row["file"] if row else "")
+
     def close(self):
         with self._lock:
             self._conn.commit(); self._conn.close()
