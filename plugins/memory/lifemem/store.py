@@ -128,6 +128,38 @@ class MemoryStore:
         ranked.sort(key=lambda x:x[0],reverse=True)
         return [dict(r,score=s) for s,r in ranked[:max(1,min(int(limit),100))]]
 
+    def timeline(self, *, limit=50, before=None, memory_space=None, query=""):
+        """Project active memories into the Kissne journal timeline."""
+        cap=max(1,min(int(limit),100))
+        sql="SELECT * FROM memories WHERE status='active'"
+        args=[]
+        if before is not None:
+            sql+=" AND id < ?"; args.append(int(before))
+        if memory_space:
+            if memory_space not in {"reality","relationship","ai_self","ai_world"}:
+                raise ValueError("invalid memory_space")
+            sql+=" AND memory_space=?"; args.append(memory_space)
+        needle=(query or "").strip()
+        if needle:
+            sql+=" AND (summary LIKE ? OR quote LIKE ? OR category LIKE ? OR emotion LIKE ?)"
+            like=f"%{needle}%"; args.extend([like,like,like,like])
+        sql+=" ORDER BY event_time DESC,id DESC LIMIT ?"; args.append(cap+1)
+        with self._lock:
+            rows=[dict(row) for row in self._conn.execute(sql,args).fetchall()]
+        has_more=len(rows)>cap
+        rows=rows[:cap]
+        items=[{
+            "id":row["id"], "occurred_at":row["event_time"], "created_at":row["created_at"],
+            "entry_type":"memory", "memory_space":row["memory_space"],
+            "title":row["summary"], "body":row["quote"], "category":row["category"],
+            "emotion":row["emotion"], "importance":row["importance"],
+            "confirmed":bool(row["confirmed"]), "author":"lifemem", "status":row["status"],
+            "source_type":"hermes_turn" if row.get("session_id") else row.get("source",""),
+            "source_ref":{"session_id":row.get("session_id") or "","turn_id":row.get("turn_id") or 0},
+        } for row in rows]
+        return {"items":items,"has_more":has_more,
+                "next_before":items[-1]["id"] if has_more and items else None}
+
     def reinforce(self,ids):
         ids=[int(x) for x in ids if x]
         if not ids:return
