@@ -64,7 +64,7 @@ def test_decision_fallback_is_conservative_and_space_aware():
     assert d.remember is True
     assert d.memory_space=="ai_world"
     d=engine.decide("记住，我们决定以后不要用旧的连接页")
-    assert d.memory_space=="relationship"
+    assert d.memory_space=="reality"
     assert d.importance >= .8
 
 def test_store_deduplicates_exact_active_fact(tmp_path):
