@@ -63,7 +63,12 @@ def _foreign_db_holder_pids(db_path: Path) -> Optional[List[int]]:
                 except OSError:
                     continue
                 if _canonical(target) in watched:
-                    pids.append(pid)
+                    try:
+                        lines = Path(f"/proc/{pid}/status").read_text().splitlines()
+                        nspid = next((line.split()[1:] for line in lines if line.startswith("NSpid:")), [])
+                        pids.append(int(nspid[-1]) if nspid else pid)
+                    except (OSError, ValueError, IndexError):
+                        pids.append(pid)
                     break
     except OSError:
         return None
