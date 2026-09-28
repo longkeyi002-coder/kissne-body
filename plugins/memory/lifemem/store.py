@@ -81,6 +81,17 @@ class MemoryStore:
             raise ValueError("invalid memory_space")
         now=time.time()
         with self._lock:
+            # Exact active duplicate: reinforce/update provenance instead of creating
+            # another long-term record for the same fact.
+            existing=self._conn.execute(
+                "SELECT id,importance FROM memories WHERE status='active' AND memory_space=? AND summary=? ORDER BY id DESC LIMIT 1",
+                (memory_space,summary)).fetchone()
+            if existing:
+                self._conn.execute(
+                    "UPDATE memories SET updated_at=?,last_recall_at=?,access_count=access_count+1,importance=? WHERE id=?",
+                    (now,now,max(float(existing["importance"] or 0),max(0,min(1,float(importance)))),int(existing["id"])))
+                self._conn.commit()
+                return int(existing["id"])
             cur=self._conn.execute("""INSERT INTO memories(
               summary,quote,memory_space,category,emotion,importance,confirmed,source,
               session_id,turn_id,status,event_time,created_at,updated_at,embedding)
