@@ -1,4 +1,4 @@
-name: kissne-lifemem
+name: lifemem
 version: 2.1.0
 description: "Kissne long-term memory: the single External Memory Provider, with evidence-backed timeline memories, time/emotion/importance metadata, SQLite storage and on-demand recall."
 hooks:
