@@ -12,7 +12,7 @@ from agent.memory_provider import MemoryProvider, RecallStatus, is_trivial_promp
 from .embeddings import Embedder
 from .store import MemoryStore
 
-NAME="kissne-lifemem"
+NAME="lifemem"
 DEFAULTS={
  "core_memories":0,"core_token_budget":0,
  "recall_memories":4,"recall_token_budget":300,
@@ -67,7 +67,7 @@ class LifememProvider(MemoryProvider):
             from hermes_constants import get_hermes_home
             home=str(get_hermes_home())
         if self._store is None:
-            root=Path(home)/NAME; root.mkdir(parents=True,exist_ok=True)
+            root=Path(home)/"kissne-lifemem"; root.mkdir(parents=True,exist_ok=True)
             self._store=MemoryStore(str(root/"memory.db"))
             self._embedder.start_warmup_thread(spawn_context_thread)
             self._writer=spawn_context_thread(self._writer_loop,name="kissne-lifemem-writer")
@@ -191,7 +191,14 @@ class LifememProvider(MemoryProvider):
     def save_config(self,values,hermes_home):
         from hermes_cli.config import save_config
         clean={k:v for k,v in (values or {}).items() if k in DEFAULTS}
-        if clean:save_config({"memory":{NAME:clean}},merge_existing=True)
+        # Lifemem remains an external provider. Disable only Hermes builtin
+        # long-term stores to avoid duplicate persistence/injection.
+        save_config({"memory":{
+            "provider": NAME,
+            "memory_enabled": False,
+            "user_profile_enabled": False,
+            NAME: clean,
+        }}, merge_existing=True)
 
     def backup_paths(self):return []
 
