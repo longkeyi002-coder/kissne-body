@@ -84,3 +84,30 @@ def test_laya_adapter_fails_closed_to_local_decision():
     engine=LayaDecisionEngine("http://127.0.0.1:1",timeout=.1)
     assert engine.decide("普通的一句话").remember is False
     assert engine.decide("记住，我喜欢绿色").remember is True
+
+
+def test_timeline_projects_source_refs_filters_and_cursor(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    db=MemoryStore(str(tmp_path/"memory.db"))
+    a=db.add_memory("现实决定","证据A",memory_space="reality",session_id="s1",turn_id=11,event_time=100)
+    b=db.add_memory("小机星事件","证据B",memory_space="ai_world",session_id="s2",turn_id=22,event_time=200)
+    page=db.timeline(limit=1)
+    assert page["items"][0]["id"]==b
+    assert page["items"][0]["source_ref"]=={"session_id":"s2","turn_id":22}
+    assert page["has_more"] is True
+    assert page["next_before"]==b
+    older=db.timeline(limit=10,before=b)
+    assert [x["id"] for x in older["items"]]==[a]
+    world=db.timeline(limit=10,memory_space="ai_world")
+    assert [x["id"] for x in world["items"]]==[b]
+    found=db.timeline(limit=10,query="证据A")
+    assert [x["id"] for x in found["items"]]==[a]
+    db.close()
+
+def test_timeline_rejects_unknown_memory_space(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    import pytest
+    db=MemoryStore(str(tmp_path/"memory.db"))
+    with pytest.raises(ValueError,match="invalid memory_space"):
+        db.timeline(memory_space="fiction_leak")
+    db.close()
