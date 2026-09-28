@@ -1729,6 +1729,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         for key in keys:
             override = overrides.get(key)
             if not isinstance(override, dict):
+                store = getattr(self, "_session_store", None)
+                getter = getattr(store, "get_model_override", None)
+                override = getter(key) if callable(getter) else None
+            if not isinstance(override, dict):
                 continue
             model = str(override.get("model") or model or "")
             provider = str(override.get("provider") or provider or "")
@@ -1790,7 +1794,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # include_unconfigured mirrors the Dashboard's opt-in so the
                 # full provider universe is visible (same as #56974 on web).
                 payload = build_model_options_payload(
-                    load_picker_context(), include_unconfigured=True
+                    load_picker_context().with_overrides(
+                        current_model=current_model, current_provider=current_provider,
+                    ), include_unconfigured=True
                 )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.
@@ -1851,6 +1857,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     return _json_response({"ok": False, "error": "model_switch_failed", "detail": model_reply}, 409)
                 if model_reply.startswith("⚠"):
                     return _json_response({"ok": False, "error": "model_confirmation_required", "detail": model_reply}, 409)
+                # The canonical command may return None when it handed a confirmation to a
+                # platform picker. Never report success until the next-turn override exists.
+                actual_model, actual_provider = self._live_model_selection(installation)
+                if (actual_model, actual_provider) != (model, provider):
+                    return _json_response({"ok": False, "error": "model_switch_not_applied",
+                                           "detail": model_reply}, 409)
 
             reasoning_reply = ""
             if effort:
@@ -1865,6 +1877,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 reasoning_reply = str(await runner._handle_reasoning_command(event) or "")
                 if reasoning_reply.startswith("❌"):
                     return _json_response({"ok": False, "error": "reasoning_switch_failed", "detail": reasoning_reply}, 409)
+                if self._live_reasoning_effort(installation, model) != effort:
+                    return _json_response({"ok": False, "error": "reasoning_switch_not_applied",
+                                           "detail": reasoning_reply}, 409)
         except Exception:
             logger.exception("[kissne_mobile] model control failed")
             return _error_response("model_control_failed", 503)
@@ -1873,9 +1888,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         current_effort = self._live_reasoning_effort(installation, current_model or model)
         return _json_response({
             "ok": True,
-            "model": current_model or model,
-            "provider": current_provider or provider,
-            "effort": current_effort or effort,
+            "model": current_model,
+            "provider": current_provider,
+            "effort": current_effort,
             "model_reply": model_reply,
             "reasoning_reply": reasoning_reply,
         })

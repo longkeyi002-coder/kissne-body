@@ -24,11 +24,12 @@ class MobileTransportClient(
         path: String,
         body: JSONObject? = null,
         auth: Boolean = true,
+        readTimeoutOverrideMs: Int? = null,
     ): JSONObject {
         val connection = (requestUrl(path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = connectTimeoutMs
-            readTimeout = readTimeoutMs
+            readTimeout = readTimeoutOverrideMs ?: readTimeoutMs
             setRequestProperty("Accept", "application/json")
             if (auth) tokenProvider()?.takeIf { it.isNotBlank() }?.let {
                 setRequestProperty("Authorization", "Bearer $it")
@@ -190,7 +191,7 @@ class MobileTransportClient(
         )
 
     fun modelOptionsPayload(): JSONObject =
-        request("GET", "/model-options")
+        request("GET", "/model-options", readTimeoutOverrideMs = 45_000)
 
     fun setModelPayload(
         model: String? = null,
@@ -201,7 +202,7 @@ class MobileTransportClient(
         model?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("model", it) }
         effort?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("effort", it) }
         provider?.trim()?.takeIf { it.isNotBlank() }?.let { body.put("provider", it) }
-        return request("POST", "/set-model", body)
+        return request("POST", "/set-model", body, readTimeoutOverrideMs = 60_000)
     }
 
     fun revoke(): JSONObject =

@@ -168,13 +168,13 @@
           bytes_base64: btoa(binary)
         }, 120000);
       },
-      modelOptions: function () { return nativeCall('modelOptions', {}); },
+      modelOptions: function () { return nativeCall('modelOptions', {}, 50000); },
       setModel: function (model, effort, provider) {
         return nativeCall('setModel', {
           model: String(model || ''),
           effort: String(effort || ''),
           provider: String(provider || '')
-        });
+        }, 65000);
       },
       respondApproval: function (approvalId, decision, scope) {
         return nativeCall('approval', {

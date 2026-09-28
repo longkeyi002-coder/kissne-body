@@ -417,8 +417,7 @@
 
   function modelsForProvider(provider) {
     var p = String(provider || '');
-    var filtered = p ? MODELS.filter(function (m) { return m.p === p; }) : MODELS.slice();
-    return filtered.length ? filtered : MODELS.slice();
+    return p ? MODELS.filter(function (m) { return m.p === p; }) : MODELS.slice();
   }
 
   function dropdown(title, items, curKey, param, origin) {
@@ -1595,7 +1594,7 @@
             var error = new Error('model_options_timeout');
             error.code = 'timeout';
             reject(error);
-          }, 8000);
+          }, 55000);
         });
         Promise.race([T.modelOptions(), timeoutPromise]).then(function (payload) {
           applyHermesModelOptions(payload);
@@ -1670,14 +1669,18 @@
         el.disabled = true;
         var modelValue = kind === 'model' ? value : '';
         var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
-        var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
         T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
-          .then(function () {
-            if (kind === 'model') {
-              MODEL_CURRENT = modelKey || value;
-              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
+          .then(function (result) {
+            if (!result || result.ok !== true
+                || (kind === 'model' && (result.model !== modelValue || result.provider !== providerValue))
+                || (kind === 'effort' && result.effort !== value)) {
+              throw new Error('model_switch_not_applied');
             }
-            if (kind === 'effort') EFFORT_CURRENT = value;
+            if (kind === 'model') {
+              MODEL_CURRENT = result.provider + '::' + result.model;
+              PROVIDER_CURRENT = result.provider;
+            }
+            if (kind === 'effort') EFFORT_CURRENT = result.effort;
             MODEL_OPTIONS_LOADED_AT = 0;
             paintChatMenu(null);
             updateHeaderControls();
@@ -1685,9 +1688,9 @@
           })
           .catch(function (err) {
             el.disabled = false;
-            var msg = err && err.payload && err.payload.error
-              ? String(err.payload.error)
-              : 'Hermes 切换失败';
+            var msg = err && err.payload && (err.payload.detail || err.payload.error)
+              ? String(err.payload.detail || err.payload.error)
+              : 'Hermes 没有确认切换成功，请稍后重试';
             appendSystemNotice(msg);
           });
       }
