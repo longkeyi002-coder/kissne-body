@@ -61,7 +61,8 @@ PROBE_TIMEOUT_S = 2.0
 
 ROLE_GATEWAY = "gateway"
 ROLE_SERVE = "serve"
-_ROLES = (ROLE_GATEWAY, ROLE_SERVE)
+ROLE_DESKTOP_SERVE = "desktop-serve"
+_ROLES = (ROLE_GATEWAY, ROLE_SERVE, ROLE_DESKTOP_SERVE)
 
 # Open lock handles, keyed by (role, resolved lock path): the OS releases the flock when this
 # process dies, which is what makes a crashed owner's host lock re-acquirable without a reaper.
