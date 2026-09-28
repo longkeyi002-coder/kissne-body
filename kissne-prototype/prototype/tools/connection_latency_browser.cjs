@@ -40,7 +40,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core')
       window.KissneTransport = {
         hasToken:()=>true,
         bootstrap:async()=>({bound:true,conversation:{session_id:window.activeSession,session_key:window.activeSession},
-          history:[{role:'user',text:window.activeSession === 'old' ? '旧会话最新消息' : '新会话最新消息',message_ref:window.activeSession + ':1'}],pending_approvals:[]}),
+          history:[{role:'user',text:window.activeSession === 'old' ? '旧会话最新消息' : '新会话最新消息',message_ref:window.activeSession + ':1'}],
+          history_truncated:window.activeSession === 'new',pending_approvals:[]}),
         history:()=>{window.historyCalls.push(window.activeSession);return window.activeSession === 'old' ? window.oldHistory : window.newHistory;},
         poll:async()=>{window.pollCount++;return {events:window.events.splice(0)};}, ack:async()=>{},
         selectSession:async(_key,id)=>{window.activeSession=id;return {conversation:{session_id:id}};},
@@ -74,8 +75,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core')
     await page.waitForTimeout(100);
     assert.equal(await page.getByText('旧会话迟到消息').count(),0);
     assert.equal(await page.getByText('新会话完整历史').count(),1);
+    await page.locator('[data-session-drawer-open]').click();
+    await page.locator('[data-session-id="old"] [data-session-select]').click();
+    await page.waitForFunction(() => document.querySelector('#test').textContent.includes('旧会话最新消息'));
+    assert.equal(await page.evaluate(() => window.historyCalls.filter(id => id === 'old').length),1);
     assert.deepEqual(errors,[]);
-    console.log('PASS: bootstrap renders before history; polling runs; session switch ignores slow list and stale history; model 404 is visible');
+    console.log('PASS: bootstrap before history, active poll, slow list, stale response isolation, no redundant complete scoped history, model 404');
     await page.evaluate(() => { if (typeof window.cleanup === 'function') window.cleanup(); });
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

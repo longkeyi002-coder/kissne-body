@@ -1764,6 +1764,8 @@
         var version = ++historyRequestVersion;
         if (!T || typeof T.history !== 'function') return;
         var targetSessionId = CURRENT_SESSION_ID;
+        /* A scoped, complete bootstrap already contains this whole conversation. */
+        if (scopeId && scopeId === targetSessionId && !bootstrapTruncated) return;
         window.KissneHistoryScope.request(T, 50, '', scopeId, targetSessionId)
           .then(function (payload) {
             if (liveStopped || version !== historyRequestVersion
@@ -2995,7 +2997,6 @@
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
           await liveBootstrap();
-          refreshSessions().catch(function () {});
         } catch (err) {
           CURRENT_SESSION_ID = previousSessionId;
           CURRENT_SESSION_KEY = previousSessionKey;
