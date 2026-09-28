@@ -120,7 +120,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "history", "search", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
+            "sessions", "history", "search", "memoryTimeline", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus",
         )
@@ -151,6 +151,12 @@ class PrototypeBridge(
                 if (query.isBlank()) throw IllegalArgumentException("query_required")
                 client().searchPayload(query, body.optInt("limit", 20))
             }
+            "memoryTimeline" -> client().memoryTimelinePayload(
+                limit = body.optInt("limit", 50),
+                before = body.optString("before").takeIf { it.isNotBlank() },
+                space = body.optString("space").takeIf { it.isNotBlank() },
+                queryText = body.optString("q").takeIf { it.isNotBlank() },
+            )
             "deleteSession" -> {
                 val sessionId = body.optString("session_id").trim()
                 if (sessionId.isBlank()) throw IllegalArgumentException("session_id_required")
