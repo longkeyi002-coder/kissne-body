@@ -436,7 +436,7 @@ def test_memory_timeline_requires_auth_and_active_lifemem(tmp_path, monkeypatch)
             finally:
                 await stop(adapter)
     monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"builtin"}})
-    unauth,inactive=run(scenario())
+    monkeypatch.setattr("hermes_cli.config.cfg_get",lambda cfg,*keys,default=None: cfg.get("memory",{}).get("provider",default))\n    unauth,inactive=run(scenario())
     assert unauth[0]==401,unauth
     assert inactive[0]==503,inactive
     assert inactive[1]["error"]=="lifemem_not_active"
@@ -470,7 +470,7 @@ def test_memory_timeline_reads_lifemem_with_filters_and_evidence_refs(tmp_path, 
             finally:
                 await stop(adapter)
     monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"lifemem"}})
-    world_id,page,world,bad=run(scenario())
+    monkeypatch.setattr("hermes_cli.config.cfg_get",lambda cfg,*keys,default=None: cfg.get("memory",{}).get("provider",default))\n    world_id,page,world,bad=run(scenario())
     assert page[0]==200,page
     assert page[1]["items"][0]["id"]==world_id
     assert page[1]["has_more"] is True
