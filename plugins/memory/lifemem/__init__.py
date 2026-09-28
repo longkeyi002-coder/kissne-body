@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider, RecallStatus, is_trivial_prompt, spawn_context_thread
 from .embeddings import Embedder
-from .store import MemoryStore
+from .store import MemoryStore\nfrom .decision import build_decision_engine
 
 NAME="lifemem"
 DEFAULTS={
@@ -118,7 +118,19 @@ class LifememProvider(MemoryProvider):
             try:
                 if self._store and sid:
                     self._store.touch_session(sid)
-                    self._store.add_turn(sid,user,assistant)
+                    turn_id=self._store.add_turn(sid,user,assistant)
+                    decision=self._decision.decide(user,assistant)
+                    if decision.remember and decision.summary:
+                        self._store.add_memory(
+                            decision.summary,user,
+                            memory_space=decision.memory_space,
+                            emotion=decision.emotion,
+                            importance=decision.importance,
+                            source="auto",
+                            session_id=sid,
+                            turn_id=turn_id,
+                            embedding=self._embedder.encode(decision.summary),
+                        )
             except Exception: pass
 
     def _flush(self):
@@ -185,7 +197,9 @@ class LifememProvider(MemoryProvider):
     def get_config_schema(self):
         return [
           {"key":"embedding_model","description":"Optional local sentence-transformers model.","default":""},
-          {"key":"decision_engine","description":"Decision engine; laya is the planned local default.","default":"laya"},
+          {"key":"decision_engine","description":"Decision engine implementation; laya falls back locally when unavailable.","default":"laya"},
+          {"key":"decision_endpoint","description":"Optional local bridge endpoint, e.g. Termux Laya service.","default":""},
+          {"key":"decision_timeout","description":"Decision bridge timeout in seconds.","default":0.8,"type":"number","minimum":0.1,"maximum":5.0},
         ]
 
     def save_config(self,values,hermes_home):
