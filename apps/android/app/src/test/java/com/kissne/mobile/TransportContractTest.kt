@@ -25,7 +25,7 @@ class TransportContractTest {
         assertEquals(BridgeLane.BACKGROUND, bridgeLane("ack"))
         assertEquals(BridgeLane.CONTROL, bridgeLane("sessions"))
         assertEquals(BridgeLane.CONTROL, bridgeLane("deleteSession"))
-        assertEquals(BridgeLane.CONTROL, bridgeLane("modelOptions"))
+        assertEquals(BridgeLane.CONTROL, bridgeLane("modelOptions"))\n        assertEquals(BridgeLane.CONTROL, bridgeLane("memoryTimeline"))
     }
     @Test fun attachment_kind_preserves_sticker_semantics() {
         assertEquals("photo", normalizeAttachmentKind("photo"))
