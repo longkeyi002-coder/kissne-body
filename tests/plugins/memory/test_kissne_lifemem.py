@@ -54,3 +54,33 @@ def test_lifemem_is_discoverable_by_directory_name():
     p=load_memory_provider("lifemem", register_skills=False)
     assert p is not None
     assert p.name=="lifemem"
+
+
+def test_decision_fallback_is_conservative_and_space_aware():
+    from plugins.memory.lifemem.decision import HeuristicDecisionEngine
+    engine=HeuristicDecisionEngine()
+    assert engine.decide("今天天气不错").remember is False
+    d=engine.decide("记住，小机星的设定里狐狸住在蓝色房间")
+    assert d.remember is True
+    assert d.memory_space=="ai_world"
+    d=engine.decide("记住，我们决定以后不要用旧的连接页")
+    assert d.memory_space=="relationship"
+    assert d.importance >= .8
+
+def test_store_deduplicates_exact_active_fact(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    db=MemoryStore(str(tmp_path/"memory.db"))
+    first=db.add_memory("固定使用蓝色主题","第一次",importance=.6)
+    second=db.add_memory("固定使用蓝色主题","第二次",importance=.9)
+    assert first==second
+    rows=db.list_memories()
+    assert len(rows)==1
+    assert rows[0]["importance"]==.9
+    assert rows[0]["access_count"]==1
+    db.close()
+
+def test_laya_adapter_fails_closed_to_local_decision():
+    from plugins.memory.lifemem.decision import LayaDecisionEngine
+    engine=LayaDecisionEngine("http://127.0.0.1:1",timeout=.1)
+    assert engine.decide("普通的一句话").remember is False
+    assert engine.decide("记住，我喜欢绿色").remember is True
