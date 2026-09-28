@@ -266,12 +266,8 @@ def _structured_rail_ctx(progress_queue):
 
 
 @pytest.mark.asyncio
-async def test_structured_rail_hands_back_payloads_it_cannot_present():
-    """Thinking text and notices share this queue; the structured rail is not theirs to swallow.
-
-    Dropping them would make the App lose the assistant's scratch text the moment it opts into
-    structured tool rows (the text rail runs after this one and renders them).
-    """
+async def test_structured_rail_sends_text_without_exiting():
+    """Shared-queue text is delivered as interim commentary without ending the drain."""
     from gateway.run_turn_runner import TurnRunner
 
     adapter = StructuredLifecycleAdapter()
@@ -279,15 +275,20 @@ async def test_structured_rail_hands_back_payloads_it_cannot_present():
     runner = TurnRunner(_make_runner(adapter), _structured_rail_ctx(progress_queue))
 
     progress_queue.put("💬 thinking out loud")
-    await asyncio.wait_for(runner._send_structured_lifecycle_events(adapter), timeout=5)
+    task = asyncio.create_task(runner._send_structured_lifecycle_events(adapter))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    await task
 
     assert adapter.structured_events == [], "a text payload is not a tool lifecycle event"
-    assert progress_queue.get_nowait() == "💬 thinking out loud"
+    assert adapter.sent[0]["content"] == "💬 thinking out loud"
+    assert adapter.sent[0]["metadata"]["_interim_send"] is True
+    assert progress_queue.empty()
 
 
 @pytest.mark.asyncio
-async def test_structured_rail_delivers_lifecycle_events_and_keeps_the_rest():
-    """Lifecycle dicts are consumed and delivered; everything else comes back for the text rail."""
+async def test_structured_rail_handles_interleaved_lifecycle_and_text():
+    """Lifecycle events and commentary are both delivered without handing off the queue."""
     from gateway.run_turn_runner import TurnRunner
 
     adapter = StructuredLifecycleAdapter()
@@ -297,19 +298,21 @@ async def test_structured_rail_delivers_lifecycle_events_and_keeps_the_rest():
     progress_queue.put({"type": "tool.started", "tool_call_id": "call-a", "tool_name": "terminal",
                         "args": {"command": "pwd"}})
     progress_queue.put("💬 thinking out loud")
-    await asyncio.wait_for(runner._send_structured_lifecycle_events(adapter), timeout=5)
+    task = asyncio.create_task(runner._send_structured_lifecycle_events(adapter))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    await task
 
     assert [entry["event"]["tool_call_id"] for entry in adapter.structured_events] == ["call-a"]
-    assert progress_queue.get_nowait() == "💬 thinking out loud"
+    assert adapter.sent[0]["content"] == "💬 thinking out loud"
+    assert adapter.sent[0]["metadata"]["_interim_send"] is True
+    assert progress_queue.empty()
 
 
-def test_tool_output_body_is_capped_at_the_gateway():
-    """One bound, applied where the event is built: a client never gets an unbounded dump."""
-    from gateway.run_turn_runner import _TOOL_OUTPUT_MAX_CHARS, _tool_output_text
-
-    assert _tool_output_text(None) == ""
-    assert _tool_output_text("  ok\n") == "ok"
-
-    capped = _tool_output_text("x" * (_TOOL_OUTPUT_MAX_CHARS + 50))
-    assert len(capped) == _TOOL_OUTPUT_MAX_CHARS + 1
-    assert capped.endswith("…")
+def test_gateway_preserves_full_tool_output_for_adapter_storage():
+    from gateway.run_turn_runner import TurnRunner
+    q = queue.Queue()
+    runner = TurnRunner(None, _structured_rail_ctx(q))
+    output = "before\n" + "长🦊" * 3000 + "\nafter"
+    runner.structured_tool_complete_callback("call-full", "web_search", {}, output)
+    assert q.get_nowait()["output"] == output

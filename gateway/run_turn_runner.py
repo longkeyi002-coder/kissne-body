@@ -55,23 +55,6 @@ class _ExecApprovalDeclined(RuntimeError):
     """
 
 
-_TOOL_OUTPUT_MAX_CHARS = 2000
-
-
-def _tool_output_text(result, *, max_chars: int = _TOOL_OUTPUT_MAX_CHARS) -> str:
-    """The tool's own text, bounded, for clients that render one row per tool call.
-
-    ``result`` arrives as the JSON-encoded string ``agent.display._detect_tool_failure`` already
-    takes, so this is a pass-through with a ceiling rather than a decoder: a client that wants
-    structure can parse it, while no single row can smuggle a 100 KB terminal dump into the event
-    stream. The cap is enforced here, once, so every sink inherits it.
-    """
-    if not isinstance(result, str):
-        return ""
-    text = result.strip()
-    return text[:max_chars] + "…" if len(text) > max_chars else text
-
-
 class TurnRunner:
     """Per-turn collaborator carrying ``GatewayRunner._run_agent_inner``'s tool-progress callbacks."""
 
@@ -522,7 +505,7 @@ class TurnRunner:
             "tool_name": name,
             "args": args if isinstance(args, dict) else None,
             "is_error": bool(is_error),
-            "output": _tool_output_text(result),
+            "output": result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str),
         })
 
     async def _send_structured_lifecycle_events(self, adapter) -> None:
@@ -545,8 +528,19 @@ class TurnRunner:
             return
 
         async def _deliver(raw: Any) -> None:
-            await send(chat_id=ctx.source.chat_id, event=raw, metadata=ctx._progress_metadata)
+            if not ctx._run_still_current() or self._agent_interrupted():
+                return
+            metadata = dict(ctx._progress_metadata or {})
+            if ctx.event_message_id:
+                metadata["reply_to_message_id"] = ctx.event_message_id
+            if isinstance(raw, dict):
+                await send(chat_id=ctx.source.chat_id, event=raw, metadata=metadata)
+            elif isinstance(raw, str):
+                # Text commentary shares the queue, but must never replace the answer.
+                await adapter.send(chat_id=ctx.source.chat_id, content=raw,
+                                   metadata={**metadata, "_interim_send": True})
 
+        pending = None
         try:
             while ctx._run_still_current():
                 try:
@@ -554,41 +548,31 @@ class TurnRunner:
                 except queue.Empty:
                     await asyncio.sleep(0.1)
                     continue
-                if not isinstance(raw, dict):
-                    # Not ours: thinking text, notices and reset markers share this queue and the
-                    # text rail renders them. Put it back and let the caller fall through — this rail
-                    # must never swallow a payload it cannot present.
-                    ctx.progress_queue.put(raw)
-                    return
-                if self._agent_interrupted():
-                    continue
                 try:
-                    await _deliver(raw)
+                    pending = asyncio.create_task(_deliver(raw))
+                    await asyncio.shield(pending)
+                    pending = None
                 except asyncio.CancelledError:
-                    ctx.progress_queue.put(raw)  # dequeued but undelivered: leave it for the flush
                     raise
-                except Exception as err:
-                    logger.debug("structured tool-event delivery failed: %s", err)
+                except Exception:
+                    pending = None
+                    logger.debug("structured event delivery failed", exc_info=True)
         except asyncio.CancelledError:
-            # Turn cleanup cancels this task; flush what the turn already produced. Mirrors the
-            # task-card drain's cancel path: same generation + interrupt guard (a superseded or
-            # stopped turn must not push its stragglers to the App), and one failed delivery must
-            # not abandon the rest of the flush.
-            if not ctx._run_still_current() or self._agent_interrupted():
-                return
-            while True:
+            # Await the same operation, never re-enqueue an uncertain SQLite commit.
+            if pending is not None:
+                try:
+                    await asyncio.wait_for(pending, timeout=5.0)
+                except (Exception, asyncio.CancelledError):
+                    logger.debug("structured in-flight delivery failed", exc_info=True)
+            while ctx._run_still_current() and not self._agent_interrupted():
                 try:
                     raw = ctx.progress_queue.get_nowait()
                 except queue.Empty:
                     break
-                if not isinstance(raw, dict):
-                    continue
                 try:
-                    await _deliver(raw)
-                except asyncio.CancelledError:
-                    break
-                except Exception as err:
-                    logger.debug("structured tool-event flush failed: %s", err)
+                    await asyncio.wait_for(_deliver(raw), timeout=5.0)
+                except Exception:
+                    logger.debug("structured event flush failed", exc_info=True)
 
     # ── editable progress bubbles (progress-queue drain) ────────────────────────────────────
 
@@ -776,11 +760,7 @@ class TurnRunner:
             return
         if getattr(ctx, "_structured_lifecycle_events", False):
             await self._send_structured_lifecycle_events(adapter)
-            # The structured rail re-queues payloads that are not tool lifecycle (thinking text,
-            # notices, reset markers) instead of swallowing them: when it hands any back, the text
-            # rail below owns them.
-            if ctx.progress_queue.empty():
-                return
+            return
         # Skip tool progress for platforms that can't edit messages (e.g. iMessage/BlueBubbles):
         # each update would be a separate bubble. getattr, not attribute access: duck-typed
         # adapters (test fakes, minimal plugins) may lack edit_message — treated as "can't edit".

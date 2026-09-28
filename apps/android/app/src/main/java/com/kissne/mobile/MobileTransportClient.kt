@@ -69,6 +69,12 @@ class MobileTransportClient(
         return request("POST", "/admin/sessions", body)
     }
 
+    fun toolDetailsPayload(turn: String, call: String, field: String, offset: Int): JSONObject {
+        fun enc(value: String) = java.net.URLEncoder.encode(value, "UTF-8")
+        return request("GET", "/tool-details?turn_id=" + enc(turn) + "&tool_call_id=" + enc(call) +
+            "&field=" + enc(field) + "&offset=" + offset.coerceAtLeast(0))
+    }
+
     fun historyPayload(limit: Int = 50, before: String? = null, sessionId: String? = null): JSONObject =
         request("GET", historyRequestPath(limit, before, sessionId))
 

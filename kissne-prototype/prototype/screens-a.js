@@ -579,7 +579,7 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 思考过程与工具调用共用一个折叠区。
+  /* 思考过程与工具调用分别展示、独立折叠。
      没有真实 reasoning/tool 事件时不创建折叠区，也不伪造“正在思考”。 */
   function cleanActivityText(value, fallback) {
     var text = String(value == null ? '' : value);
@@ -627,23 +627,12 @@
     return 'box';
   }
   function activityDetailText(value) {
-    var text = cleanActivityText(value, '');
-    text = text.replace(/```[a-z0-9_-]*\s*/gi, '').replace(/```/g, '').trim();
+    var text = String(value == null ? '' : value);
+
     text = text.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s'"]+/gi, '$1[已隐藏]');
     text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s'"]+/gi, '$1[已隐藏]');
-    if (text.length > 1200) text = text.slice(0, 1200) + '…';
-    return text;
-  }
 
-  function looksLikeToolTranscript(value) {
-    var text = cleanActivityText(value, '').trim();
-    return /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
-      || /^(terminal|tool)\s*[:：]?/i.test(text)
-      || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
-      || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
-      || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
-      || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text)
-      || /^\s*[🐍]?\s*Running code from\s+hermes_tools_import\b/i.test(text);
+    return text;
   }
 
   function looksLikeRuntimeControl(value) {
@@ -651,6 +640,55 @@
     return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
       || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
   }
+
+  /* ==== lane-routing:start ====
+     分道判定：一条内容归哪一道，只看结构化字段（type / role / presentation），
+     绝不看正文长相。返回值就是目标道：
+       'assistant'  助手正文 → 正常气泡
+       'commentary' 过程文本 → 活动区的过程说明
+       'reasoning'  思考     → 独立思考行
+       'tool'       工具调用 → 工具活动行
+       'notice'     系统提示 → 居中系统行（只给真系统提示）
+       'user'       用户正文 → 用户气泡
+       'ignore'     内部帧   → 不渲染
+       ''           控制类事件（pending/cancelled/approval）→ 由调用方按 type 单独处理
+     运行期只有这两个函数决定归属；tools/lane_routing_probe.js 在 node 下按同一张表断言。 */
+  var LANE_ASSISTANT = 'assistant', LANE_COMMENTARY = 'commentary', LANE_REASONING = 'reasoning',
+      LANE_TOOL = 'tool', LANE_NOTICE = 'notice', LANE_USER = 'user', LANE_IGNORE = 'ignore';
+  var TOOL_PRESENTATIONS = { tool_call: true, tool_progress: true, tool_result: true };
+  var NOTICE_PRESENTATIONS = { notice: true, session_reset: true };
+  function liveLaneFor(type, presentation) {
+    var t = String(type || '');
+    var p = String(presentation || '');
+    if (p === 'hidden' || p === 'internal_notification') return LANE_IGNORE;
+    if (TOOL_PRESENTATIONS[p]) return LANE_TOOL;
+    if (p === 'reasoning') return LANE_REASONING;
+    if (p === 'commentary') return LANE_COMMENTARY;
+    if (NOTICE_PRESENTATIONS[p] || t === 'notice') return LANE_NOTICE;
+    if (t === 'pending' || t === 'cancelled' || t === 'approval_required' || t === 'approval_resolved') return '';
+    /* presentation 是 assistant_text，或 delta/completed 没带 presentation：都是助手正文 */
+    return LANE_ASSISTANT;
+  }
+  function historyLaneFor(role, presentation) {
+    var r = String(role || '').toLowerCase();
+    var p = String(presentation || '');
+    if (p === 'hidden' || p === 'internal_notification') return LANE_IGNORE;
+    if (TOOL_PRESENTATIONS[p]) return LANE_TOOL;
+    if (p === 'reasoning') return LANE_REASONING;
+    if (p === 'commentary') return LANE_COMMENTARY;
+    if (NOTICE_PRESENTATIONS[p]) return LANE_NOTICE;
+    if (p === 'assistant_text') return r === 'user' ? LANE_USER : LANE_ASSISTANT;
+    /* 没有结构化 presentation 时按 role 兜底：只有 system 行才配居中灰行 */
+    if (r === 'system') return LANE_NOTICE;
+    if (r === 'tool') return LANE_TOOL;
+    if (r === 'user') return LANE_USER;
+    if (r === 'assistant') return LANE_ASSISTANT;
+    return '';
+  }
+  /* 探针入口：只暴露判定表本身，不改变运行期行为 */
+  K.laneForLiveEvent = liveLaneFor;
+  K.laneForHistoryRow = historyLaneFor;
+  /* ==== lane-routing:end ==== */
 
   var CHAT_LOG = [];
   /* 本地聊天缓存按会话隔离：
@@ -675,7 +713,11 @@
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
+          /* 活动流（工具/思考）是这条消息的一部分：落盘时必须一起带走，
+             否则列表从本地缓存重建（切会话、冷启动、重画）时这一块会整块消失。 */
+          activity: m.activity || '',
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
+          clientNotice: !!m.clientNotice,
           stableOrder: Number(m._stableOrder != null ? m._stableOrder : index),
           sid: sid
         };
@@ -748,6 +790,7 @@
   }
   function toolCallStatus(value, fallback) {
     var raw = cleanActivityText(value, '').toLowerCase();
+    if (/cancel|interrupt/.test(raw)) return 'cancelled';
     if (/fail|error|denied|reject/.test(raw)) return 'failed';
     if (/complete|completed|done|success|ok|result/.test(raw)) return 'completed';
     if (/running|progress|start|pending|call/.test(raw)) return 'running';
@@ -764,6 +807,24 @@
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
   }
+  function activityHasRows(state) {
+    return !!(state && (state.reasoning || (state.commentary && state.commentary.length) || (state.toolOrder && state.toolOrder.length)));
+  }
+  /* 工具/思考事件有时不带 turn_id（落进 'pending' 账本），而收尾事件带 turn_id：
+     收尾时若目标账本是空的，就把刚画出来的那份接管过来，否则一「完成」
+     就被空账本覆盖 → 工具行整块消失，没得点。 */
+  function adoptPendingActivity(turnId) {
+    var id = String(turnId || '');
+    if (!id || id === 'pending') return false;
+    if (activityHasRows(TURN_ACTIVITY[id])) return false;
+    var pend = TURN_ACTIVITY['pending'];
+    if (!activityHasRows(pend)) return false;
+    if (Date.now() - (Number(pend.updatedAt) || 0) > 300000) return false;
+    TURN_ACTIVITY[id] = pend;
+    delete TURN_ACTIVITY['pending'];
+    persistTurnActivity();
+    return true;
+  }
   function loadTurnActivity(sessionId) {
     try {
       var keyName = turnActivityStorageKeyFor(sessionId || TURN_ACTIVITY_SESSION);
@@ -776,10 +837,11 @@
         if (!row || typeof row !== 'object') return;
         var state = activityForTurn(id);
         state.reasoning = !!row.reasoning;
+        state.commentary = Array.isArray(row.commentary) ? row.commentary : [];
         state.reasoningText = activityDetailText(row.reasoningText || '');
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
-        (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
+        (Array.isArray(row.toolOrder) ? row.toolOrder : []).forEach(function (key) {
           var tool = row.toolCalls && row.toolCalls[key];
           if (!tool || typeof tool !== 'object') return;
           state.toolOrder.push(String(key));
@@ -789,6 +851,7 @@
             label: cleanActivityText(tool.label || '', '使用工具'),
             detail: activityDetailText(tool.detail || ''),
             result: activityDetailText(tool.result || ''),
+            detailRef: tool.detailRef, argumentsTruncated: !!tool.argumentsTruncated, resultTruncated: !!tool.resultTruncated,
             status: toolCallStatus(tool.status, 'completed')
           };
         });
@@ -823,10 +886,6 @@
       };
       state.toolCalls[key] = current;
       state.toolOrder.push(key);
-      if (state.toolOrder.length > 24) {
-        var dropped = state.toolOrder.shift();
-        delete state.toolCalls[dropped];
-      }
     }
     current.name = cleanActivityText(row.tool_name || row.tool || row.function_name || current.name, current.name);
     current.label = cleanActivityText(row.label || '', current.label)
@@ -835,6 +894,9 @@
     var result = activityDetailText(row.result || row.output || '');
     if (detail) current.detail = detail;
     if (result) current.result = result;
+    if (row.detail_ref) current.detailRef = row.detail_ref;
+    if (row.arguments_truncated != null) current.argumentsTruncated = !!row.arguments_truncated;
+    if (row.result_truncated != null) current.resultTruncated = !!row.result_truncated;
     current.status = toolCallStatus(row.status || phase, phase === 'result' ? 'completed' : 'running');
     if (phase === 'result' && current.status === 'running') current.status = 'completed';
     state.updatedAt = Date.now();
@@ -843,6 +905,11 @@
   }
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
+    if (kind === 'commentary') {
+      if (!state.commentary) state.commentary = [];
+      if (value && state.commentary[state.commentary.length - 1] !== value) state.commentary.push(String(value));
+      state.updatedAt = Date.now(); persistTurnActivity(); return true;
+    }
     if (kind === 'reasoning') {
       var reasoningText = activityDetailText(value || '');
       state.reasoning = true;
@@ -860,32 +927,7 @@
     return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
   }
   function activityRows(state, closed) {
-    var rows = [];
-    if (state.reasoning) {
-      rows.push('<div class="activity-item">'
-        + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(state.reasoningText || (closed ? '已完成这一步处理。' : '正在分析并处理当前请求。')) + '</div></div>');
-    }
-    (state.toolOrder || []).forEach(function (key) {
-      var tool = state.toolCalls[key];
-      if (!tool) return;
-      var status = closed && tool.status === 'running' ? 'completed' : tool.status;
-      var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
-      var detail = tool.detail || tool.name || tool.label || '工具调用';
-      if (tool.result) detail += '\n\n结果：' + tool.result;
-      var meta = tool.name ? '<span class="activity-toolname">' + esc(tool.name) + '</span>' : '';
-      rows.push('<div class="activity-item activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
-        + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-statusdot" aria-hidden="true"></span>'
-        + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
-        + '<span class="activity-copy"><span class="activity-label">' + esc(tool.label || '使用工具') + '</span>' + meta + '</span>'
-        + '<span class="activity-count">' + esc(statusText) + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
-    });
-    return rows.join('');
+    return window.KissneChatActivity.render(Object.assign({}, state, {done: closed}), '', esc);
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
@@ -901,10 +943,6 @@
     if (!raw) return '';
     var state = activityForTurn(turnId);
     state.done = true;
-    state.toolOrder.forEach(function (key) {
-      var tool = state.toolCalls[key];
-      if (tool && tool.status === 'running') tool.status = 'completed';
-    });
     state.updatedAt = Date.now();
     persistTurnActivity();
     var html = activityMarkupForTurn(turnId, true);
@@ -1023,7 +1061,7 @@
       + '<span class="chatdivider__orn">' + esc(pattern) + '</span></div>';
   }
   function sysMsg(html, time) {
-    return '<div class="msg msg--sys"><div class="msg__sysline">' + html + '</div>'
+    return '<div class="msg msg--sys"><details class="system-notice"><summary>Hermes 系统消息</summary><div class="msg__sysline">' + html + '</div></details>'
       + '<span class="msg__time is-center">' + (time || '') + '</span></div>';
   }
   function chatSortMs(m) {
@@ -1409,7 +1447,9 @@
         var html = esc(String(text || '系统通知'));
         var time = clockNow();
         append(sysMsg(html, time));
-        pushLog({ who: 'sys', html: html, time: time, localOnly: true });
+        /* clientNotice 标记：只有本客户端自己造的 sys 行才允许从本地缓存恢复，
+           这样任何正文都不可能经旧缓存被恢复成居中系统行。 */
+        pushLog({ who: 'sys', html: html, time: time, localOnly: true, clientNotice: true });
       }
       var T = window.KissneTransport;
       var live = !!(T && T.hasToken());
@@ -1746,7 +1786,9 @@
           return m && m.who !== 'sys' && m.localOwned && belongsToCurrent(m);
         });
         var clientSystem = CHAT_LOG.filter(function (m) {
-          return m && m.who === 'sys' && m.localOnly && belongsToCurrent(m);
+          /* 必须同时是本地 sys 行 + 本客户端亲手造的 notice：历史 sys 行(localOwned:false)
+             与任何别的行都进不来，正文不会被缓存恢复成居中系统行。 */
+          return m && m.who === 'sys' && m.localOnly && m.clientNotice === true && belongsToCurrent(m);
         });
         var localByRef = Object.create(null);
         var unboundLocal = [];
@@ -1782,41 +1824,48 @@
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
           if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
-          /* Prefer the transport's semantic presentation. Do not let persisted
-             commentary/tool frames fall through to generic assistant/system rows. */
-          if (historyPresentation === 'hidden' || historyPresentation === 'internal_notification') return;
-          if (historyPresentation === 'tool_call' || historyPresentation === 'tool_progress' || historyPresentation === 'tool_result') {
-            upsertToolActivity(historyTurnId || 'history', {
-              tool_call_id: item.tool_call_id || item.call_id || item.id || ('history-presented:' + String(CHAT_LOG.length)),
-              tool_name: item.tool_name || item.function_name || '',
-              arguments: item.arguments || '',
-              result: item.result || item.output || '',
-              detail: item.activity_detail || rawText,
-              status: item.status || (historyPresentation === 'tool_result' ? 'completed' : 'running')
-            }, historyPresentation === 'tool_result' ? 'result' : 'call');
-            return;
-          }
-          if (historyPresentation === 'commentary') {
-            if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
-            if (looksLikeToolTranscript(rawText)) {
+          /* 历史行的分道同样只认结构化字段（role + presentation），不看文本长相。 */
+          var historyLane = historyLaneFor(role, historyPresentation);
+          if (!historyLane || historyLane === LANE_IGNORE) return;
+          if (historyLane === LANE_TOOL) {
+            /* 工具道：有结构化 presentation 的用完整字段，老式 role=tool 行保持原来的简版。 */
+            if (TOOL_PRESENTATIONS[historyPresentation]) {
               upsertToolActivity(historyTurnId || 'history', {
-                tool_call_id: item.tool_call_id || ('history-commentary-tool:' + String(CHAT_LOG.length)),
+                tool_call_id: item.tool_call_id || item.call_id || item.id || ('history-presented:' + String(CHAT_LOG.length)),
+                tool_name: item.tool_name || item.function_name || '',
+                arguments: item.arguments || '',
+                result: item.result || item.output || '',
+                detail: item.activity_detail || rawText,
+                status: item.status || (historyPresentation === 'tool_result' ? 'completed' : 'running')
+              }, historyPresentation === 'tool_result' ? 'result' : 'call');
+            } else {
+              upsertToolActivity(historyTurnId || 'history', {
+                tool_call_id: item.tool_call_id || '',
                 tool_name: item.tool_name || '',
-                detail: rawText,
                 status: 'completed'
               }, 'result');
-              return;
             }
-            CHAT_LOG.push({
-              who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
-              time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
-              messageRef: messageRef, replyTo: historyReplyTo, quote: historyQuote,
-              turnId: historyTurnId, localOwned: false, optimistic: false
-            });
             return;
           }
+          if (historyLane === LANE_REASONING) {
+            /* 思考历史只回思考行，绝不落到助手气泡里。 */
+            if (rawText.trim()) appendActivity(historyTurnId || 'history', 'reasoning', rawText);
+            return;
+          }
+          if (historyLane === LANE_COMMENTARY) {
+            if (rawText.trim()) appendActivity(historyTurnId || 'history', 'commentary', rawText);
+            return;
+          }
+          if (historyLane === LANE_NOTICE) {
+            /* 只有真系统提示（role=system 没带结构化 presentation，或 presentation=notice/session_reset）
+               才走居中灰行。没有结构化字段的系统行若其实是旧式原始工具流水，就折进工具道，
+               绝不把助手正文画成系统消息。 */
+            CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
+            return;
+          }
+          /* 剩下的只可能是 user / assistant 正文：一律走气泡，不做任何文本长相判定。 */
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
-          if (role === 'assistant' && historyCalls.length) {
+          if (historyLane === LANE_ASSISTANT && historyCalls.length) {
             historyCalls.forEach(function (call, ci) {
               var fn = call && call.function && typeof call.function === 'object' ? call.function : {};
               upsertToolActivity(historyTurnId || 'history', {
@@ -1828,41 +1877,6 @@
             });
             if (!rawText.trim()) return;
           }
-          if (role === 'tool') {
-            upsertToolActivity(historyTurnId || 'history', {
-              tool_call_id: item.tool_call_id || '',
-              tool_name: item.tool_name || '',
-              status: 'completed'
-            }, 'result');
-            return;
-          }
-          if (role === 'system') {
-            /* Persisted Runtime control text is never conversation history. Hermes/CLI may also
-               persist tool progress as a system row; restore that as Activity, not a notice. */
-            if (looksLikeRuntimeControl(rawText)) return;
-            if (looksLikeToolTranscript(rawText)) {
-              upsertToolActivity(historyTurnId || 'history', {
-                tool_call_id: item.tool_call_id || ('history-system:' + String(CHAT_LOG.length)),
-                tool_name: item.tool_name || '',
-                detail: rawText,
-                status: 'completed'
-              }, 'result');
-              return;
-            }
-            CHAT_LOG.push({ who: 'sys', html: esc(rawText), time: historyClock(item.created_at), localOwned: false });
-            return;
-          }
-          if (role !== 'user' && role !== 'assistant') return;
-          if (role === 'assistant' && looksLikeRuntimeControl(rawText)) return;
-          if (role === 'assistant' && looksLikeToolTranscript(rawText)) {
-            upsertToolActivity(historyTurnId || 'history', {
-              tool_call_id: item.tool_call_id || ('history-assistant-tool:' + String(CHAT_LOG.length)),
-              tool_name: item.tool_name || '',
-              detail: rawText,
-              status: 'completed'
-            }, 'result');
-            return;
-          }
 
           var localRows = messageRef && localByRef[messageRef];
           if (localRows && localRows.length) {
@@ -1871,6 +1885,17 @@
               if (item.created_at != null) m.sortAt = item.created_at;
               m.day = chatDayKey(item.created_at || m.sortAt || Date.now());
               m.time = historyClock(item.created_at) || m.time;
+              /* 本地缓存行可能是旧格式、没带活动流：能补就补回来。
+                 否则列表重画（发下一条消息就会触发对账）时，工具/思考块会凭空消失。 */
+              if (!m.activity && role === 'assistant') {
+                var localTurnId = turnIdFromMessageRef(messageRef);
+                var localState = localTurnId ? TURN_ACTIVITY[localTurnId] : null;
+                if (activityHasRows(localState)) {
+                  localState.done = true;
+                  m.activity = activityMarkupForTurn(localTurnId, true);
+                }
+                if (!m.activity) m.activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
+              }
               CHAT_LOG.push(m);
             });
             delete localByRef[messageRef];
@@ -1881,7 +1906,7 @@
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
-            if (state && (state.reasoning || (state.toolOrder && state.toolOrder.length))) {
+            if (activityHasRows(state)) {
               state.done = true;
               activity = activityMarkupForTurn(turnId, true);
             }
@@ -1968,15 +1993,24 @@
         if (!el) return;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return;
+        var opened = Array.from(host.querySelectorAll('.activity-item.is-open')).map(function (item) { return item.getAttribute('data-activity-key'); });
         host.innerHTML = activityMarkupForTurn(turnId || 'pending', !!done);
+        Array.from(host.querySelectorAll('.activity-item')).forEach(function (item) {
+          if (opened.indexOf(item.getAttribute('data-activity-key')) < 0) return;
+          item.classList.add('is-open'); item.querySelector('.activity-detail').hidden = false;
+          item.querySelector('[data-activity-toggle]').setAttribute('aria-expanded', 'true');
+        });
       }
       function addActivity(el, kind, turnId, text) {
         if (!el || !appendActivity(turnId || 'pending', kind, text)) return;
         paintActivity(el, turnId, false);
       }
-      function finishActivities(el, turnId) {
+      function finishActivities(el, turnId, cancelled) {
         var state = activityForTurn(turnId || 'pending');
         state.done = true;
+        if (cancelled) state.toolOrder.forEach(function (key) {
+          if (state.toolCalls[key].status === 'running') state.toolCalls[key].status = 'cancelled';
+        });
         state.updatedAt = Date.now();
         persistTurnActivity();
         paintActivity(el, turnId, true);
@@ -2039,10 +2073,11 @@
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
 
-        /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
-           when Hermes actually sends reasoning text; tool progress follows the same rule. */
-        if (presentation === 'hidden' || presentation === 'internal_notification') return;
-        if (presentation === 'reasoning') {
+        /* 分道只看结构化字段：presentation/type 决定这条事件去哪一道，正文长相不参与判定。
+           Hidden/internal frames never enter user-visible chat. */
+        var lane = liveLaneFor(type, presentation);
+        if (lane === LANE_IGNORE) return;
+        if (lane === LANE_REASONING) {
           var reasoningText = cleanActivityText(event.text || '', '');
           if (!reasoningText) return;
           var reasoningEl = liveEnsure(turnId);
@@ -2054,7 +2089,8 @@
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
-        if (presentation === 'tool_progress' || presentation === 'tool_call' || presentation === 'tool_result') {
+        if (lane === LANE_TOOL) {
+          /* 工具道只由结构化 presentation 进入，任何正文都不会被文本长相塞进来。 */
           var toolActivity = event.activity && typeof event.activity === 'object'
             ? Object.assign({}, event.activity)
             : {};
@@ -2074,36 +2110,26 @@
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
-        if (presentation === 'commentary') {
-          /* Commentary is assistant process text, never a system notice. Keep it inside
-             the current assistant turn so Activity -> commentary -> final answer remains
-             one visual unit. Structured presentation wins over text-shape heuristics. */
+        if (lane === LANE_COMMENTARY) {
+          /* Commentary 是助手的「过程文本」，走 commentary 气泡：既不是工具行，也不是居中系统行。
+             这里不再看文本长相改道，只保留运行时控制短语的抑制（不画，也不改判）。 */
           var commentaryText = String(event.text || '').trim();
           if (!commentaryText || looksLikeRuntimeControl(commentaryText)) return;
-          if (looksLikeToolTranscript(commentaryText)) {
-            var commentaryToolEl = liveEnsure(turnId);
-            livePresence(commentaryToolEl, false);
-            addActivity(commentaryToolEl, 'tool', turnId, commentaryText);
-            liveAvatar(commentaryToolEl, 'work');
-            liveCurrentTurn = turnId || liveCurrentTurn;
-            if (turnId) livePendingTurns[turnId] = true;
-            liveSetCancel(!!liveCurrentTurn);
-            return;
-          }
           var commentaryEl = liveEnsure(turnId);
           livePresence(commentaryEl, false);
-          liveText(commentaryEl, commentaryText, true);
+          addActivity(commentaryEl, 'commentary', turnId, commentaryText);
           liveAvatar(commentaryEl, 'talk');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
           return;
         }
-        if (type === 'notice') {
-          /* Only an actual notice may use the centered system lane. Legacy raw tool
-             transcripts are suppressed rather than duplicated beside structured Activity. */
+        if (lane === LANE_NOTICE) {
+          /* 只有真系统提示（notice/session_reset/type=notice）能用居中灰行。
+             没有结构化 presentation 的旧式 notice 若其实是原始工具流水，只抑制不画；
+             带结构化 presentation 的 notice 是有意发的系统提示，照画。 */
           var noticeText = String(event.text || '');
-          if (looksLikeToolTranscript(noticeText)) return;
+
           appendSystemNotice(noticeText || '系统通知');
           return;
         }
@@ -2132,17 +2158,10 @@
 
         var el = liveEnsure(turnId);
         if (type === 'delta') {
+          /* 走到这里的 delta 一定是助手正文（assistant_text 或无 presentation）：
+             直接进气泡，不再做「文本像不像工具流水」的改判。 */
           var deltaText = String(event.text || '');
           if (looksLikeRuntimeControl(deltaText)) return;
-          if (looksLikeToolTranscript(deltaText)) {
-            livePresence(el, false);
-            addActivity(el, 'tool', turnId, deltaText);
-            liveAvatar(el, 'work');
-            liveCurrentTurn = turnId || liveCurrentTurn;
-            if (turnId) livePendingTurns[turnId] = true;
-            liveSetCancel(!!liveCurrentTurn);
-            return;
-          }
           livePresence(el, false);
           liveText(el, deltaText, true);
           liveAvatar(el, 'talk');
@@ -2154,6 +2173,8 @@
           setSessionStatus('');
           var finalText = String(event.text || '');
           if (looksLikeRuntimeControl(finalText)) {
+            /* 这不是助手正文，是运行时忙音（打断/排队 ack，无结构化 presentation）：
+               维持原来的「不画」，但也不改道到系统行。 */
             finishActivities(el, turnId);
             liveText(el, '', false);
             if (turnId) delete livePendingTurns[turnId];
@@ -2161,31 +2182,25 @@
             scheduleOutboxDrain();
             return;
           }
-          if (looksLikeToolTranscript(finalText)) {
-            addActivity(el, 'tool', turnId, finalText);
-            finishActivities(el, turnId);
-            liveText(el, '', false);
-            liveAvatar(el, 'work');
-          } else {
-            finishActivities(el, turnId);
-            var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
-            liveText(el, finalText, false);
-            liveAvatar(el, 'happy');
-            if (turnId && !liveCompleted[turnId]) {
-              liveCompleted[turnId] = true;
-              CHAT_LOG.push({
-                who: 'ai',
-                html: chatHtmlFromWire(finalText),
-                activity: finalActivity,
-                time: clockNow(),
-                day: chatDayKey(Date.now()),
-                messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
-                turnId: turnId,
-                localOwned: true,
-                optimistic: true
-              });
-              persistChatLog();
-            }
+          adoptPendingActivity(turnId);
+          finishActivities(el, turnId);
+          var finalActivity = rememberFinalActivity(finalText, turnId || 'pending');
+          liveText(el, finalText, false);
+          liveAvatar(el, 'happy');
+          if (turnId && !liveCompleted[turnId]) {
+            liveCompleted[turnId] = true;
+            CHAT_LOG.push({
+              who: 'ai',
+              html: chatHtmlFromWire(finalText),
+              activity: finalActivity,
+              time: clockNow(),
+              day: chatDayKey(Date.now()),
+              messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
+              turnId: turnId,
+              localOwned: true,
+              optimistic: true
+            });
+            persistChatLog();
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
@@ -2193,7 +2208,7 @@
         } else if (type === 'cancelled') {
           livePresence(el, false);
           setSessionStatus('');
-          finishActivities(el, turnId);
+          finishActivities(el, turnId, true);
           liveText(el, '', false);
           if (liveSteeredTurns[turnId]) delete liveSteeredTurns[turnId];
           liveAvatar(el, 'idle');
@@ -2757,7 +2772,28 @@
       if (upill) upill.addEventListener('click', onPill);
       list.addEventListener('scroll', onScroll);
       /* GPT 风格 Activity：默认只是浅灰动作行；点某一行，只展开这一项的详情。 */
-      function onActivityTap(e) {
+      async function onActivityTap(e) {
+        var more = e.target && e.target.closest ? e.target.closest('[data-tool-more]') : null;
+        if (more && list.contains(more)) {
+          e.preventDefault();
+          if (more.disabled) return;
+          more.disabled = true; more.textContent = '正在读取…';
+          var ref = {turn_id: more.getAttribute('data-turn'), tool_call_id: more.getAttribute('data-call')};
+          var field = more.getAttribute('data-tool-more');
+          var sessionAtRequest = CURRENT_SESSION_ID;
+          try {
+            if (!T || !T.toolDetails) throw new Error('unsupported');
+            var response = await T.toolDetails(ref.turn_id, ref.tool_call_id, field, Number(more.getAttribute('data-offset')));
+            if (sessionAtRequest !== CURRENT_SESSION_ID || !list.contains(more)) return;
+            var pre = more.parentNode.querySelector('[data-tool-field="' + field + '"]');
+            window.KissneChatActivity.addPage(ref, field, pre.textContent, response);
+            pre.textContent = window.KissneChatActivity.page(ref, field).text;
+            if (response.next_offset == null) more.remove();
+            else { more.setAttribute('data-offset', response.next_offset); more.textContent = '加载更多（完整内容已保留）'; }
+          } catch (err) { more.textContent = '读取失败，点击重试'; }
+          finally { more.disabled = false; }
+          return;
+        }
         var row = e.target && e.target.closest ? e.target.closest('[data-activity-toggle]') : null;
         if (!row || !list.contains(row)) return;
         e.preventDefault();

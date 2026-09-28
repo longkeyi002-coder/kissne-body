@@ -1942,3 +1942,18 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   pointer-events:none;animation:kstoast-in .16s ease-out
 }
 @keyframes kstoast-in{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
+
+/* Message lanes: process details never share the answer container. */
+.activity-section { margin: 10px 0; border-left: 2px solid var(--line, #dbe6ee); padding-left: 10px; }
+.activity-section--reasoning { border-color: #b6c8e4; }
+.activity-section--tools { border-color: #b6d7d0; }
+.activity-section__title { display: block; color: #657988; font-size: 11px; margin: 8px 0 5px; }
+.activity-row { width: 100%; text-align: left; gap: 8px; }
+.activity-row .activity-label { flex: 1; }
+.activity-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 12px/1.6 monospace; margin: 6px 0; }
+.activity-commentary { font-size: 13px; color: #627585; line-height: 1.6; }
+.activity-commentary p { margin: 4px 0; }
+.activity-more { border: 0; background: transparent; color: #416d9d; padding: 8px 0; font-size: 12px; }
+.system-notice { max-width: 100%; color: #73818c; font-size: 12px; }
+.system-notice summary { cursor: pointer; padding: 6px; }
+.system-notice .msg__sysline { white-space: pre-wrap; text-align: left; max-height: 240px; overflow: auto; padding: 8px 12px; }

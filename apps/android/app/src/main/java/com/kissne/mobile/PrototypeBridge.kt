@@ -120,7 +120,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "history", "search", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
+            "sessions", "history", "toolDetails", "search", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval",
             "adminStatus",
         )
@@ -142,6 +142,7 @@ class PrototypeBridge(
                 ensureDeviceToken(body.optBoolean("force", false))
             }
             "sessions" -> client().sessionsPayload()
+            "toolDetails" -> client().toolDetailsPayload(body.optString("turn_id"), body.optString("tool_call_id"), body.optString("field", "result"), body.optInt("offset", 0))
             "history" -> client().historyPayload(
                 limit = body.optInt("limit", 50),
                 before = body.optString("before").takeIf { it.isNotBlank() },

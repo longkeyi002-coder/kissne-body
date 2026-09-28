@@ -201,6 +201,14 @@ class DeviceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_reply_links_installation
                 ON reply_links (installation_id, created_at);
+            CREATE TABLE IF NOT EXISTS tool_details (
+                installation_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                call_id TEXT NOT NULL,
+                field TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY (installation_id, turn_id, call_id, field)
+            );
             CREATE TABLE IF NOT EXISTS seq_counters (
                 installation_id TEXT PRIMARY KEY,
                 next_seq        INTEGER NOT NULL
@@ -214,6 +222,29 @@ class DeviceStore:
         if self._conn is None:
             raise RuntimeError("device store is closed")
         return self._conn
+
+    def save_tool_detail(self, installation_id: str, turn_id: str, call_id: str,
+                         field: str, content: str) -> None:
+        with self._lock:
+            self._db().execute(
+                "INSERT OR REPLACE INTO tool_details VALUES (?, ?, ?, ?, ?)",
+                (self._installation(installation_id), turn_id, call_id, field, content))
+            self._db().commit()
+
+    def tool_detail_page(self, installation_id: str, turn_id: str, call_id: str,
+                         field: str, offset: int, limit: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._db().execute(
+                "SELECT substr(content, ?, ?), length(content) FROM tool_details "
+                "WHERE installation_id=? AND turn_id=? AND call_id=? AND field=?",
+                (offset + 1, limit, self._installation(installation_id), turn_id, call_id, field)
+            ).fetchone()
+        if row is None:
+            return None
+        text, total = str(row[0]), int(row[1])
+        end = offset + len(text)
+        return {"text": text, "offset": offset, "total_chars": total,
+                "next_offset": end if end < total else None}
 
     def close(self) -> None:
         """Release the database handle. Idempotent; a later call is a no-op."""

@@ -347,6 +347,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get("/tool-details", self._handle_tool_details)
         app.router.add_get(HISTORY_PATH, self._handle_history)
         app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
@@ -455,9 +456,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return "检查 Git 状态"
         if re.search(r"\b(pytest|gradle|lint|test)\b", low):
             return "运行相关检查"
-        file_matches = re.findall(r"([\\w./-]+\\.(?:py|js|ts|kt|css|html|md))", raw, re.I)
+        file_matches = re.findall(r"([\w./-]+\.(?:py|js|ts|kt|css|html|md))", raw, re.I)
         file_name = file_matches[-1] if file_matches else ""
-        if re.search(r"\\b(sed|cat|head|tail|read|reading|open)\\b", low) and file_name:
+        if re.search(r"\b(sed|cat|head|tail|read|reading|open)\b", low) and file_name:
             return f"读取 {file_name.rsplit('/', 1)[-1]}"
         if re.search(r"\b(grep|rg)\b", low):
             pattern = re.search(
@@ -752,7 +753,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # Pin the turn when the call starts and carry that anchor onto its completion. Without it
         # `_queue_event` resolves "newest pending turn" at delivery time, so a completion that lands
         # after the next turn opened (or a straggler flushed late) is filed under the wrong turn.
-        turn_id = self._structured_tool_turns.get(label_key)
+        turn_id = str((metadata or {}).get("reply_to_message_id") or "") or self._structured_tool_turns.get(label_key)
         if not turn_id:
             try:
                 turn_id = str(await asyncio.to_thread(
@@ -777,9 +778,23 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 status="failed" if failed else "completed",
                 label=self._structured_tool_labels.pop(label_key, "")
                 or self._semantic_activity_label(tool_name, None, None),
-                output=str(event.get("output") or "").strip() or None,
+                output=None,
             )
             presentation = "tool_result"
+
+        field = "arguments" if kind == "tool.started" else "result"
+        full_text = (json.dumps(args, ensure_ascii=False, indent=2, default=str)
+                     if kind == "tool.started" and args is not None
+                     else str(event.get("output") or "") if field == "result"
+                     else str(preview or tool_name))
+        # Preserve the complete detail before publishing its small preview.
+        if turn_id:
+            await asyncio.to_thread(self.device_store().save_tool_detail,
+                                    installation, turn_id, call_id, field, full_text)
+            activity["detail_ref"] = {"turn_id": turn_id, "tool_call_id": call_id}
+        activity["output" if field == "result" else field] = full_text[:2000]
+        activity[field + "_truncated"] = len(full_text) > 2000
+        activity[field + "_total_chars"] = len(full_text)
 
         message_id = await self._queue_event(
             installation, EVENT_DELTA, content="", target_turn_id=turn_id or None,
@@ -1290,6 +1305,28 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 })
         rows.sort(key=lambda item: (float(item.get("created_at") or 0), str(item["message_ref"])))
         return rows
+
+    async def _handle_tool_details(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        field = request.query.get("field", "result")
+        turn_id = request.query.get("turn_id", "")
+        call_id = request.query.get("tool_call_id", "")
+        if field not in {"arguments", "result"} or not turn_id or not call_id:
+            return _error_response("invalid_tool_detail", 400)
+        try:
+            offset = int(request.query.get("offset", "0"))
+            limit = int(request.query.get("limit", "2000"))
+        except ValueError:
+            return _error_response("invalid_page", 400)
+        if offset < 0 or limit < 1:
+            return _error_response("invalid_page", 400)
+        page = await asyncio.to_thread(self.device_store().tool_detail_page,
+                                       installation, turn_id, call_id, field, offset, min(limit, 10000))
+        if page is None:
+            return _error_response("tool_detail_not_found", 404)
+        return _json_response(page)
 
     async def _handle_history(self, request: web.Request) -> web.Response:
         installation = await self._authenticated_installation(request)

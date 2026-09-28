@@ -117,6 +117,7 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
+      toolDetails: function (turn, call, field, offset) { return nativeCall('toolDetails', {turn_id: turn, tool_call_id: call, field: field, offset: offset || 0}); },
       history: function (limit, before, sessionId) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || ''), session_id: String(sessionId || '') }); },
       search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
@@ -433,6 +434,10 @@
     pair: pair,
     ensureToken: ensureToken,
     sessions: sessions,
+    toolDetails: function (turn, call, field, offset) {
+      return request('/mobile/tool-details?turn_id=' + encodeURIComponent(turn) + '&tool_call_id=' + encodeURIComponent(call)
+        + '&field=' + encodeURIComponent(field) + '&offset=' + encodeURIComponent(offset || 0), {method: 'GET'});
+    },
     history: history,
     search: searchHistory,
     deleteSession: deleteSession,
