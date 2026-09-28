@@ -621,7 +621,7 @@ class DeviceStore:
                 raise
 
     def pending_turn_id(self, installation_id: str) -> Optional[str]:
-        """The newest still-pending turn of one installation (the turn a reply belongs to)."""
+        """The newest still-pending turn of one installation."""
         installation = self._installation(installation_id)
         with self._lock:
             row = self._db().execute(
@@ -630,7 +630,6 @@ class DeviceStore:
                 (installation, TURN_PENDING),
             ).fetchone()
         return str(row["turn_id"]) if row is not None else None
-
 
     def record_attachment_message(self, installation_id: str, turn_id: str, text: str,
                                   attachments: List[Dict[str, Any]]) -> None:

@@ -1172,6 +1172,20 @@ class TurnRunner:
         agent.tool_complete_callback = ctx.native_tool_complete_callback if ctx._native_slack_task_cards else None
         agent.step_callback = ctx._step_callback_sync if ctx._hooks_ref.loaded_hooks else None
         agent.stream_delta_callback = stream_delta_cb
+        # Provider-visible reasoning stays out of assistant text and is sent only
+        # to adapters that explicitly expose a separate reasoning lane.
+        reasoning_sender = getattr(ctx._status_adapter, "send_reasoning", None)
+        if callable(reasoning_sender):
+            def reasoning_cb(text: str) -> None:
+                if not ctx._run_still_current() or not str(text or ""):
+                    return
+                self._schedule(
+                    reasoning_sender(ctx._status_chat_id, str(text)),
+                    "reasoning_callback scheduling error",
+                )
+            agent.reasoning_callback = reasoning_cb
+        else:
+            agent.reasoning_callback = None
         agent.interim_assistant_callback = interim_assistant_cb if want_interim_messages else None
         agent.status_callback, agent.notice_callback = ctx._status_callback_sync, self._notice_callback_sync
         agent.notice_clear_callback = None  # sends can't be retracted

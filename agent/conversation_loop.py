@@ -1496,6 +1496,9 @@ def _run_conversation_turn(
     agent._ephemeral_reasoning_off = False
     agent._auth_pool_refresh_counts = {}
     agent._last_turn_usage = None
+    # One controlled recovery is allowed for a degenerate no-progress response.
+    # The counter is turn-scoped because gateway agents are reused across turns.
+    agent._degenerate_guard_recoveries = 0
 
     s = _LoopState(
         system_message=system_message, moa_config=moa_config,

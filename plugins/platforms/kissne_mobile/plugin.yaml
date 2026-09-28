@@ -1,4 +1,4 @@
-name: kissne-mobile-platform
+name: kissne_mobile-platform
 label: Kissne Mobile
 kind: platform
 version: 0.1.0
@@ -19,3 +19,5 @@ description: >
   The device is never given a Runtime management key.
 author: kissne-agent
 emoji: "📱"
+provides_tools:
+  - kissne_sticker_search

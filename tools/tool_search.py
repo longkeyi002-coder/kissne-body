@@ -44,7 +44,7 @@ class ToolSearchConfig:
     search_default_limit: int
     max_search_limit: int
     listing: str = "auto"  # "auto"/"on" = embed the manifest when it fits; "off" = bare bridge
-    listing_max_tokens: int = 4000  # budget = min(this, threshold_pct% of context)
+    listing_max_tokens: int = 1800  # budget = min(this, threshold_pct% of context)
     # None = curated default; an explicit list replaces it wholesale ([] = defer no core tools).
     defer_tools: Optional[frozenset] = None
 
@@ -67,7 +67,7 @@ class ToolSearchConfig:
                 raw.get("search_default_limit"), 5, 1, max_search_limit),
             max_search_limit=max_search_limit,
             listing=_tri_state(raw.get("listing", "auto")),
-            listing_max_tokens=_clamped_int(raw.get("listing_max_tokens"), 4000, 200, 60000),
+            listing_max_tokens=_clamped_int(raw.get("listing_max_tokens"), 1800, 200, 60000),
             defer_tools=(frozenset(str(n).strip() for n in defer_raw if str(n).strip())
                          if isinstance(defer_raw, (list, tuple, set)) else None))
 
@@ -597,7 +597,7 @@ import threading  # noqa: F401,E402
 def build_catalog_listing(
     deferrable: List[Dict[str, Any]],
     *,
-    max_tokens: int = 4000,
+    max_tokens: int = 1800,
 ) -> Optional[str]:
     """Render a skills-style manifest of the deferred catalog.
 

@@ -1498,6 +1498,14 @@ class GatewayAdapterLifecycleMixin:
             )
         with _log_suppressed(logging.DEBUG, "Platform registry lookup for '%s' failed: %s", platform.value):
             from gateway.platform_registry import platform_registry
+            if not platform_registry.is_registered(platform.value):
+                # GatewayRunner is also constructed directly by tests, embedders and service
+                # entry points that do not pass through the interactive CLI bootstrap.  Bundled
+                # platform adapters are registered as deferred loaders by plugin discovery, so a
+                # direct production runner must make that discovery boundary explicit before it
+                # concludes that an enabled plugin platform has no adapter.
+                from hermes_cli.plugins import discover_plugins
+                discover_plugins()
             if platform_registry.is_registered(platform.value):
                 adapter = platform_registry.create_adapter(platform.value, config)
                 if adapter is None:  # registered but failed — never fall through to built-ins

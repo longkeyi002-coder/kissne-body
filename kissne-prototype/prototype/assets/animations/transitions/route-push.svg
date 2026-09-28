@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+<style>
+  .s{animation:ksnpush 1.8s ease-in-out infinite}
+  @keyframes ksnpush{0%{transform:translateX(40px);opacity:0}40%,100%{transform:translateX(0);opacity:1}}
+  @media (prefers-reduced-motion: reduce){.s{animation:none;opacity:1}}
+</style>
+  <rect x="3" y="3" width="114" height="54" rx="12" fill="#ECECF1" stroke="#CFCFD8" stroke-width="2"/>
+  <g class="s">
+    <rect x="14" y="14" width="92" height="8" rx="4" fill="#CFCFD8"/>
+    <rect x="14" y="28" width="70" height="8" rx="4" fill="#CFCFD8"/>
+    <rect x="14" y="42" width="84" height="8" rx="4" fill="#CFCFD8"/>
+  </g>
+  <text x="60" y="56" text-anchor="middle" font-family="sans-serif" font-size="7" fill="#9A9AA3" letter-spacing="1">push · 占位</text>
+</svg>

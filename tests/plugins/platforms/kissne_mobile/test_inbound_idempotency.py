@@ -181,3 +181,58 @@ def test_an_unknown_installation_cannot_reuse_anothers_message_id(tmp_path):
     assert recorder.count == 2, (
         "the second installation's message was swallowed as a duplicate of the first "
         f"(%d turns for 2 devices)" % recorder.count)
+
+
+def test_real_photo_upload_reaches_runtime_as_media(tmp_path):
+    async def post_media(port, token, *, message_id, content=b"image-bytes"):
+        import aiohttp
+
+        form = aiohttp.FormData()
+        form.add_field("message_id", message_id)
+        form.add_field("kind", "photo")
+        form.add_field("file_name", "羊羊照片.png")
+        form.add_field("mime_type", "image/png")
+        form.add_field(
+            "file",
+            content,
+            filename="upload.bin",
+            content_type="image/png",
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{port}/messages",
+                data=form,
+                headers=headers,
+            ) as response:
+                return response.status, await response.json()
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            recorder = Recorder()
+            adapter.set_message_handler(recorder)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                first = await post_media(port, token, message_id="media-1")
+                retry = await post_media(port, token, message_id="media-1")
+            finally:
+                await stop(adapter)
+        return first, retry, recorder
+
+    first, retry, recorder = run(scenario())
+    assert first[0] == 202, first
+    assert retry[0] == 200 and retry[1].get("duplicate") is True, retry
+    assert recorder.count == 1
+    event = recorder.events[0]
+    assert event.message_type.value == "photo"
+    assert event.media_types == ["image/png"]
+    assert len(event.media_urls) == 1
+    from pathlib import Path
+    path = Path(event.media_urls[0])
+    assert path.exists() and path.read_bytes() == b"image-bytes"
+    assert event.text == "[照片：羊羊照片.png]"

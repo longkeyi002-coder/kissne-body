@@ -249,7 +249,7 @@ SCENARIOS: List[Dict[str, Any]] = [
 
 
 def setup_isolated_home(enabled: bool, listing: str = "off",
-                        listing_max_tokens: int = 4000,
+                        listing_max_tokens: int = 1800,
                         model: str = "anthropic/claude-haiku-4.5") -> Path:
     """Create a fresh ~/.hermes/ for one test, copying minimal credentials.
 

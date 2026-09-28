@@ -7,6 +7,11 @@ on:
 jobs:
   check:
     name: JS & TS checks
+    # `ubuntu-latest-32-core` is a larger runner this fork cannot provision (same
+    # reason as the 96-core lane in tests.yml), so this lane queued forever
+    # instead of reporting. Re-enable with the repo variable
+    # KISSNE_ENABLE_LARGER_RUNNERS=true once larger runners exist.
+    if: vars.KISSNE_ENABLE_LARGER_RUNNERS == 'true'
     # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
     # of check payload over 4-core runners. It paid about 371s of repeated
     # setup to do it: 14 checkouts, 14 node installs, 14 node_modules
