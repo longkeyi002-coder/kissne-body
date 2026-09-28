@@ -113,9 +113,12 @@ class MemoryStore:
         sql+=" ORDER BY event_time DESC,id DESC LIMIT ?"; args.append(max(1,min(int(limit),200)))
         with self._lock: return [dict(r) for r in self._conn.execute(sql,args).fetchall()]
 
-    def recall(self,query,query_embedding=None,limit=30,memory_space=None):
+    def recall(self,query,query_embedding=None,limit=30,memory_space=None,memory_spaces=None):
         q=(query or "").strip().lower()
         rows=self.list_memories(limit=500,status="active",memory_space=memory_space)
+        allowed={str(x) for x in (memory_spaces or []) if str(x)}
+        if allowed:
+            rows=[row for row in rows if str(row.get("memory_space") or "") in allowed]
         now=time.time(); ranked=[]
         for row in rows:
             hay=(str(row["summary"])+" "+str(row["quote"])).lower()
