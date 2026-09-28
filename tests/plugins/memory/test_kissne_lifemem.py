@@ -111,3 +111,24 @@ def test_timeline_rejects_unknown_memory_space(tmp_path):
     with pytest.raises(ValueError,match="invalid memory_space"):
         db.timeline(memory_space="fiction_leak")
     db.close()
+
+
+def test_global_store_recall_filters_spaces_without_splitting_database(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    db=MemoryStore(str(tmp_path/"memory.db"))
+    reality=db.add_memory("现实里的蓝色房间","现实证据",memory_space="reality")
+    world=db.add_memory("小机星里的蓝色房间","虚构设定",memory_space="ai_world")
+    rows=db.recall("蓝色房间",limit=10,memory_spaces=["reality","relationship","ai_self"])
+    assert [row["id"] for row in rows]==[reality]
+    all_rows=db.recall("蓝色房间",limit=10)
+    assert {row["id"] for row in all_rows}=={reality,world}
+    db.close()
+
+
+def test_recall_space_policy_keeps_ai_world_out_of_reality_context():
+    from plugins.memory.lifemem import _recall_spaces
+    assert "ai_world" not in _recall_spaces("我现实里喜欢什么颜色")
+    assert "reality" in _recall_spaces("我现实里喜欢什么颜色")
+    world=_recall_spaces("小机星的设定里狐狸住在哪里")
+    assert "ai_world" in world
+    assert "reality" not in world
