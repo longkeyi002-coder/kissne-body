@@ -1893,3 +1893,16 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   border:0;border-top:1px solid var(--line);background:transparent;font:inherit;font-size:13px;color:var(--ink);text-align:left}
 .webai-sheet__item span{font-size:10px;color:var(--ink-3);font-weight:400}
 .webai-sheet__note{padding:9px 4px 2px;border-top:1px solid var(--line);font-size:10px;line-height:1.45;color:var(--ink-3)}
+
+/* Lifemem journal timeline */
+.memorysearch{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;color:var(--ink)}
+.memtimeline{display:flex;flex-direction:column;padding:8px 0 24px 8px}
+.memtimeline__item{position:relative;display:grid;grid-template-columns:14px 72px 1fr;gap:8px;min-height:72px;text-decoration:none;color:inherit}
+.memtimeline__item:before{content:"";position:absolute;left:6px;top:17px;bottom:-4px;width:1px;background:var(--line)}
+.memtimeline__item:last-child:before{display:none}
+.memtimeline__dot{width:9px;height:9px;margin-top:8px;border:2px solid var(--g6);border-radius:50%;background:var(--g1);z-index:1}
+.memtimeline__time{padding-top:5px;font-size:10.5px;line-height:1.45;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.memtimeline__card{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--g1)}
+.memtimeline__card b{font-size:13px;line-height:1.5;font-weight:650;color:var(--ink)}
+.memtimeline__card span{font-size:10.5px;color:var(--ink-3)}
+.chip.is-on{border-color:var(--g6);color:var(--g6);background:var(--g2)}
