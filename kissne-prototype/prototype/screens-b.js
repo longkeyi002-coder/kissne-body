@@ -11,169 +11,88 @@
       banner = K.banner, kv = K.kv, toast = K.toast, esc = K.esc;
 
   /* =====================================================================
-     07 记忆库页
+     07 记忆库页 — Lifemem external provider journal projection
      ===================================================================== */
-  var MEMORY_STATES = [
-    { key: 'list', label: '记忆列表' },
-    { key: 'detail', label: '记忆详情' },
-    { key: 'delete-confirm', label: '删除确认' }
+  var MEMORY_STATES = [{ key: 'list', label: '时间线' }, { key: 'detail', label: '记忆详情' }];
+  var MEMORY_INDEX = { items: [], loaded: false, error: '', space: '', query: '' };
+  var MEMORY_SPACES = [
+    { k: '', v: '全部' }, { k: 'reality', v: '现实' }, { k: 'relationship', v: '关系' },
+    { k: 'ai_self', v: '叶青栩' }, { k: 'ai_world', v: '小机星' }
   ];
-  var MEMORY_INDEX = { items: [], loaded: false, error: '', providerConfigured: false, provider: '' };
 
   function memoryItemById(id) {
-    id = String(id || '');
-    for (var i = 0; i < MEMORY_INDEX.items.length; i++) {
-      if (String(MEMORY_INDEX.items[i].id || '') === id) return MEMORY_INDEX.items[i];
-    }
-    return null;
+    id=String(id||'');
+    return MEMORY_INDEX.items.find(function(item){ return String(item.id||'')===id; }) || null;
   }
-  function memoryTitle(item) {
-    var text = String(item && item.text || '').replace(/\s+/g, ' ').trim();
-    return text.length > 34 ? text.slice(0, 34) + '…' : (text || '未命名记忆');
+  function memoryTitle(item) { return String(item && item.title || '未命名记忆'); }
+  function memorySpaceLabel(space) {
+    var row=MEMORY_SPACES.find(function(x){return x.k===String(space||'');});
+    return row ? row.v : String(space||'');
   }
-  function memoryListHtml() {
-    if (!MEMORY_INDEX.loaded && MEMORY_INDEX.error) {
-      return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div>'
-        + '<div class="mempty__s">这里只显示 Hermes 的真实记忆，不再使用演示数据。</div></div>';
-    }
-    if (!MEMORY_INDEX.loaded) {
-      return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
-    }
-    if (!MEMORY_INDEX.providerConfigured) {
-      return '<div class="mempty"><div class="mempty__t">未配置记忆供应商</div>'
-        + '<div class="mempty__s">当前不会显示 Hermes 的 MEMORY.md / USER.md，也不会生成演示记忆。</div></div>';
-    }
-    if (!MEMORY_INDEX.items.length) {
-      return '<div class="mempty"><div class="mempty__t">暂无记忆</div>'
-        + '<div class="mempty__s">已连接记忆供应商，但目前没有可显示的记忆。</div></div>';
-    }
-    return card(MEMORY_INDEX.items.map(function (item) {
-      var source = item.target === 'user' ? '用户资料' : '长期记忆';
-      return listRow({
-        title: memoryTitle(item),
-        sub: source + ' · ' + String(item.source || ''),
-        to: '#/memory?state=detail&id=' + encodeURIComponent(String(item.id || '')),
-        right: icon('chevron', 16)
-      });
-    }).join(''), { tight: true });
+  function memoryTime(value) {
+    var n=Number(value||0); if(!n) return '';
+    var d=new Date(n*1000); return isNaN(d.getTime()) ? '' : d.toLocaleString([], {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  }
+  function memoryTimelineHtml() {
+    if(!MEMORY_INDEX.loaded && MEMORY_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div><div class="mempty__s">Lifemem 当前不可用。</div></div>';
+    if(!MEMORY_INDEX.loaded) return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
+    if(!MEMORY_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">暂无匹配记忆</div><div class="mempty__s">时间线只展示 Lifemem 已确认写入的长期记忆。</div></div>';
+    return '<div class="memtimeline">'+MEMORY_INDEX.items.map(function(item){
+      return '<a class="memtimeline__item" data-nav="#/memory?state=detail&id='+encodeURIComponent(String(item.id||''))+'">'
+        +'<span class="memtimeline__dot"></span><span class="memtimeline__time">'+esc(memoryTime(item.occurred_at))+'</span>'
+        +'<span class="memtimeline__card"><b>'+esc(memoryTitle(item))+'</b>'
+        +'<span>'+esc(memorySpaceLabel(item.memory_space))+(item.emotion?' · '+esc(item.emotion):'')+'</span></span></a>';
+    }).join('')+'</div>';
   }
 
   K.registerScreen({
-    no: '07', id: 'memory', name: '记忆库页', route: '#/memory', tab: null,
-    purpose: '直接读取 Hermes 的真实 MEMORY.md / USER.md；支持查看和真实删除，不展示演示记忆。',
-    out: ['#/home', '#/memory?state=detail'],
-    states: MEMORY_STATES,
-    render: function (ctx) {
-      var s = ctx.state || 'list';
-      var id = ctx.params && ctx.params.get('id') || '';
-      var item = memoryItemById(id);
-
-      if (s === 'detail' || s === 'delete-confirm') {
-        var detail = item
-          ? '<div class="memdetail"><h2 class="memdetail__t">' + esc(memoryTitle(item)) + '</h2>'
-            + '<div class="memdetail__meta">' + chip(item.target === 'user' ? '用户资料' : '长期记忆')
-            + '<span class="muted">' + esc(item.source || '') + '</span></div>'
-            + '<p class="memdetail__body">' + esc(item.text || '') + '</p></div>'
-          : '<div class="mempty"><div class="mempty__t">这条记忆不存在</div></div>';
-        return '<div class="screen">'
-          + appbar({ title: '记忆详情', back: '#/memory' })
-          + '<div class="screen__body">' + detail + '</div>'
-          + (item ? '<div class="screen__foot">'
-              + btn('删除记忆', { to: '#/memory?state=delete-confirm&id=' + encodeURIComponent(id), block: true, kind: 'danger' })
-              + '</div>' : '')
-          + (s === 'delete-confirm' && item ? modal({
-              title: '删除这条记忆？',
-              kind: 'danger',
-              body: '<p>将从 Hermes 的真实记忆文件中永久删除这条内容。</p>',
-              actions: [
-                { label: '取消', to: '#/memory?state=detail&id=' + encodeURIComponent(id), kind: 'ghost' },
-                { label: '确认删除', action: 'delete-memory', kind: 'danger' }
-              ]
-            }) : '')
-          + '</div>';
+    no:'07', id:'memory', name:'记忆库页', route:'#/memory', tab:null,
+    purpose:'读取 Lifemem 外部记忆供应商的真实时间线；不读取 Hermes builtin MEMORY.md / USER.md。',
+    out:['#/home','#/memory?state=detail'], states:MEMORY_STATES,
+    render:function(ctx){
+      var state=ctx.state||'list', id=ctx.params&&ctx.params.get('id')||'', item=memoryItemById(id);
+      if(state==='detail'){
+        var detail=item
+          ? '<div class="memdetail"><h2 class="memdetail__t">'+esc(memoryTitle(item))+'</h2>'
+            +'<div class="memdetail__meta">'+chip(memorySpaceLabel(item.memory_space))+'<span class="muted">'+esc(memoryTime(item.occurred_at))+'</span></div>'
+            +'<p class="memdetail__body">'+esc(item.body||'')+'</p>'
+            +(item.source_ref&&item.source_ref.session_id?'<div class="muted">来源会话 '+esc(item.source_ref.session_id)+' · turn '+esc(item.source_ref.turn_id||0)+'</div>':'')
+            +'</div>'
+          : '<div class="mempty"><div class="mempty__t">这条记忆不在当前时间线中</div></div>';
+        return '<div class="screen">'+appbar({title:'记忆详情',back:'#/memory'})+'<div class="screen__body">'+detail+'</div></div>';
       }
-
-      return '<div class="screen">'
-        + appbar({
-            title: '记忆库',
-            sub: MEMORY_INDEX.loaded
-              ? (MEMORY_INDEX.providerConfigured
-                  ? ('记忆供应商 · ' + MEMORY_INDEX.items.length + ' 条')
-                  : '未配置记忆供应商')
-              : '正在检查记忆供应商',
-            back: '#/home',
-            right: '<button class="iconbtn" data-memory-refresh aria-label="刷新">' + icon('sync') + '</button>'
-          })
-        + '<div class="screen__body"><div class="adminnotice" data-memory-notice hidden></div>'
-        + '<div data-memory-list>' + memoryListHtml() + '</div></div></div>';
+      var filters='<div class="chips">'+MEMORY_SPACES.map(function(row){
+        return '<button class="chip'+(MEMORY_INDEX.space===row.k?' is-on':'')+'" data-memory-space="'+esc(row.k)+'">'+esc(row.v)+'</button>';
+      }).join('')+'</div>';
+      return '<div class="screen">'+appbar({title:'记忆库',sub:'Lifemem · 时间线',back:'#/home',
+        right:'<button class="iconbtn" data-memory-refresh aria-label="刷新">'+icon('sync')+'</button>'})
+        +'<div class="screen__body"><div class="searchbar"><span>'+icon('search',16)+'</span>'
+        +'<input class="memorysearch" data-memory-search placeholder="搜索时间线" value="'+esc(MEMORY_INDEX.query)+'"></div>'
+        +filters+'<div class="adminnotice" data-memory-notice hidden></div><div data-memory-list>'+memoryTimelineHtml()+'</div></div></div>';
     },
-    mount: function (root, ctx) {
-      var T = window.KissneTransport;
-      var host = root.querySelector('[data-memory-list]');
-      var refresh = root.querySelector('[data-memory-refresh]');
-      var notice = root.querySelector('[data-memory-notice]');
-      var del = root.querySelector('[data-action="delete-memory"]');
-      var stopped = false;
-
-      function show(text) {
-        if (!notice) return;
-        notice.hidden = !text;
-        notice.textContent = text || '';
+    mount:function(root,ctx){
+      var T=window.KissneTransport, host=root.querySelector('[data-memory-list]'), refresh=root.querySelector('[data-memory-refresh]');
+      var search=root.querySelector('[data-memory-search]'), notice=root.querySelector('[data-memory-notice]'), stopped=false, timer=0;
+      function show(text){if(notice){notice.hidden=!text;notice.textContent=text||'';}}
+      function paint(){if(host&&!stopped)host.innerHTML=memoryTimelineHtml();}
+      async function reload(){
+        if(!T||typeof T.memoryTimeline!=='function'){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error='transport_unavailable';paint();return;}
+        show('正在读取 Lifemem…');
+        try{
+          if(typeof T.ensureToken==='function') await T.ensureToken(false);
+          var payload=await T.memoryTimeline({limit:100,space:MEMORY_INDEX.space,q:MEMORY_INDEX.query});
+          MEMORY_INDEX.items=Array.isArray(payload&&payload.items)?payload.items:[];
+          MEMORY_INDEX.loaded=true; MEMORY_INDEX.error=''; if(!stopped){show('');paint();}
+        }catch(err){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error=String(err&&err.message||'memory_unavailable');if(!stopped){show('记忆库读取失败');paint();}}
       }
-      function paint() {
-        if (host && !stopped) host.innerHTML = memoryListHtml();
-      }
-      async function reload() {
-        if (!T || typeof T.memories !== 'function') {
-          MEMORY_INDEX.loaded = false;
-          MEMORY_INDEX.error = 'transport_unavailable';
-          paint();
-          return;
-        }
-        show('正在读取真实记忆…');
-        try {
-          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          var payload = await T.memories();
-          MEMORY_INDEX.items = Array.isArray(payload && payload.items) ? payload.items : [];
-          MEMORY_INDEX.providerConfigured = !!(payload && payload.provider_configured);
-          MEMORY_INDEX.provider = String(payload && payload.provider || '');
-          MEMORY_INDEX.loaded = true;
-          MEMORY_INDEX.error = '';
-          if (!stopped) { show(''); paint(); }
-        } catch (err) {
-          MEMORY_INDEX.loaded = false;
-          MEMORY_INDEX.error = String(err && err.message || 'memory_unavailable');
-          if (!stopped) { show('记忆库读取失败'); paint(); }
-        }
-      }
-      async function onDelete(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var id = ctx && ctx.params && ctx.params.get('id') || '';
-        if (!id || !T || typeof T.deleteMemory !== 'function') return;
-        del.disabled = true;
-        try {
-          await T.deleteMemory(id);
-          MEMORY_INDEX.items = MEMORY_INDEX.items.filter(function (entry) {
-            return String(entry.id || '') !== String(id);
-          });
-          location.hash = '#/memory';
-        } catch (err) {
-          del.disabled = false;
-          del.textContent = '删除失败 · 重试';
-        }
-      }
-      function onRefresh(e) { e.preventDefault(); e.stopPropagation(); reload(); }
-
-      if (refresh) refresh.addEventListener('click', onRefresh);
-      if (del) del.addEventListener('click', onDelete);
-      if ((ctx && ctx.state || 'list') === 'list') reload();
-
-      return function () {
-        stopped = true;
-        if (refresh) refresh.removeEventListener('click', onRefresh);
-        if (del) del.removeEventListener('click', onDelete);
-      };
+      function onRefresh(e){e.preventDefault();reload();}
+      function onSpace(e){var b=e.target.closest('[data-memory-space]');if(!b)return;MEMORY_INDEX.space=String(b.getAttribute('data-memory-space')||'');location.hash='#/memory';reload();}
+      function onSearch(){clearTimeout(timer);timer=setTimeout(function(){MEMORY_INDEX.query=String(search&&search.value||'').trim();reload();},320);}
+      if(refresh)refresh.addEventListener('click',onRefresh);
+      root.addEventListener('click',onSpace);
+      if(search)search.addEventListener('input',onSearch);
+      if((ctx&&ctx.state||'list')==='list')reload();
+      return function(){stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);if(search)search.removeEventListener('input',onSearch);};
     }
   });
 
