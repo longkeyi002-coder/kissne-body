@@ -4,7 +4,7 @@ import importlib
 def test_lifemem_is_single_external_provider_contract():
     mod=importlib.import_module("plugins.memory.lifemem")
     p=mod.LifememProvider()
-    assert p.name=="kissne-lifemem"
+    assert p.name=="lifemem"
     assert p._config["core_token_budget"]==0
     assert p._config["recall_token_budget"]==300
     assert not hasattr(p,"on_memory_write") or p.on_memory_write.__func__.__qualname__.startswith("MemoryProvider.")
@@ -37,3 +37,20 @@ def test_no_physical_delete_tool_exposed():
     names={x["name"] for x in mod.LifememProvider().get_tool_schemas()}
     assert "lifemem_forget" in names
     assert "lifemem_delete" not in names
+
+
+def test_lifemem_setup_selects_external_provider_and_disables_builtin(tmp_path, monkeypatch):
+    mod=importlib.import_module("plugins.memory.lifemem")
+    captured={}
+    monkeypatch.setattr("hermes_cli.config.save_config", lambda data, merge_existing=True: captured.update(data))
+    mod.LifememProvider().save_config({}, str(tmp_path))
+    memory=captured["memory"]
+    assert memory["provider"]=="lifemem"
+    assert memory["memory_enabled"] is False
+    assert memory["user_profile_enabled"] is False
+
+def test_lifemem_is_discoverable_by_directory_name():
+    from plugins.memory import load_memory_provider
+    p=load_memory_provider("lifemem", register_skills=False)
+    assert p is not None
+    assert p.name=="lifemem"
