@@ -1,0 +1,136 @@
+"""SQLite store for Kissne Lifemem.
+
+Session ids are references to Hermes SessionStore ids. Lifemem never creates or
+owns the conversation lifecycle.
+"""
+from __future__ import annotations
+import json, math, sqlite3, threading, time
+from array import array
+from typing import Any, Dict, List, Optional
+
+def _pack(v):
+    if not v: return None
+    return array("f",[float(x) for x in v]).tobytes()
+
+def _unpack(v):
+    if not v: return None
+    a=array("f"); a.frombytes(v); return list(a)
+
+def _cos(a,b):
+    if not a or not b or len(a)!=len(b): return 0.0
+    dot=sum(x*y for x,y in zip(a,b)); na=sum(x*x for x in a); nb=sum(y*y for y in b)
+    return dot/((na*nb)**0.5) if na and nb else 0.0
+
+class MemoryStore:
+    def __init__(self,path:str):
+        self._lock=threading.RLock()
+        self._conn=sqlite3.connect(path,check_same_thread=False)
+        self._conn.row_factory=sqlite3.Row
+        with self._lock:
+            self._conn.executescript("""
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS sessions(
+              id TEXT PRIMARY KEY,title TEXT DEFAULT '',platform TEXT DEFAULT '',
+              started_at REAL,last_active_at REAL,ended_at REAL);
+            CREATE TABLE IF NOT EXISTS turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,ts REAL NOT NULL,
+              user_content TEXT DEFAULT '',assistant_content TEXT DEFAULT '');
+            CREATE INDEX IF NOT EXISTS idx_lifemem_turn_session ON turns(session_id,id);
+            CREATE TABLE IF NOT EXISTS memories(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,summary TEXT NOT NULL,quote TEXT NOT NULL,
+              memory_space TEXT NOT NULL DEFAULT 'reality',category TEXT DEFAULT 'general',
+              emotion TEXT DEFAULT '',importance REAL DEFAULT .5,confirmed INTEGER DEFAULT 0,
+              source TEXT DEFAULT 'auto',session_id TEXT DEFAULT '',turn_id INTEGER DEFAULT 0,
+              status TEXT DEFAULT 'active',event_time REAL,created_at REAL,updated_at REAL,
+              last_recall_at REAL,access_count INTEGER DEFAULT 0,embedding BLOB);
+            CREATE INDEX IF NOT EXISTS idx_lifemem_status_time ON memories(status,event_time DESC);
+            CREATE TABLE IF NOT EXISTS checkpoints(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,digest TEXT UNIQUE,
+              payload TEXT NOT NULL,created_at REAL);
+            """)
+            self._conn.commit()
+
+    def close(self):
+        with self._lock:
+            self._conn.commit(); self._conn.close()
+
+    def touch_session(self,session_id,title="",platform=""):
+        if not session_id: return
+        now=time.time()
+        with self._lock:
+            self._conn.execute("""INSERT INTO sessions(id,title,platform,started_at,last_active_at)
+              VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+              last_active_at=excluded.last_active_at,
+              title=CASE WHEN excluded.title<>'' THEN excluded.title ELSE sessions.title END,
+              platform=CASE WHEN excluded.platform<>'' THEN excluded.platform ELSE sessions.platform END""",
+              (session_id,title,platform,now,now))
+            self._conn.commit()
+
+    def add_turn(self,session_id,user_content,assistant_content):
+        with self._lock:
+            cur=self._conn.execute("INSERT INTO turns(session_id,ts,user_content,assistant_content) VALUES(?,?,?,?)",
+                                   (session_id,time.time(),user_content or "",assistant_content or ""))
+            self._conn.commit(); return int(cur.lastrowid)
+
+    def add_memory(self,summary,quote,*,memory_space="reality",category="general",emotion="",
+                   importance=.5,confirmed=False,source="auto",session_id="",turn_id=0,
+                   event_time=None,embedding=None):
+        summary=(summary or "").strip(); quote=(quote or "").strip()
+        if not summary or not quote: raise ValueError("summary and evidence quote are required")
+        if memory_space not in {"reality","relationship","ai_self","ai_world"}:
+            raise ValueError("invalid memory_space")
+        now=time.time()
+        with self._lock:
+            cur=self._conn.execute("""INSERT INTO memories(
+              summary,quote,memory_space,category,emotion,importance,confirmed,source,
+              session_id,turn_id,status,event_time,created_at,updated_at,embedding)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (summary,quote,memory_space,category,emotion,max(0,min(1,float(importance))),
+               int(bool(confirmed)),source,session_id,int(turn_id or 0),"active",
+               float(event_time or now),now,now,_pack(embedding)))
+            self._conn.commit(); return int(cur.lastrowid)
+
+    def list_memories(self,limit=50,status="active",memory_space=None):
+        sql="SELECT * FROM memories WHERE status=?"; args=[status]
+        if memory_space:
+            sql+=" AND memory_space=?"; args.append(memory_space)
+        sql+=" ORDER BY event_time DESC,id DESC LIMIT ?"; args.append(max(1,min(int(limit),200)))
+        with self._lock: return [dict(r) for r in self._conn.execute(sql,args).fetchall()]
+
+    def recall(self,query,query_embedding=None,limit=30,memory_space=None):
+        q=(query or "").strip().lower()
+        rows=self.list_memories(limit=500,status="active",memory_space=memory_space)
+        now=time.time(); ranked=[]
+        for row in rows:
+            hay=(str(row["summary"])+" "+str(row["quote"])).lower()
+            lexical=1.0 if q and q in hay else (sum(1 for t in q.split() if t and t in hay)/max(1,len(q.split())))
+            semantic=_cos(query_embedding,_unpack(row.get("embedding"))) if query_embedding else 0.0
+            relevance=max(lexical,semantic)
+            age=max(0.0,(now-float(row.get("event_time") or now))/86400.0)
+            recency=math.exp(-age/90.0)
+            importance=float(row.get("importance") or .5)
+            reinforcement=min(1.0,float(row.get("access_count") or 0)/8.0)
+            confirmed=1.0 if row.get("confirmed") else 0.0
+            emotion=1.0 if str(row.get("emotion") or "") not in ("","平静","中性") else 0.0
+            score=.55*relevance+.15*importance+.10*recency+.10*reinforcement+.05*confirmed+.05*emotion
+            if relevance>0: ranked.append((score,row))
+        ranked.sort(key=lambda x:x[0],reverse=True)
+        return [dict(r,score=s) for s,r in ranked[:max(1,min(int(limit),100))]]
+
+    def reinforce(self,ids):
+        ids=[int(x) for x in ids if x]
+        if not ids:return
+        marks=",".join("?" for _ in ids)
+        with self._lock:
+            self._conn.execute(f"UPDATE memories SET access_count=access_count+1,last_recall_at=? WHERE id IN ({marks})",
+                               [time.time(),*ids]); self._conn.commit()
+
+    def archive(self,memory_id):
+        with self._lock:
+            cur=self._conn.execute("UPDATE memories SET status='archived',updated_at=? WHERE id=? AND status='active'",
+                                   (time.time(),int(memory_id))); self._conn.commit(); return cur.rowcount>0
+
+    def record_checkpoint(self,session_id,digest,payload):
+        with self._lock:
+            cur=self._conn.execute("INSERT OR IGNORE INTO checkpoints(session_id,digest,payload,created_at) VALUES(?,?,?,?)",
+                                   (session_id,digest,payload,time.time())); self._conn.commit(); return cur.rowcount>0
