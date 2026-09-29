@@ -1536,26 +1536,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                         }
                 session_items.append(item)
             rows.extend(_dedupe_replayed_history_items(session_items))
-        # Legacy attachment rows are device-scoped rather than session-scoped. They may be
-        # recovered only for the merged continuous timeline. When /history is explicitly scoped
-        # to one conversation, appending every unmatched device attachment leaks old media into
-        # each freshly-created chat ("ghost attachments").
-        if not scoped_session_id:
-            seen_attachment_turns = {
-                str(row.get("_turn_id") or "") for row in rows if row.get("_turn_id")
-            }
-            for turn_id, attachment_list in attachments_by_turn.items():
-                if turn_id and turn_id not in seen_attachment_turns:
-                    record = next((item for item in saved_attachments
-                                   if str(item.get("turn_id") or "") == turn_id), {})
-                    rows.append({
-                        "message_ref": f"turn:{turn_id}:user",
-                        "_turn_id": turn_id,
-                        "role": "user",
-                        "text": str(record.get("text") or ""),
-                        "created_at": float(record.get("created_at") or 0),
-                        "attachments": attachment_list,
-                    })
+        # Attachment metadata is only an enrichment of a transcript turn. Never synthesize
+        # a chat row from a device-scoped attachment record by itself: old/cancelled/reset turns
+        # otherwise reappear in every fresh conversation as ghost "[文件：...]" messages.
         try:
             notices = self.device_store().timeline_notices(installation)
         except Exception:
