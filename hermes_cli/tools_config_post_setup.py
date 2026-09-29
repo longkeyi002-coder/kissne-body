@@ -15,14 +15,6 @@ from hermes_cli.config import get_env_value
 from hermes_cli.tools_config_cua import _cua_driver_install_ready, install_cua_driver
 
 
-def active_restorable_python_tool_dependencies() -> list[str]:
-    return []
-
-
-def restorable_python_tool_dependency(*args, **kwargs):
-    return None
-
-
 def _info_lines(*lines: str) -> None:
     """Print each line as a 4-space-indented info row."""
     for line in lines:

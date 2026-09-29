@@ -4055,34 +4055,9 @@ def named_profile_served_by_running_multiplexer(profile_name: str | None = None)
 
     try:
         from hermes_cli.gateway_multiplex_served import live_default_gateway_pid, recorded_served_profiles
+        if live_default_gateway_pid() is None:
+            return False
         from hermes_cli.profiles import normalize_profile_name
-        live_pid = live_default_gateway_pid()
-        if live_pid is None:
-            # A namespace-local PID can make the verified probe temporarily
-            # unprovable.  Fall back to the default profile's explicit
-            # multiplex setting, while honoring an authoritative served list.
-            from gateway.status import read_runtime_status
-            runtime = read_runtime_status(default_root / "gateway_state.json")
-            recorded = (runtime or {}).get("served_profiles") if isinstance(runtime, dict) else None
-            if isinstance(recorded, list):
-                return normalize_profile_name(suffix) in {normalize_profile_name(p) for p in recorded}
-            from gateway.status import _read_process_cmdline
-            pid_record = default_root / "gateway.pid"
-            try:
-                pid_payload = json.loads(pid_record.read_text(encoding="utf-8"))
-                candidate_pid = int(pid_payload.get("pid"))
-            except Exception:
-                candidate_pid = None
-            if candidate_pid and "gateway" not in (_read_process_cmdline(candidate_pid) or "").lower():
-                return False
-            from gateway.status import is_gateway_runtime_lock_active
-            if candidate_pid and not is_gateway_runtime_lock_active(default_root / "gateway.lock"):
-                return False
-            from hermes_constants import profile_name_for_home
-            if profile_name_for_home(get_hermes_home()) != suffix:
-                return False
-            from hermes_cli.gateway_multiplex_mode import explicit_multiplex_flag
-            return explicit_multiplex_flag(default_root) is True
         # The live gateway's own record wins: the CLI process cannot see an env-only opt-in on the
         # default profile (`hermes -p X` loads X's .env) and a config edit after start is not live yet.
         # Only a record without the key (pre-multiplex writer) falls through to config derivation.
@@ -5603,3 +5578,4 @@ def _pm_runtime_venv_dir(project_root: Path | None = None) -> Path | None:
 
     venv = selected_venv(root)  # a malformed committed selection raises: fail closed
     return venv if venv.is_dir() else None
+

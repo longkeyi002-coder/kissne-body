@@ -59,19 +59,12 @@ def install_id(project_root: Optional[Path] = None) -> str:
 
 def _process_create_time(pid: Optional[int] = None) -> Optional[float]:
     """``psutil`` create time for ``pid`` (default: this process); ``None`` when psutil can't say."""
-    target_pid = os.getpid() if pid is None else int(pid)
     try:
         import psutil
-        return float(psutil.Process(target_pid).create_time())
+
+        return float(psutil.Process(os.getpid() if pid is None else pid).create_time())
     except Exception:
-        if target_pid == os.getpid():
-            # Some managed containers expose host /proc while retaining a
-            # namespace-local PID; retain a process-local identity for self.
-            return _SELF_CREATE_TIME
         return None
-
-
-_SELF_CREATE_TIME = time.time()
 
 
 # Layer 1 — spawn tags
@@ -187,10 +180,6 @@ def _same_incarnation(proc, create_time: Optional[float]) -> bool:
 
 def _pid_alive_matches(pid: int, create_time: Optional[float], *, strict: bool = False) -> Optional[bool]:
     """True/False when provable; ``None`` when psutil can't say."""
-    if int(pid) == os.getpid() and create_time is not None:
-        current = _process_create_time(pid)
-        if current is not None:
-            return abs(float(current) - float(create_time)) < 2.0
     try:
         import psutil
     except Exception:

@@ -65,37 +65,6 @@ def _cua_driver_env() -> dict:
 
 _CUA_DRIVER_CONTRACT_CACHE: dict = {}
 
-# Compatibility entry points retained for the Kissne tools_config facade.
-_CUA_INSTALLER_TIMEOUT = 660
-_CUA_INSTALLER_DRAIN_GRACE = 15
-_CUA_LOCK_STALE_AFTER = 600
-
-def _cua_install_target_writable() -> bool:
-    return True
-
-def _pip_install(*args, **kwargs):
-    from hermes_cli.update_cmd import stop_for_relaunch
-    return stop_for_relaunch()
-
-def _stop_retired_cua_installer(*args, **kwargs):
-    from hermes_cli.update_cmd import stop_for_relaunch
-    return stop_for_relaunch()
-
-def _clear_stale_windows_cua_install_lock(*args, **kwargs):
-    return _stop_retired_cua_installer(*args, **kwargs)
-
-def _clear_stale_cua_install_lock(*args, **kwargs):
-    return _stop_retired_cua_installer(*args, **kwargs)
-
-def _cua_install_lock_held(*args, **kwargs):
-    return _stop_retired_cua_installer(*args, **kwargs)
-
-def _cua_release_endpoint_reachable(*args, **kwargs):
-    return _stop_retired_cua_installer(*args, **kwargs)
-
-def _run_cua_driver_installer(*args, **kwargs):
-    return _stop_retired_cua_installer(*args, **kwargs)
-
 
 def _cua_driver_contract_status(binary: Optional[str] = None) -> dict:
     """Cache the runtime manifest check by binary identity for UI polling."""
@@ -127,17 +96,13 @@ def _cua_driver_install_ready() -> bool:
     return sys.platform != "win32" or _cua_driver_autostart_registered_windows()
 
 
-def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = True,
-                       require_confirmed_update: bool = False) -> bool:
+def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = True) -> bool:
     """Prepare the PM pin and host setup for an explicit install/upgrade command.
 
     Both CLI modes reconcile the same pin; neither discovers a vendor release.
     A configured override is validated, never replaced or acquired by PM.
     Unattended callers should use PM ensure directly, without interactive host setup.
     """
-    if require_confirmed_update:
-        from hermes_cli.update_cmd import stop_for_relaunch
-        return stop_for_relaunch()
     from pm import ensure
 
     override = os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip()

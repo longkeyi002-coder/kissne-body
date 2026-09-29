@@ -60,10 +60,7 @@ def _builtin_gateway_liveness() -> Optional[bool]:
         if find_gateway_pids():
             return True
         if not named_profile_served_by_running_multiplexer():
-            # A fresh profile heartbeat is useful evidence while the PID scan
-            # catches up after a namespace-local gateway restart.
-            from cron.jobs import get_ticker_heartbeat_age
-            return _ticker_age_is_fresh(get_ticker_heartbeat_age())
+            return False
         # List/create and status require a fresh heartbeat from the satellite's own store.
         from cron.jobs import get_ticker_heartbeat_age
         return _ticker_age_is_fresh(get_ticker_heartbeat_age())

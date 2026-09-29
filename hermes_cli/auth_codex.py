@@ -494,9 +494,6 @@ def refresh_codex_oauth_pure(
     return updated
 
 
-_REFRESH_CODEX_OAUTH_PURE_IMPL = refresh_codex_oauth_pure
-
-
 def _refresh_codex_auth_tokens(tokens: Dict[str, str], timeout_seconds: float) -> Dict[str, str]:
     """Refresh Codex access token using the refresh token.
 
@@ -506,11 +503,7 @@ def _refresh_codex_auth_tokens(tokens: Dict[str, str], timeout_seconds: float) -
     finds root already rotated by its peer adopts the stored pair instead of replaying the
     consumed token. Both locks wait out a full endpoint timeout so the waiter adopts, not times out.
     """
-    from hermes_cli.auth import _provider_state_transaction, _save_codex_tokens
-    from hermes_cli import auth as _auth
-    refresh_impl = refresh_codex_oauth_pure
-    if refresh_impl is _REFRESH_CODEX_OAUTH_PURE_IMPL:
-        refresh_impl = _auth.refresh_codex_oauth_pure
+    from hermes_cli.auth import _provider_state_transaction, _save_codex_tokens, refresh_codex_oauth_pure
     lock_timeout = max(float(AUTH_LOCK_TIMEOUT_SECONDS), float(timeout_seconds) + 5.0)
     with _provider_state_transaction("openai-codex", lock_timeout) as (_store, state, _source):
         stored = (state or {}).get("tokens")
@@ -520,7 +513,7 @@ def _refresh_codex_auth_tokens(tokens: Dict[str, str], timeout_seconds: float) -
             logger.info("Codex refresh token already rotated by a peer — adopting the stored pair.")
             return {**tokens, "access_token": stored_at, "refresh_token": stored_rt}
         try:
-            refreshed = refresh_impl(
+            refreshed = refresh_codex_oauth_pure(
                 str(tokens.get("access_token", "") or ""), str(tokens.get("refresh_token", "") or ""),
                 timeout_seconds=timeout_seconds)
         except AuthError as exc:

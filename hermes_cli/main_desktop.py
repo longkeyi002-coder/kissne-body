@@ -18,66 +18,6 @@ import subprocess
 import sys
 import tempfile
 import time as _time_mod
-from pathlib import Path
-
-
-def _nixos_build_env() -> dict[str, str] | None:
-    from hermes_cli.main_web_build import _nixos_build_env as resolve
-    return resolve()
-
-
-def _remove_half_installed_get_windows(project_root: Path) -> list[Path]:
-    """Remove ``get-windows`` trees left without package.json by interrupted npm extraction."""
-    removed: list[Path] = []
-    for candidate in project_root.rglob("node_modules/get-windows"):
-        if not candidate.is_dir() or (candidate / "package.json").is_file():
-            continue
-        shutil.rmtree(candidate, ignore_errors=True)
-        if not candidate.exists():
-            removed.append(candidate)
-    return removed
-
-
-def _desktop_workspace_stamp(project_root: Path) -> Path:
-    return project_root / ".hermes-desktop-deps-stamp"
-
-
-def _desktop_workspace_fingerprint(project_root: Path) -> str:
-    digest = hashlib.sha256()
-    for rel in ("package.json", "package-lock.json", "apps/desktop/package.json"):
-        path = project_root / rel
-        digest.update(rel.encode())
-        try:
-            digest.update(path.read_bytes())
-        except OSError:
-            digest.update(b"<missing>")
-    return digest.hexdigest()
-
-
-def _install_desktop_workspace_deps(npm: str, env: dict) -> None:
-    """Install desktop dependencies when manifests changed or Electron was pruned."""
-    from hermes_cli.main import PROJECT_ROOT
-    from hermes_cli.main_web_build import _run_npm_install_deterministic
-    root = Path(PROJECT_ROOT)
-    _remove_half_installed_get_windows(root)
-    electron = root / "node_modules" / "electron"
-    if not electron.exists():
-        electron = root / "apps" / "desktop" / "node_modules" / "electron"
-    stamp = _desktop_workspace_stamp(root)
-    fingerprint = _desktop_workspace_fingerprint(root)
-    if stamp.read_text(encoding="utf-8").strip() == fingerprint if stamp.exists() else False:
-        if (electron / "package.json").is_file():
-            return
-    try:
-        result = _run_npm_install_deterministic(
-            npm, root, capture_output=False, env=_nixos_build_env() or env)
-    except TypeError:
-        result = _run_npm_install_deterministic(npm, root, env=_nixos_build_env() or env)
-    if getattr(result, "returncode", 1) != 0:
-        with contextlib.suppress(OSError):
-            stamp.unlink()
-        raise SystemExit(getattr(result, "returncode", 1) or 1)
-    stamp.write_text(fingerprint, encoding="utf-8")
 
 from pathlib import Path
 from typing import Callable, Optional
@@ -1609,3 +1549,5 @@ def _launch_bundled_desktop(
     pid = launch_detached(launch_command, env=env, cwd=layout.app_root)
     print(f"→ Launched Hermes Desktop: {' '.join(launch_command)} (pid {pid})")
     sys.exit(0)
+
+

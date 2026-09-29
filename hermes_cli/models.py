@@ -2484,13 +2484,6 @@ def probe_api_models(
         tried.append(url)
         try:
             data = _get_json(url, timeout=timeout, headers=headers, **_open_kwargs)
-        except TypeError as exc:
-            # Keep the seam compatible with lightweight opener test doubles and
-            # older callers that only accept ``timeout``.
-            if _open_kwargs and "ssl_context" in str(exc):
-                data = _get_json(url, timeout=timeout, headers=headers)
-            else:
-                raise
         except Exception as exc:
             # TLS, authentication and parsing failures must not hide corrected settings.
             cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc

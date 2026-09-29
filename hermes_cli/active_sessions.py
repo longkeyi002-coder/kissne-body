@@ -318,7 +318,7 @@ def _own_start_time() -> Optional[float]:
     if _OWN_START is None or _OWN_START[0] != pid:
         start = _process_start_time(pid)
         if start is None:
-            start = time.time()
+            return None
         _OWN_START = (pid, start)
     return _OWN_START[1]
 

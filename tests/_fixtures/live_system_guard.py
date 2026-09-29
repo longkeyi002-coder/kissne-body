@@ -80,7 +80,6 @@ def _live_system_guard(request, monkeypatch):
     import subprocess as _subprocess
 
     test_pid = _os.getpid()
-    _spawned_children: set[int] = set()
     lookalike_ok = request.node.get_closest_marker(_GATEWAY_LOOKALIKE_MARK) is not None
     # Capture the test process's existing children at fixture start —
     # any *new* children spawned by the test are also allowlisted via
@@ -103,7 +102,7 @@ def _live_system_guard(request, monkeypatch):
             return True
         if pid < 0:
             return False
-        if pid == test_pid or pid in _initial_children or pid in _spawned_children:
+        if pid == test_pid or pid in _initial_children:
             return True
         if _psutil is None:
             return False
@@ -378,7 +377,6 @@ def _live_system_guard(request, monkeypatch):
             def __init__(self, cmd, *args, **kwargs):
                 _check_subprocess_cmd("Popen", cmd, kwargs)
                 super().__init__(cmd, *args, **kwargs)
-                _spawned_children.add(self.pid)
 
         _GuardedPopen.__name__ = "Popen"
         _GuardedPopen.__qualname__ = "Popen"

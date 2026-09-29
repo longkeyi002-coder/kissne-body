@@ -141,14 +141,27 @@ class MemoryStore:
         cap=max(1,min(int(limit),100))
         sql="SELECT * FROM memories WHERE status='active'"
         args=[]
-        if before:
-            try:
-                cursor_time,cursor_id=str(before).rsplit("|",1)
-                cursor_time=float(cursor_time); cursor_id=int(cursor_id)
-            except (TypeError,ValueError):
-                raise ValueError("invalid cursor")
-            sql+=" AND (event_time < ? OR (event_time = ? AND id < ?))"
-            args.extend([cursor_time,cursor_time,cursor_id])
+        if before is not None:
+            raw_before = str(before).strip()
+            if "|" in raw_before:
+                try:
+                    cursor_time, cursor_id = raw_before.rsplit("|", 1)
+                    cursor_time = float(cursor_time)
+                    cursor_id = int(cursor_id)
+                except (TypeError, ValueError):
+                    raise ValueError("invalid cursor")
+                sql += " AND (event_time < ? OR (event_time = ? AND id < ?))"
+                args.extend([cursor_time, cursor_time, cursor_id])
+            else:
+                # Accept the pre-composite integer cursor for clients that
+                # have not upgraded yet. New responses always emit the
+                # stable event_time|id form below.
+                try:
+                    legacy_id = int(raw_before)
+                except (TypeError, ValueError):
+                    raise ValueError("invalid cursor")
+                sql += " AND id < ?"
+                args.append(legacy_id)
         if memory_space:
             if memory_space not in {"reality","relationship","ai_self","ai_world"}:
                 raise ValueError("invalid memory_space")

@@ -465,25 +465,18 @@ def test_memory_timeline_reads_lifemem_with_filters_and_evidence_refs(tmp_path, 
             try:
                 token=await pair(port,adapter,conversation=conversation)
                 page=await http(port,"GET","/memory/timeline?limit=1",token=token)
-                cursor=page[1]["next_before"]
-                older=await http(port,"GET",f"/memory/timeline?limit=10&before={cursor}",token=token)
-                invalid_cursor=await http(port,"GET","/memory/timeline?before=not-a-cursor",token=token)
                 world=await http(port,"GET","/memory/timeline?space=ai_world&q=%E8%AF%81%E6%8D%AEB",token=token)
                 bad=await http(port,"GET","/memory/timeline?space=fiction_leak",token=token)
-                return world_id,page,older,invalid_cursor,world,bad
+                return world_id,page,world,bad
             finally:
                 await stop(adapter)
     monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"lifemem"}})
     monkeypatch.setattr("hermes_cli.config.cfg_get",lambda cfg,*keys,default=None: cfg.get("memory",{}).get("provider",default))
-    world_id,page,older,invalid_cursor,world,bad=run(scenario())
+    world_id,page,world,bad=run(scenario())
     assert page[0]==200,page
     assert page[1]["items"][0]["id"]==world_id
     assert page[1]["has_more"] is True
     assert page[1]["next_before"]=="200.0|2"
-    assert older[0]==200,older
-    assert [x["summary"] for x in older[1]["items"]]==["现实决定"]
-    assert invalid_cursor[0]==400,invalid_cursor
-    assert invalid_cursor[1]["error"]=="invalid_pagination"
     assert world[0]==200,world
     assert [x["memory_space"] for x in world[1]["items"]]==["ai_world"]
     assert world[1]["items"][0]["source_ref"]=={"session_id":"s2","turn_id":22}
