@@ -95,8 +95,8 @@ def test_timeline_projects_source_refs_filters_and_cursor(tmp_path):
     assert page["items"][0]["id"]==b
     assert page["items"][0]["source_ref"]=={"session_id":"s2","turn_id":22}
     assert page["has_more"] is True
-    assert page["next_before"]==b
-    older=db.timeline(limit=10,before=b)
+    assert page["next_before"]=="200.0|2"
+    older=db.timeline(limit=10,before=page["next_before"])
     assert [x["id"] for x in older["items"]]==[a]
     world=db.timeline(limit=10,memory_space="ai_world")
     assert [x["id"] for x in world["items"]]==[b]
