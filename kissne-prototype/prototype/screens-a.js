@@ -412,8 +412,12 @@
     }).join('');
   }
   function aiMsg(html, cls, time, tag, state, activity) {
-    return '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
-      + '<div class="msg__body">' + (activity || '')
+    /* Process records deliberately live outside the assistant text row.  A tool call
+       or visible reasoning is not spoken content, so it must not borrow the fox
+       avatar that identifies an actual reply. */
+    var process = activity ? '<div class="activity-history">' + activity + '</div>' : '';
+    return process + '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
+      + '<div class="msg__body">'
       + assistantBubbleHtml(html, cls)
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
       + '</div>';
@@ -723,9 +727,9 @@
   function activityRows(state, closed) {
     return (state.timeline || []).map(function (item, index) {
       if (!item) return '';
-      var separator = index ? '<div class="process-separator" aria-hidden="true"><span>°。⑅♡⑅。°</span></div>' : '';
+      var separator = index ? '<div class="process-separator" aria-hidden="true"></div>' : '';
       if (item.kind === 'reasoning') {
-        return separator + '<section class="process-step process-step--reasoning">'
+        return separator + '<section class="process-step process-step--reasoning is-open">'
           + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="true">'
           + '<span class="process-step__mark">✧</span><span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
           + icon('chevron', 12, 'activity-chevron') + '</button>'
@@ -757,9 +761,9 @@
     var rows = activityRows(state, closed);
     if (!rows) return '';
     return '<div class="activity-stream process-frame' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
-      + '<div class="process-frame__top"><span>₊˚⊹♡</span><b>思考过程</b><span>♡⊹˚₊</span></div>'
+      + '<div class="process-frame__top"><b>' + (closed ? '过程记录' : '处理中') + '</b></div>'
       + '<div class="process-frame__body">' + rows + '</div>'
-      + '<div class="process-frame__bottom" aria-hidden="true">𓂃𓈒𓐍 ⋆｡˚ ୨♡୧ ˚｡⋆ 𓂃𓈒𓐍</div>'
+      + '<div class="process-frame__bottom" aria-hidden="true"></div>'
       + '</div>';
   }
   function rememberFinalActivity(text, turnId) {
@@ -1723,12 +1727,12 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        append('<div class="msg msg--ai is-awaiting">' + ava('FOX_CHAT_AVATAR', '', 'read')
+        append('<div class="live-turn" data-live-turn><div class="activity-history" data-live-activity></div>'
+          + '<div class="msg msg--ai is-awaiting" data-live-message>' + ava('FOX_CHAT_AVATAR', '', 'read')
           + '<div class="msg__body"><div class="aipresence" data-live-presence>'
           + '<span class="aipresence__text">正在看你刚才说的话</span>' + dots() + '</div>'
-          + '<div data-live-activity></div>'
           + '<div class="liveanswer bubble" data-live-answer hidden></div>'
-          + '<span class="msg__time">' + clockNow() + '</span></div></div>');
+          + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
         return el;
@@ -1741,7 +1745,9 @@
           var label = presence.querySelector('.aipresence__text');
           if (label && text) label.textContent = text;
         }
-        el.classList.toggle('is-awaiting', !!visible);
+        var message = el.querySelector('[data-live-message]');
+        if (message) message.classList.toggle('is-awaiting', !!visible);
+        el.classList.toggle('is-process-only', !visible && !el.querySelector('[data-live-answer]:not([hidden])'));
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -1773,6 +1779,7 @@
         if (!box) return;
         var value = String(text || '');
         box.hidden = !value;
+        el.classList.toggle('is-process-only', !value);
         box.classList.toggle('is-pending', !!pending && !!value);
         /* Drafts can already contain a complete sticker marker. Rendering through the
            same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
@@ -2507,7 +2514,7 @@
         var row = e.target && e.target.closest ? e.target.closest('[data-activity-toggle]') : null;
         if (!row || !list.contains(row)) return;
         e.preventDefault();
-        var item = row.closest('.activity-item');
+        var item = row.closest('.process-step');
         var detail = item && item.querySelector('.activity-detail');
         if (!detail) return;
         var open = detail.hidden;
