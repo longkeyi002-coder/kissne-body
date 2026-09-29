@@ -179,3 +179,5 @@ def test_session_switch_flushes_pending_memory_before_new_session(tmp_path):
     assert rows[0]["session_id"]=="session-a"
     assert provider._session_id=="session-b"
     provider.shutdown()
+
+# CI probe: isolated Lifemem validation with bounded suite runtime.
