@@ -1425,16 +1425,46 @@
         var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
         var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
         T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
-          .then(function () {
-            if (kind === 'model') {
-              MODEL_CURRENT = modelKey || value;
-              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
+          .then(function (result) {
+            result = result || {};
+            if (result.ok !== true) {
+              var rejected = new Error(String(result.error || 'Hermes 切换未生效'));
+              rejected.payload = result;
+              throw rejected;
             }
-            if (kind === 'effort') EFFORT_CURRENT = value;
+            if (kind === 'model') {
+              var actualModel = String(result.model || '').trim();
+              var actualProvider = String(result.provider || '').trim();
+              if (actualModel !== modelValue || actualProvider !== providerValue) {
+                var mismatch = new Error('model_switch_not_applied');
+                mismatch.payload = {
+                  error: '模型切换未真正生效',
+                  requested_model: modelValue,
+                  requested_provider: providerValue,
+                  actual_model: actualModel,
+                  actual_provider: actualProvider
+                };
+                throw mismatch;
+              }
+            }
+            if (kind === 'effort') {
+              var actualEffort = String(result.effort || '').trim();
+              if (actualEffort !== value) {
+                var effortMismatch = new Error('reasoning_switch_not_applied');
+                effortMismatch.payload = {
+                  error: '思考强度切换未真正生效',
+                  requested_effort: value,
+                  actual_effort: actualEffort
+                };
+                throw effortMismatch;
+              }
+            }
             MODEL_OPTIONS_LOADED_AT = 0;
+            return refreshHermesModelControls(true);
+          })
+          .then(function () {
             paintChatMenu(null);
             updateHeaderControls();
-            refreshHermesModelControls(true);
           })
           .catch(function (err) {
             el.disabled = false;
