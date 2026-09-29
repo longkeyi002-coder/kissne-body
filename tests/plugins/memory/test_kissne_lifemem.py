@@ -251,3 +251,33 @@ def test_failed_episode_is_not_retried_in_same_consolidation_pass(tmp_path):
     # Avoid shutdown retrying the intentionally failed row.
     provider._store.mark_turn_processed(rows[0]["id"])
     provider.shutdown()
+
+
+def test_consolidation_drains_more_than_one_batch(tmp_path):
+    import plugins.memory.lifemem as mod
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=99
+    config["consolidation_batch_size"]=3
+    provider=mod.LifememProvider(config=config)
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    for i in range(7):
+        provider.sync_turn(f"普通内容 {i}","收到",session_id="session-a")
+    provider._consolidate_session("session-a")
+    assert provider._store.pending_turn_count(session_id="session-a")==0
+    provider.shutdown()
+
+
+def test_shutdown_does_not_spin_forever_on_permanent_episode_failure(tmp_path):
+    import plugins.memory.lifemem as mod
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=99
+    provider=mod.LifememProvider(config=config)
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    provider.sync_turn("永久失败样本","收到",session_id="session-a")
+    calls=[]
+    def always_fail(user,assistant=""):
+        calls.append(user)
+        raise RuntimeError("permanent failure")
+    provider._decision.decide=always_fail
+    provider.shutdown()
+    assert calls==["永久失败样本"]
