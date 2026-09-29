@@ -704,7 +704,21 @@
     return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
   }
   function reasoningHtml(text) {
-    return esc(String(text || '')).replace(/\n{3,}/g, '\n\n');
+    var raw = String(text || '').replace(/\r\n?/g, '\n').trim();
+    if (!raw) return '';
+    var blocks = raw.split(/\n\s*\n+/).map(function (part) { return part.trim(); }).filter(Boolean);
+    return blocks.map(function (part) {
+      var lines = part.split('\n').map(function (line) { return line.trim(); }).filter(Boolean);
+      var isList = lines.length > 1 && lines.every(function (line) {
+        return /^(?:[-*•]|\d+[.)])\s+/.test(line);
+      });
+      if (isList) {
+        return '<ul class="process-reasoning__list">' + lines.map(function (line) {
+          return '<li>' + esc(line.replace(/^(?:[-*•]|\d+[.)])\s+/, '')) + '</li>';
+        }).join('') + '</ul>';
+      }
+      return '<p>' + lines.map(esc).join('<br>') + '</p>';
+    }).join('');
   }
   function activityRows(state, closed) {
     return (state.timeline || []).map(function (item, index) {
