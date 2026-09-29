@@ -1884,16 +1884,21 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
 .sessiondrawer__empty{padding:24px 10px;text-align:center;font-size:11px;color:var(--ink-3)}
 
 /* —— Web AI quick hand-off: long-press a chat message —— */
-.webai-sheet{position:fixed;inset:0;z-index:9999}
-.webai-sheet__scrim{position:absolute;inset:0;border:0;background:transparent;-webkit-appearance:none;appearance:none}
-.webai-popover .webai-sheet__panel{
-  position:fixed;width:max-content;min-width:142px;max-width:210px;padding:5px;
-  box-sizing:border-box;background:#fff;border:1px solid var(--line);border-radius:12px;
-  box-shadow:0 7px 24px rgba(20,20,25,.14)
+.webai-sheet{position:fixed;inset:0;z-index:9999;pointer-events:none}
+.webai-sheet__scrim{position:absolute;inset:0;border:0;background:transparent;pointer-events:auto}
+.webai-sheet__panel{
+  position:fixed;z-index:1;display:flex;gap:4px;width:max-content;max-width:calc(100vw - 16px);
+  padding:5px;border:1px solid var(--line);border-radius:12px;background:#fff;
+  box-shadow:0 6px 18px rgba(20,20,25,.12);pointer-events:auto
+}
+.webai-sheet__panel:after{
+  content:"";position:absolute;left:18px;bottom:-5px;width:9px;height:9px;
+  background:#fff;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  transform:rotate(45deg)
 }
 .webai-sheet__item{
-  display:block;width:100%;min-height:36px;padding:0 10px;border:0;border-radius:8px;
-  background:transparent;font:inherit;font-size:12px;color:var(--ink);text-align:left;white-space:nowrap
+  min-height:32px;padding:0 9px;border:0;border-radius:8px;background:transparent;
+  font:inherit;font-size:11px;font-weight:600;color:var(--ink);white-space:nowrap;text-align:left
 }
 .webai-sheet__item:active{background:var(--g2)}
 
