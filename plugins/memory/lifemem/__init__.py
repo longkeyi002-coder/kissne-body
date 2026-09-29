@@ -193,15 +193,13 @@ class LifememProvider(MemoryProvider):
             try:
                 self._persist_turn(sid, turn_id, user, assistant)
             except Exception:
-                continue
+                pass
+            finally:
+                self._q.task_done()
 
     def _flush(self):
-        while self._store:
-            try:
-                sid, turn_id, user, assistant = self._q.get_nowait()
-            except queue.Empty:
-                return
-            self._persist_turn(sid, turn_id, user, assistant)
+        """Wait until every turn queued before this call has finished extraction."""
+        self._q.join()
 
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "",
                           reset=False, rewound=False, **kwargs):
