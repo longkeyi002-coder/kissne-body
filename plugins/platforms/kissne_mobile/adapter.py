@@ -2609,26 +2609,25 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # to polling, model controls and other installations during that read.
         history, truncated, represented_turn_ids = await asyncio.to_thread(
             self._bootstrap_history_snapshot, identity["session_id"])
-        # Attachment-only turns may not yet exist in the Hermes transcript during a cold start;
-        # restore their durable presentation metadata so the device can render them.
+        # Attachments are device-scoped legacy metadata, not conversation-scoped records.
+        # Only enrich turns already represented by this conversation's transcript. Appending
+        # unmatched rows here leaks old stickers/files into every newly-created conversation.
         try:
             saved_attachments = await asyncio.to_thread(
                 self.device_store().attachment_messages, installation, 500)
         except Exception:
             saved_attachments = []
-        for record in saved_attachments:
-            turn_id = str(record.get("turn_id") or "").strip()
-            if not turn_id or turn_id in represented_turn_ids:
-                continue
-            history.append({
-                "role": "user",
-                "text": str(record.get("text") or ""),
-                "_turn_id": turn_id,
-                "message_ref": f"turn:{turn_id}:user",
-                "attachments": list(record.get("attachments") or []),
-                "created_at": float(record.get("created_at") or 0),
-            })
-            represented_turn_ids.add(turn_id)
+        attachments_by_turn = {
+            str(record.get("turn_id") or "").strip(): list(record.get("attachments") or [])
+            for record in saved_attachments
+            if str(record.get("turn_id") or "").strip()
+        }
+        for item in history:
+            turn_id = str(item.get("_turn_id") or item.get("turn_id") or "").strip()
+            if item.get("role") == "user" and turn_id in represented_turn_ids:
+                attachments = attachments_by_turn.get(turn_id)
+                if attachments:
+                    item["attachments"] = attachments
         history.sort(key=lambda item: (float(item.get("created_at") or 0), str(item.get("message_ref") or "")))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         # In-process reconnects can restore every still-live approval. After a Runtime restart the
