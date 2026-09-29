@@ -1622,7 +1622,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         try:
             limit = max(1, min(int(request.query.get("limit", "50")), 100))
             raw_before = str(request.query.get("before") or "").strip()
-            before = int(raw_before) if raw_before else None
+            before = raw_before or None
         except (TypeError, ValueError):
             return _error_response("invalid_pagination", 400)
         memory_space = str(request.query.get("space") or "").strip() or None
@@ -1644,6 +1644,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
         except ValueError as exc:
             if str(exc) == "invalid memory_space":
                 return _error_response("invalid_memory_space", 400)
+            if str(exc) == "invalid cursor":
+                return _error_response("invalid_pagination", 400)
             return _error_response("invalid_memory_query", 400)
         except Exception:
             logger.exception("[kissne_mobile] Lifemem timeline read failed")
