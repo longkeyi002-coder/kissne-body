@@ -245,6 +245,18 @@ def test_bootstrap_restores_attachment_presentation_metadata(tmp_path):
             try:
                 token = await pair(port, adapter, conversation=conversation)
                 device_store = adapter.device_store()
+                # Attachment metadata is device-scoped; bootstrap may enrich only a
+                # real transcript turn, otherwise a stale file from another session
+                # could reappear as a ghost message.  Model the completed Runtime turn
+                # that owns this attachment rather than creating an orphan record.
+                store.append_to_transcript(
+                    conversation.session_id,
+                    {"role": "user", "content": "给你看", "message_id": "turn-attachment-1"},
+                )
+                store.append_to_transcript(
+                    conversation.session_id,
+                    {"role": "assistant", "content": "我看到了"},
+                )
                 device_store.record_attachment_message(
                     "inst-1", "turn-attachment-1", "给你看",
                     [{"type": "image", "mime_type": "image/png", "label": ""}],
@@ -259,7 +271,7 @@ def test_bootstrap_restores_attachment_presentation_metadata(tmp_path):
     status, payload = run(scenario())
     assert status == 200, (status, payload)
     restored = [row for row in payload["history"]
-                if row.get("_turn_id") == "turn-attachment-1"]
+                if row.get("role") == "user" and row.get("turn_id") == "turn-attachment-1"]
     assert len(restored) == 1
     assert restored[0]["text"] == "给你看"
     assert restored[0]["attachments"] == [
