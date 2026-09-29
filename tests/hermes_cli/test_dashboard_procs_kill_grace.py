@@ -129,6 +129,7 @@ def test_sigterm_ignoring_process_is_still_sigkilled(tmp_path, monkeypatch):
 
 
 @pytest.mark.live_system_guard_bypass  # the orphans are reparented out of the test subtree by design
+@pytest.mark.requires_visible_children
 def test_wedged_pty_descendant_is_gone_but_detached_bot_survives(tmp_path, monkeypatch):
     """#112631: when the stop returns, the hosted TUI that outlived the SIGKILLed backend is dead
     (it would hold the deleted state.db-wal inode), while the messaging-gateway bot the dashboard

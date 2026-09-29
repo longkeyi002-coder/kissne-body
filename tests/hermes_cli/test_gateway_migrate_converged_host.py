@@ -74,6 +74,7 @@ def converged_host(tmp_path, monkeypatch):
     hr.clear_record(hr.ROLE_GATEWAY)
 
 
+@pytest.mark.requires_process_identity
 def test_the_host_gateway_pid_is_reported_for_every_secondary(converged_host):
     """Premise of the defect, asserted so the test cannot silently stop exercising it: the
     topology reporter DOES hand the host gateway's PID to every profile it serves."""

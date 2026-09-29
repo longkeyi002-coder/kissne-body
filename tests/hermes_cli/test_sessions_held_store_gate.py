@@ -79,6 +79,7 @@ def _sessions_subparsers():
 
 
 @pytest.mark.parametrize("action", sorted(sessions_cmd._HELD_STORE_ACTIONS))
+@pytest.mark.requires_visible_children
 def test_store_rewrites_refuse_and_name_the_holder_until_forced(action, state_db, foreign_holder, capsys):
     assert sessions_cmd.cmd_sessions(_args(action, force=False)) == 1
     out = capsys.readouterr().out
@@ -97,6 +98,7 @@ def test_store_rewrites_refuse_and_name_the_holder_until_forced(action, state_db
     assert "Refusing" not in capsys.readouterr().out
 
 
+@pytest.mark.requires_visible_children
 def test_prune_preview_passes_the_delete_waits_for_a_quiet_store(state_db, foreign_holder, capsys):
     # A preview never rewrites anything, so it is answered even while the holder lives.
     prune_preview = _args("prune", force=False)

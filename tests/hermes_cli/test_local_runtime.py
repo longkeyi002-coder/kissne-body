@@ -272,6 +272,7 @@ def test_llamacpp_aliases_route_to_custom_profile():
         assert profile.env_vars == ()  # credential is reachability
 
 
+@pytest.mark.requires_process_identity
 def test_llamacpp_endpoint_resolution_prefers_managed(tmp_path, monkeypatch, stub_server):
     """provider: llamacpp with a live managed server resolves to it,
     api-key included."""

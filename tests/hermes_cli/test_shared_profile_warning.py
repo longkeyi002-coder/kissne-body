@@ -13,6 +13,8 @@ import pytest
 from hermes_cli import process_identity
 from hermes_constants import hermes_home_key
 
+pytestmark = pytest.mark.requires_visible_children
+
 
 @pytest.fixture
 def homes(tmp_path, monkeypatch):

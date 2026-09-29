@@ -2,6 +2,8 @@
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from prompt_toolkit.utils import get_cwidth
 
 
@@ -53,6 +55,7 @@ def test_dock_paints_processes_under_agents_and_retires_finished_rows(monkeypatc
         process_registry.kill_process(slow_id)
 
 
+@pytest.mark.requires_visible_children
 def test_monitor_controls_stop_processes_and_never_steer_them():
     from hermes_cli.cli_subagent_monitor import SubagentMonitor
     from tools.process_registry import process_registry

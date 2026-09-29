@@ -66,6 +66,7 @@ def archive_probe(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_gateway_lookalike  # a flock-holding stub this test reaps by PID
+@pytest.mark.requires_process_identity
 def test_serve_auto_archive_defers_to_a_live_gateway_for_the_profile(archive_probe):
     tmp_path, opens, archived = archive_probe
     # argv0 basename `hermes` + the `gateway run` subcommand is what

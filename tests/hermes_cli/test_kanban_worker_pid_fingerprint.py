@@ -80,6 +80,7 @@ def test_matching_fingerprint_keeps_the_live_worker(board):
     assert killed and killed[0] == (os.getpid(), signal.SIGTERM)
 
 
+@pytest.mark.requires_process_identity
 def test_same_pid_and_start_tick_on_another_boot_is_foreign(board, monkeypatch):
     """A row that survived a reboot: the PID AND the boot-relative start tick both match a process on
     this boot (the Linux start time is clock ticks since boot, so that recurs), but the persisted

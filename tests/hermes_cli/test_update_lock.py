@@ -289,6 +289,7 @@ class TestAncestryHandoff:
         assert marker.exists(), "the parent still needs its marker after our stage ends"
 
     @pytest.mark.platforms("any")
+    @pytest.mark.requires_visible_children
     def test_grandchild_adopts_orchestrator_marker_without_psutil(self, marker, tmp_path):
         """Regression: the desktop hand-off's grandchild refused its own orchestrator.
 

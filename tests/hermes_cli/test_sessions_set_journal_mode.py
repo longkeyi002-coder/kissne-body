@@ -45,6 +45,7 @@ def test_set_journal_mode_converts_wal_store_offline(tmp_path, monkeypatch, caps
 
 
 @pytest.mark.parametrize("force", [False, True], ids=["normal", "force"])
+@pytest.mark.requires_visible_children
 def test_set_journal_mode_refuses_while_another_process_holds_the_store(
     force, tmp_path, monkeypatch, capsys
 ):

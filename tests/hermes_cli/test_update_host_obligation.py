@@ -142,6 +142,7 @@ def _host_record(tmp_path, monkeypatch, profiles: list[str]) -> None:
         json.dumps({"role": "gateway", "pid": os.getpid(), "profiles": profiles}), encoding="utf-8")
 
 
+@pytest.mark.requires_process_identity
 def test_recovery_restarts_one_host_process_for_all_the_profiles_it_serves(tmp_path, monkeypatch):
     """N payload profiles served by ONE host gateway = one relaunch, not N that kill each other."""
     _host_record(tmp_path, monkeypatch, ["coder", "writer", "default"])

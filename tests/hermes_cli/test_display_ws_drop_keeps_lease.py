@@ -9,6 +9,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.requires_unix_sockets
+
 from hermes_cli.web_routers import display
 from tools.bot_desktop import lease
 

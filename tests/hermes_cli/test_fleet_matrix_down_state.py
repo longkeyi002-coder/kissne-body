@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 import hermes_cli.update_receipt as ur
 
 
@@ -78,6 +80,7 @@ def test_cleanly_stopped_gateway_is_not_down(monkeypatch, tmp_path):
         assert ur.collect_fleet_versions(pre_restart_pids=[_DEAD_PID]) == []
 
 
+@pytest.mark.requires_process_identity
 def test_recycled_pid_is_not_reported_stale(monkeypatch, tmp_path):
     """A dead gateway's PID reused by an unrelated process (#93258) must not
     be reported STALE just because *some* process now answers to that PID.

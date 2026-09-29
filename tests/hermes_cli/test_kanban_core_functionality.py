@@ -631,6 +631,7 @@ def test_migration_backfill_idempotent_under_re_run(tmp_path, monkeypatch):
 # -------------------------------------------------------------------------
 
 @pytest.mark.platforms("linux")
+@pytest.mark.requires_process_identity
 def test_pid_alive_detects_zombie(kanban_home):
     """_pid_alive must return False for a zombie process.
 

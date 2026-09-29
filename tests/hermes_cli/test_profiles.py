@@ -375,6 +375,7 @@ class TestCreateProfile:
         assert (cloned_browser / "Default" / "Cookies").read_text(encoding="utf-8-sig") == "jar"
 
     @pytest.mark.platforms("linux")
+    @pytest.mark.requires_process_identity
     def test_clone_all_does_not_attach_to_the_source_profiles_live_browser(self, profile_env):
         """Copied Chromium markers must not route the clone through the source profile's CDP port."""
         from tools.bot_desktop.browser import running_instance_cdp_port
@@ -1799,6 +1800,7 @@ def _live_bot_desktop_launcher(profile_dir: Path):
 
 @pytest.mark.platforms("linux")
 @pytest.mark.parametrize("op", ["delete", "rename"])
+@pytest.mark.requires_visible_children
 def test_profile_delete_and_rename_stop_the_profiles_bot_desktop(profile_env, op):
     """Deleting or renaming a profile stops its gateway, and must stop its Bot Desktop launcher too: the
     Xvnc/Xfce session otherwise keeps running against a directory that no longer exists (or now belongs to

@@ -84,6 +84,7 @@ def test_status_preserves_profile_health_contract(served_root, capsys, monkeypat
         assert "STALLED" not in output
 
 
+@pytest.mark.requires_process_identity
 def test_host_record_rung_names_the_roster_and_a_runnable_restart(served_root, capsys, monkeypatch):
     """The OTHER rung: a published host record answers before the config-derived one.
 

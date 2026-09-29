@@ -79,6 +79,7 @@ def test_timeout_kills_descendants(tmp_path):
     assert not alive, f"descendant {child_pid} survived probe timeout"
 
 
+@pytest.mark.requires_visible_children
 def test_posix_spawn_uses_own_process_group(tmp_path):
     """The probe child must lead its own process group (killpg precondition)."""
     script = tmp_path / "pgid.sh"

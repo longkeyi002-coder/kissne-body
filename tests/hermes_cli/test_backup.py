@@ -306,6 +306,7 @@ class TestIterBackupFiles:
         assert "hermes-agent" in skipped
 
     @pytest.mark.platforms("linux")
+    @pytest.mark.requires_unix_sockets
     def test_skips_unix_sockets(self, tmp_path, monkeypatch):
         from hermes_cli.backup import _iter_backup_files
 

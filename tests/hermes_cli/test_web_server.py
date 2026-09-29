@@ -3232,6 +3232,7 @@ class TestDesktopLoopbackAuthExemption:
 class TestDesktopHostRendezvousIsolation:
     """Desktop pool children have a private lifecycle, not a host ownership role."""
 
+    @pytest.mark.requires_process_identity
     def test_desktop_backend_does_not_claim_the_host_serve_record(self, monkeypatch, tmp_path):
         """A Desktop child must not block a separately supervised public dashboard, yet a
         terminal `hermes plugins install` on a Desktop-only box must still find it (#119644):

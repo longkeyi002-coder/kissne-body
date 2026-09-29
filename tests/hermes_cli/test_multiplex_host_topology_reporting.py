@@ -36,6 +36,7 @@ def served_host(tmp_path, monkeypatch):
     return root
 
 
+@pytest.mark.requires_process_identity
 def test_cron_status_names_the_host_gateway_for_a_served_profile(served_host, capsys, monkeypatch):
     from cron import jobs
     from hermes_cli import cron
@@ -52,6 +53,7 @@ def test_cron_status_names_the_host_gateway_for_a_served_profile(served_host, ca
     assert "sudo hermes gateway install --system" not in out
 
 
+@pytest.mark.requires_process_identity
 def test_claw_warning_fires_for_a_served_profile(served_host, capsys, monkeypatch):
     from hermes_cli import claw
 
@@ -67,6 +69,7 @@ def test_claw_warning_fires_for_a_served_profile(served_host, capsys, monkeypatc
     assert "telegram" in fired[0][1]
 
 
+@pytest.mark.requires_process_identity
 def test_doctor_reports_the_single_host_gateway_not_per_profile_slots(served_host, capsys, monkeypatch):
     from hermes_cli import doctor_platform
 
@@ -138,6 +141,7 @@ def test_doctor_checks_host_unit_linger_under_a_served_profile(served_host, tmp_
     assert any("enable-linger" in i for i in issues)
 
 
+@pytest.mark.requires_process_identity
 def test_state_db_holder_line_names_the_shared_host_gateway(served_host):
     from hermes_cli import doctor_state
 

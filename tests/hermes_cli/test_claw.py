@@ -294,6 +294,7 @@ class TestDetectOpenclawProcesses:
         assert result == ["openclaw process(es) (PIDs: 1234, 5678)"]
 
     @pytest.mark.platforms("linux")
+    @pytest.mark.requires_visible_children
     def test_live_pgrep_ignores_argv_mentions_but_finds_node_openclaw(self, tmp_path):
         """A process that merely mentions "openclaw" in argv (the #12648 false positive) is not
         OpenClaw; a node interpreter running an openclaw script is."""
@@ -303,7 +304,17 @@ class TestDetectOpenclawProcesses:
         # Nix's sys.executable can be a launcher that re-execs Python,
         # discarding both exec -a's argv[0] and the copied binary's comm.
         # Exercise actual process names with the running interpreter binary.
-        executable = Path("/proc/self/exe").resolve()
+        executable = next(
+            candidate for candidate in (
+                Path("/usr/bin/python3"), Path("/usr/local/bin/python3"),
+                Path("/proc/self/exe").resolve(),
+            )
+            if candidate.is_file()
+            and subprocess.run(
+                [str(candidate), "-c", "import encodings"],
+                capture_output=True,
+            ).returncode == 0
+        )
         idle = f'{executable} -c "import time; time.sleep(30)"'
         # argv mentions openclaw but the binary is not one.
         bystander = subprocess.Popen(["bash", "-c", f"exec {idle} {tmp_path}/openclaw-notes.txt"])
@@ -362,5 +373,3 @@ class TestWarnIfOpenclawRunning:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "OpenClaw appears to be running" in captured.out
-
-

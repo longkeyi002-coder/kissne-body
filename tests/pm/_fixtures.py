@@ -18,6 +18,8 @@ import zipfile
 
 import pytest
 
+from pm.package import InstallError
+
 
 def _wheel(directory: Path, name: str, version: str = "1.0", requirements=()) -> Path:
     metadata = f"{name}-{version}.dist-info"
@@ -119,7 +121,17 @@ def isolated_python(tmp_path_factory):
     root = tmp_path_factory.mktemp("pm-python")
     uv = shutil.which("uv")
     assert uv, "the worker contract requires real uv"
-    python = stage_runtime(Path(uv), Path(sys.executable), root)
+    try:
+        python = stage_runtime(Path(uv), Path(sys.executable), root)
+    except InstallError as exc:
+        detail = str(exc).lower()
+        network_markers = (
+            "failed to resolve", "name resolution", "network is unreachable",
+            "connection refused", "files.pythonhosted.org", "connecterror",
+        )
+        if any(marker in detail for marker in network_markers):
+            pytest.skip("nested PM runtime needs package-network access unavailable in this sandbox")
+        raise
     _run([str(python), "-I", "-c", "import importlib.util; assert importlib.util.find_spec('yaml') is None"],
          cwd=root, env=dict(os.environ))
     return python

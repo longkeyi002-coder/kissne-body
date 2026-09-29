@@ -24,7 +24,10 @@ import pytest
 
 from hermes_cli import process_identity as pi
 
-pytestmark = pytest.mark.platforms("posix")  # uses POSIX sleep children
+pytestmark = [
+    pytest.mark.requires_visible_children,
+    pytest.mark.platforms("posix"),  # uses POSIX sleep children
+]
 
 
 @pytest.fixture

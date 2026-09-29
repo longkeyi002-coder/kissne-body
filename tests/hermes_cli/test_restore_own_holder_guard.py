@@ -79,6 +79,7 @@ def live_held_db(tmp_path):
             pass
 
 
+@pytest.mark.requires_process_identity
 def test_safe_restore_fallback_refuses_under_own_live_connection(live_held_db):
     src, dst = live_held_db
     wal = dst.with_name(dst.name + "-wal")
@@ -91,6 +92,7 @@ def test_safe_restore_fallback_refuses_under_own_live_connection(live_held_db):
     assert _own_deleted_fds(str(dst.name)) == []
 
 
+@pytest.mark.requires_process_identity
 def test_update_autorestore_refuses_under_own_live_connection(
     live_held_db, capsys
 ):

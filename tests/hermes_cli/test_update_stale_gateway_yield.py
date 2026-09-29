@@ -64,6 +64,7 @@ def test_cron_status_still_green_after_a_clean_tick(cron_home):
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGUSR1"), reason="POSIX drain-first restart signal")
+@pytest.mark.requires_visible_children
 def test_update_signals_proven_stale_gateway_survivor(cron_home, tmp_path):
     """A `stale` fleet-matrix row gets SIGUSR1 (request_restart); a `current` row is untouched."""
     from hermes_cli.update_cmd_fleet import _GatewayRestartOutcome

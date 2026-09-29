@@ -242,6 +242,11 @@ from tests._fixtures.live_system_guard import (  # noqa: F401 — _live_system_g
     _live_system_guard,
 )
 from tests._fixtures.platform_gating import _platforms_gate_reason, _reject_contradictory_platform_marks
+from tests._fixtures.sandbox_capabilities import (
+    process_identity_available,
+    unix_sockets_available,
+    visible_child_processes_available,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -898,6 +903,23 @@ def _ensure_current_event_loop(request):
                 asyncio.set_event_loop(None)
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_capability_guards(request, _hermetic_environment, _live_system_guard):
+    """Re-check kernel capabilities after the subprocess/live-system fixtures.
+
+    Those fixtures deliberately wrap process creation, and a managed runner
+    can expose a different PID view after the wrappers are installed.
+    """
+    if request.node.get_closest_marker("requires_unix_sockets") and not unix_sockets_available():
+        pytest.skip("AF_UNIX sockets are unavailable in this test sandbox")
+    if request.node.get_closest_marker("requires_visible_children"):
+        visible_child_processes_available.cache_clear()
+        if not visible_child_processes_available():
+            pytest.skip("child PIDs are not visible through procfs/psutil in this sandbox")
+    if request.node.get_closest_marker("requires_process_identity") and not process_identity_available():
+        pytest.skip("process incarnation timestamps are unavailable in this sandbox")
+
+
 _REQUIRES_WAL_MARK = "requires_wal"
 
 
@@ -1145,6 +1167,18 @@ def pytest_configure(config):  # noqa: D401 — pytest hook
     )
     config.addinivalue_line(
         "markers",
+        "requires_unix_sockets: test needs AF_UNIX socket support from the kernel.",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_visible_children: test needs child PIDs visible through procfs/psutil.",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_process_identity: test needs a readable PID incarnation timestamp.",
+    )
+    config.addinivalue_line(
+        "markers",
         "real_memory_guard: bypass the autouse fixture that pins the kanban "
         "dispatcher's memory guard to 'no data' — only for tests that "
         "exercise the guard itself with their own patched samples.",
@@ -1210,6 +1244,12 @@ def pytest_runtest_setup(item):
                 "Environment does not support symbolic links "
                 "(requires admin/developer mode on Windows)"
             )
+    if item.get_closest_marker("requires_unix_sockets") and not unix_sockets_available():
+        pytest.skip("AF_UNIX sockets are unavailable in this test sandbox")
+    if item.get_closest_marker("requires_visible_children") and not visible_child_processes_available():
+        pytest.skip("child PIDs are not visible through procfs/psutil in this sandbox")
+    if item.get_closest_marker("requires_process_identity") and not process_identity_available():
+        pytest.skip("process incarnation timestamps are unavailable in this sandbox")
 
 
 def pytest_collection_modifyitems(config, items):  # noqa: D401 — pytest hook

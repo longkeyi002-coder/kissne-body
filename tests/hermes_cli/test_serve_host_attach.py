@@ -81,6 +81,7 @@ def _publish(create_time, *, pid=None, port=9119, host="127.0.0.1"):
     path.write_text(json.dumps(record.to_json()), encoding="utf-8")
 
 
+@pytest.mark.requires_visible_children
 def test_second_serve_attaches_to_the_live_host_backend(host_dir, owner, capsys):
     """A live record whose owner ANSWERS ends the second launch at exit 0 — it never binds."""
     _publish(hr.process_create_time(), port=owner.port)
@@ -92,6 +93,7 @@ def test_second_serve_attaches_to_the_live_host_backend(host_dir, owner, capsys)
     assert f"port {owner.port}" in capsys.readouterr().out
 
 
+@pytest.mark.requires_visible_children
 def test_inherited_desktop_flag_without_spawn_credential_still_attaches(host_dir, owner, monkeypatch):
     """A terminal spawned by Desktop inherits its marker, not Desktop ownership.
 
@@ -155,6 +157,7 @@ def test_unprovable_liveness_still_has_to_answer(host_dir, monkeypatch):
      (["hermes", "serve", "--host", "0.0.0.0"], {"host": "0.0.0.0"})],
     ids=["explicit-port", "explicit-host"],
 )
+@pytest.mark.requires_visible_children
 def test_an_explicit_endpoint_the_owner_cannot_serve_is_refused(host_dir, owner, monkeypatch,
                                                                 argv, over, capsys):
     """`--port 8899` answered with "use 127.0.0.1:<other>", or `--host 0.0.0.0` (LAN access)
@@ -171,6 +174,7 @@ def test_an_explicit_endpoint_the_owner_cannot_serve_is_refused(host_dir, owner,
     assert f"PID {os.getpid()}" in capsys.readouterr().out
 
 
+@pytest.mark.requires_visible_children
 def test_dashboard_is_never_routed_to_a_headless_backend(host_dir, owner, capsys):
     """`hermes serve` and `hermes dashboard` publish the same host role; only one mounts the SPA,
     so attaching a dashboard user to a headless backend opens a URL with no UI behind it."""

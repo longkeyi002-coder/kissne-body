@@ -62,6 +62,10 @@ def host_owner(tmp_path, monkeypatch):
     """A REAL live process published as the host gateway, answering identify for three profiles."""
     monkeypatch.setenv("HERMES_GATEWAY_LOCK_DIR", str(tmp_path / "locks"))
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    if hr.process_create_time(child.pid) is None:
+        child.terminate()
+        child.wait(timeout=10)
+        pytest.skip("child process identity is unavailable in this sandbox")
     home = tmp_path / "root"
     _write_record(child.pid, home, ("default", "ops", "coder"))
     monkeypatch.setattr(

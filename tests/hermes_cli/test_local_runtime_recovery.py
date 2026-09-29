@@ -217,6 +217,7 @@ def test_supervisor_reaps_owned_job_even_after_router_exit(tmp_path, monkeypatch
     assert sup._job is None
 
 
+@pytest.mark.requires_visible_children
 def test_spawn_state_records_process_incarnations(tmp_path, monkeypatch):
     import os
     from hermes_cli.local_runtime import supervisor
@@ -360,6 +361,7 @@ def test_explicit_stop_preserves_verified_root_incarnation(tmp_path, monkeypatch
 
 
 @pytest.mark.platforms("linux")
+@pytest.mark.requires_visible_children
 def test_reparented_router_keeps_its_endpoint(tmp_path, monkeypatch):
     from hermes_cli.local_runtime import endpoint, supervisor
 

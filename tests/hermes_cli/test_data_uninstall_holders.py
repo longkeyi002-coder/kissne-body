@@ -48,6 +48,7 @@ def test_live_chat_lease_blocks_data_deletion(layout):
         release_active_session(lease)
 
 
+@pytest.mark.requires_unix_sockets
 def test_manual_gateway_drains_over_real_control_transport_before_deletion(layout):
     import asyncio
     import subprocess
@@ -106,6 +107,7 @@ def test_manual_gateway_drains_over_real_control_transport_before_deletion(layou
 
 
 @pytest.mark.parametrize("profile", ["", "sibling"])
+@pytest.mark.requires_visible_children
 def test_backend_initial_profile_is_not_its_write_scope(layout, profile):
     from hermes_cli.process_identity import register_self
 
