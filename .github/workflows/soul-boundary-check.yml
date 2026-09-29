@@ -1,0 +1,31 @@
+name: Soul Boundary Check
+
+# Personal Soul/identity content -- the real content of $HERMES_HOME/SOUL.md and
+# $HERMES_HOME/memories/{SELF,MEMORY,USER}.md -- must never reach this
+# repository, a public branch, a PR or a published artifact (KB0-SOUL-GIT-GUARD).
+#
+# Ignore files reduce accidental staging; this job is the enforcement boundary
+# that still catches `git add -f`, a generated file present in a build context,
+# and an allowlisted template silently rewritten (the allowlist in
+# scripts/ci/check_soul_boundary.py pins each reviewed file's content digest).
+#
+# Runs unconditionally: any kind of PR can carry an identity file.  The same
+# script is wired into the pre-commit hook and into scripts/release.py, so the
+# policy is identical at all three boundaries.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check-soul-boundary:
+    name: Reject personal Soul content
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Reject personal Soul/identity content in the checkout
+        run: python3 scripts/ci/check_soul_boundary.py --repo-root . --release --no-hermes-home-env
