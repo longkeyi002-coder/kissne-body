@@ -6,7 +6,7 @@
     return selected ? models.filter(function (m) { return m.p === selected; }) : models.slice();
   }
   function eventAction(event, terminal) {
-    if (!terminal) return 'live';
+    if (!terminal || event.type === 'notice' || event.type === 'approval_resolved') return 'live';
     var presentation = String(event.presentation || '');
     if (['reasoning', 'tool_progress', 'tool_call', 'tool_result', 'commentary'].indexOf(presentation) >= 0) {
       return 'late_activity';

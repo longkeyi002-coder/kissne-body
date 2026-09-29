@@ -16,6 +16,9 @@ test('late activity can enrich a terminal turn without reopening it', () => {
     assert.equal(eventAction({ presentation }, true), 'late_activity');
     assert.equal(eventAction({ presentation }, false), 'live');
   }
+  for (const type of ['notice', 'approval_resolved']) {
+    assert.equal(eventAction({ type }, true), 'live');
+  }
   for (const type of ['pending', 'delta', 'completed', 'cancelled']) {
     assert.equal(eventAction({ type }, true), 'ignore');
   }
