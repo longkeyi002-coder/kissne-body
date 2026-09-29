@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 50173)
-Total output lines: 4019
-
 /* =====================================================================
    Kissne 手机端 UI · screens-a.js
    页面： 首页 / 聊天 / 小机星 / 通话 / 表情包
@@ -1974,7 +1971,24 @@ Total output lines: 4019
             }
           }
           if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
-          var historyHtml = chatHtmlFromWire(rawText) + h…173 tokens truncated…     });
+          var historyHtml = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
+          if (messageRef && CHAT_LOG.some(function (row) { return row.messageRef === messageRef; })) return;
+          CHAT_LOG.push({
+            who: role === 'user' ? 'me' : 'ai',
+            html: historyHtml,
+            activity: activity,
+            attachments: attachments,
+            replyTo: String(item.reply_to || ''),
+            replyPreview: item.reply_preview || null,
+            time: historyClock(item.created_at),
+            day: chatDayKey(item.created_at),
+            sortAt: item.created_at,
+            messageRef: messageRef,
+            turnId: turnId,
+            localOwned: false,
+            optimistic: false
+          });
+        });
 
         function keepRecoveredLocal(m) {
           if (!m) return false;
