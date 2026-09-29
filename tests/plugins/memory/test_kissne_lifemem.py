@@ -171,9 +171,10 @@ def test_session_switch_flushes_pending_memory_before_new_session(tmp_path):
     import plugins.memory.lifemem as mod
     provider=mod.LifememProvider(config=dict(mod.DEFAULTS))
     provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
-    provider._q.put(("session-a",provider._store.add_turn("session-a","记住，我喜欢绿色","收到"),
-                     "记住，我喜欢绿色","收到"))
+    turn_id=provider._store.add_turn("session-a","记住，我喜欢绿色","收到")
+    provider._q.put(("session-a",turn_id,"记住，我喜欢绿色","收到"))
     provider.on_session_switch("session-b")
+    assert provider._q.unfinished_tasks==0
     rows=provider._store.recall("绿色",limit=10,memory_spaces=["reality"])
     assert rows
     assert rows[0]["session_id"]=="session-a"
