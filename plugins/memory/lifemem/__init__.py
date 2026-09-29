@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import queue
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -89,7 +90,7 @@ class LifememProvider(MemoryProvider):
         self._writable = True
         self._q = queue.Queue()
         self._queued_sessions = set()
-        self._queue_lock = __import__("threading").RLock()
+        self._queue_lock = threading.RLock()
         self._writer = None
         self._last_recall = None
 
