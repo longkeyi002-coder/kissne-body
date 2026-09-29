@@ -4,9 +4,8 @@ Session ids are references to Hermes SessionStore ids. Lifemem never creates or
 owns the conversation lifecycle.
 """
 from __future__ import annotations
-import json, math, sqlite3, threading, time
+import math, sqlite3, threading, time
 from array import array
-from typing import Any, Dict, List, Optional
 
 def _pack(v):
     if not v: return None
@@ -64,11 +63,6 @@ class MemoryStore:
                     self._conn.execute(f"ALTER TABLE turns ADD COLUMN {name} {ddl}")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lifemem_turn_memory_state ON turns(memory_state,session_id,id)")
             self._conn.commit()
-
-    @property
-    def path(self):
-        row=self._conn.execute("PRAGMA database_list").fetchone()
-        return str(row["file"] if row else "")
 
     def close(self):
         with self._lock:
