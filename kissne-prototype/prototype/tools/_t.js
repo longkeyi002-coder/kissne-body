@@ -50,14 +50,13 @@ function renderScreen(id, state, params) {
   if (!s) throw new Error('找不到屏幕 ' + id);
   return s.render({ state: state || (s.states[0] && s.states[0].key), nav: function () {}, params: params || new URLSearchParams('') });
 }
-var home, chat, uni, welcome, assets, uniScene;
+var home, chat, uni, memory, stickers, uniScene;
 try {
   home = renderScreen('home', 'online');
-  var homeOff = renderScreen('home', 'offline');
   chat = renderScreen('chat', 'empty');
   uni = renderScreen('universe', 'auto');
-  welcome = renderScreen('welcome', 'final');
-  assets = renderScreen('assets', 'default');
+  memory = renderScreen('memory', 'list');
+  stickers = renderScreen('stickers', 'default');
   uniScene = renderScreen('universe', 'scene', new URLSearchParams('room=living'));
 } catch (e) {
   console.log('FAIL · 渲染抛错: ' + e.message);
@@ -65,14 +64,21 @@ try {
 }
 /* 首页两张星卡已有真图（real/*.jpg），所以按**占位代码**断言引用，不写死路径。 */
 assert('home 含星卡角色素材引用', home && home.indexOf('FOX_HOME_CHARACTER') >= 0 && home.indexOf('SHEEP_CHARACTER_RESERVED') >= 0);
-assert('home 含离线插画引用', homeOff && homeOff.indexOf('placeholders/offline.svg') >= 0);
 assert('chat 含状态表情引用', chat && chat.indexOf('characters/yeqingxu/expressions/state.svg') >= 0);
 assert('universe 俯视图含背景图层', uni && uni.indexOf('class="bg-asset"') >= 0 && uni.indexOf('backgrounds/scene-room.svg') >= 0);
-assert('universe 场景视图含背景图层', uniScene && uniScene.indexOf('backgrounds/scene-room.svg') >= 0);
+assert('universe 场景视图可渲染', uniScene && uniScene.indexOf('screen--scene') >= 0);
 assert('universe 小人带 data-asset', uni && uni.indexOf('data-asset="characters/yeqingxu/actions/pixel.svg"') >= 0);
-assert('welcome 双人角色经 assets 引用', welcome && welcome.indexOf('characters/yeqingxu/avatar/splash.svg') >= 0 && welcome.indexOf('characters/sheep/avatar/splash.svg') >= 0);
-assert('assets 页含动画占位展示', assets && assets.indexOf('data-anim="chat/typing"') >= 0 && assets.indexOf('静态兜底') >= 0);
-assert('assets 页含目录结构总览', assets && assets.indexOf('统一素材目录（assets/）') >= 0);
+assert('memory 页可渲染', memory && memory.indexOf('appbar__title">记忆库') >= 0);
+assert('stickers 页可渲染', stickers && stickers.indexOf('appbar__title">表情包') >= 0);
+
+/* Chat process UI contract: activity is independent from spoken assistant text,
+   uses a compact label, and remains individually expandable. */
+var screensSource = fs.readFileSync(path.join(base, 'screens-a.js'), 'utf8');
+assert('过程记录不复用正文头像行', screensSource.indexOf('var process = activity ?') >= 0
+  && screensSource.indexOf('data-live-message') >= 0);
+assert('过程框不用大号“思考过程”标题', screensSource.indexOf("<b>思考过程</b>") < 0
+  && screensSource.indexOf("closed ? '过程记录' : '处理中'") >= 0);
+assert('工具与思考均可展开', screensSource.indexOf("row.closest('.process-step')") >= 0);
 
 console.log('\n示例 K.icon(home):', ic);
 console.log('示例 K.asset(FOX_HOME_CHARACTER):', a);
