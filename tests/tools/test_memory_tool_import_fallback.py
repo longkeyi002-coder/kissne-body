@@ -9,6 +9,17 @@ from tools.registry import registry
 
 def test_memory_tool_imports_without_fcntl(monkeypatch, tmp_path):
     original_import = builtins.__import__
+    import tools as tools_package
+
+    # Importing a submodule also stores it as an attribute on its parent package.
+    # Restoring only sys.modules leaves tools.memory_tool pointing at the fallback
+    # module after this test, so later tests silently run with fcntl=None.
+    package_had_memory_tool = hasattr(tools_package, "memory_tool")
+    package_memory_tool = getattr(tools_package, "memory_tool", None)
+    if package_had_memory_tool:
+        monkeypatch.setattr(tools_package, "memory_tool", package_memory_tool)
+    else:
+        monkeypatch.delattr(tools_package, "memory_tool", raising=False)
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "fcntl":
