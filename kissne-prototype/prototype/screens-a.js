@@ -710,12 +710,12 @@
   }
   function activityRows(state, closed) {
     var rows = [];
-    if (state.reasoning) {
+    if (state.reasoning && String(state.reasoningText || '').trim()) {
       rows.push('<div class="activity-item">'
         + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
         + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(state.reasoningText || (closed ? '已完成这一步处理。' : '正在分析并处理当前请求。')) + '</div></div>');
+        + '<div class="activity-detail" hidden>' + esc(state.reasoningText) + '</div></div>');
     }
     (state.toolOrder || []).forEach(function (key) {
       var tool = state.toolCalls[key];
