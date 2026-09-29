@@ -173,10 +173,12 @@ class LayaEngine(context: Context, val storage: Storage = Storage.WFP16) : Close
     question: Map<String, Any?>,
     window: Int = 256,
     questionId: String = "",
+    headMaxLen: Int = 256,
   ): LayaSequence {
     checkOpen()
     requireWindow(window)
-    return LayaPromptBuilder(tokenizer, maxLen = window, headMaxLen = 256)
+    require(headMaxLen in 16..window) { "Question budget must fit the model window" }
+    return LayaPromptBuilder(tokenizer, maxLen = window, headMaxLen = headMaxLen)
       .build(state, question, questionId)
   }
 
@@ -258,9 +260,10 @@ class LayaEngine(context: Context, val storage: Storage = Storage.WFP16) : Close
     backend: Backend,
     questionId: String = "",
     window: Int = 256,
+    headMaxLen: Int = 256,
   ): AnswerResult {
     val started = System.nanoTime()
-    val sequence = prepare(state, question, window, questionId)
+    val sequence = prepare(state, question, window, questionId, headMaxLen)
     val prepared = System.nanoTime()
     val raw = runRaw(sequence, backend, window)
     check(raw.finite) {
