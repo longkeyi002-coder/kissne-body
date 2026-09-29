@@ -180,3 +180,48 @@ def test_session_switch_flushes_pending_memory_before_new_session(tmp_path):
     assert rows[0]["session_id"]=="session-a"
     assert provider._session_id=="session-b"
     provider.shutdown()
+
+
+def test_turns_stay_pending_without_per_turn_decision_before_threshold(tmp_path):
+    import plugins.memory.lifemem as mod
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=3
+    provider=mod.LifememProvider(config=config)
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    calls=[]
+    provider._decision.decide=lambda user,assistant="": calls.append((user,assistant))
+    provider.sync_turn("第一轮普通内容","收到",session_id="session-a")
+    provider.sync_turn("第二轮普通内容","收到",session_id="session-a")
+    assert calls==[]
+    assert provider._store.pending_turn_count(session_id="session-a")==2
+    provider.shutdown()
+
+
+def test_threshold_queues_session_consolidation_and_marks_episodes_processed(tmp_path):
+    import plugins.memory.lifemem as mod
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=2
+    provider=mod.LifememProvider(config=config)
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    provider.sync_turn("普通第一轮","收到",session_id="session-a")
+    provider.sync_turn("记住，我喜欢绿色","收到",session_id="session-a")
+    provider._flush("session-a")
+    assert provider._store.pending_turn_count(session_id="session-a")==0
+    rows=provider._store.recall("绿色",limit=10,memory_spaces=["reality"])
+    assert rows and rows[0]["session_id"]=="session-a"
+    provider.shutdown()
+
+
+def test_episode_processing_state_survives_reopen(tmp_path):
+    from plugins.memory.lifemem.store import MemoryStore
+    path=str(tmp_path/"memory.db")
+    db=MemoryStore(path)
+    turn_id=db.add_turn("session-a","记住，我喜欢绿色","收到")
+    assert db.pending_turn_count(session_id="session-a")==1
+    db.close()
+    reopened=MemoryStore(path)
+    rows=reopened.pending_turns(session_id="session-a")
+    assert [row["id"] for row in rows]==[turn_id]
+    reopened.mark_turn_processed(turn_id)
+    assert reopened.pending_turn_count(session_id="session-a")==0
+    reopened.close()
