@@ -210,6 +210,10 @@ def _get_parent_pid(pid: int) -> int | None:
     """Parent PID for ``pid``, or None. psutil first (works on Windows, where ``ps`` doesn't)."""
     if pid <= 1:
         return None
+    # psutil can be attached to a different PID namespace in a container.  The
+    # parent of this process is still authoritative from the interpreter itself.
+    if pid == os.getpid():
+        return os.getppid() or None
     try:
         import psutil  # type: ignore
         return psutil.Process(pid).ppid() or None

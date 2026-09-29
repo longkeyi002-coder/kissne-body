@@ -25,7 +25,11 @@ HEADERS = {"X-Hermes-Session-Token": _SESSION_TOKEN}
 __all__ = ["free_account", "portal"]  # fixtures imported from the CLI test module
 
 
-def _wait_for_terminal(session_id: str, timeout: float = 10.0) -> dict:
+def _wait_for_terminal(session_id: str, timeout: float = 30.0) -> dict:
+    # The route deliberately completes the transfer in a daemon worker.  Under
+    # the file-isolated full suite that worker can wait behind CPU-heavy files,
+    # so retain the asynchronous contract without turning scheduler pressure
+    # into a false "pending forever" result.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         body = client.get(f"/api/providers/oauth/nous/poll/{session_id}", headers=HEADERS).json()

@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import suppress
 import json
 import logging
+import os
 import threading
 import time
 import urllib.request
@@ -24,6 +25,11 @@ def _pid_alive(pid: int) -> bool:
     (optimistic). On Windows ``os.kill(pid, 0)`` TERMINATES the process — never use it as a probe."""
     if not pid or pid < 0:
         return False
+    # In PID namespaces psutil may inspect the host namespace and fail to see this
+    # process even though the PID came directly from os.getpid().  The current
+    # process is unambiguously alive without consulting an external process table.
+    if pid == os.getpid():
+        return True
     with suppress(Exception):
         import psutil  # type: ignore
 

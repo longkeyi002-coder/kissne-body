@@ -132,10 +132,12 @@ def test_runtime_node_comes_from_pm_without_legacy_repair(tmp_path, monkeypatch)
     import pm
     from pm.package import Runner
 
-    node = shutil.which("node")
     managed = tmp_path / "bin/node"
     managed.parent.mkdir()
-    managed.symlink_to(node)
+    # _tui_node_bin only resolves the executable.  A local shim keeps this
+    # unit test independent of whichever managed Node happens to be on PATH.
+    managed.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    managed.chmod(0o755)
     monkeypatch.delenv("HERMES_NODE", raising=False)
     acquired = []
 

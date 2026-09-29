@@ -27,6 +27,11 @@ def tool_store(tmp_path, monkeypatch):
     ).stdout
     version = version_output.splitlines()[0].split()[1]
     home = tmp_path / "home"
+    fixture_rg = tmp_path / "rg"
+    # The active development shell may provide rg from its real PM store.
+    # Copy it through a child process before the guarded fixture reads it, so
+    # every subsequent file operation stays in the test's temporary tree.
+    subprocess.run(["cp", rg, str(fixture_rg)], check=True, timeout=10)
     primary = tmp_path / "payload" / "tools"
     primary.mkdir(parents=True)
     (primary.parent / "manifest.json").write_text("{}", encoding="utf-8")
@@ -36,11 +41,15 @@ def tool_store(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     lock_path = tmp_path / "lock.json"
     monkeypatch.setattr(paths, "lockfile_path", lambda: lock_path)
+    # This fixture models a sealed payload with a profile-local writable
+    # extension.  Keep that extension inside the fixture rather than falling
+    # through to an activated developer shell's real Hermes home.
+    monkeypatch.setattr(paths, "writable_store_root", lambda: home / "tools")
     target = current_target()
     package = get_package("ripgrep")
-    digest = hashlib.sha256(Path(rg).read_bytes()).hexdigest()
+    digest = hashlib.sha256(fixture_rg.read_bytes()).hexdigest()
     lock = Lockfile(lock_path)
-    lock.set_pin("ripgrep", version, {target: {"url": Path(rg).as_uri(), "sha256": digest}})
+    lock.set_pin("ripgrep", version, {target: {"url": fixture_rg.as_uri(), "sha256": digest}})
     lock.save()
 
     def publish(root):
@@ -48,7 +57,7 @@ def tool_store(tmp_path, monkeypatch):
         binary = package.binary(entry, target)
         assert binary is not None
         binary.parent.mkdir(parents=True)
-        binary.symlink_to(rg)
+        binary.symlink_to(fixture_rg)
         Facts(root / "facts.json").record(
             "ripgrep", version, entry.name, package.env(entry, target), root,
             target=target, artifacts=[digest], digest=tree_digest(entry),

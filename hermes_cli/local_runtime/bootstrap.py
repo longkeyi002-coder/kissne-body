@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from hermes_cli.local_runtime.gguf import SPLIT_PART_RE, model_id_from_stem
 logger = logging.getLogger(__name__)
 
 _SUPERVISOR = None  # process-wide singleton; one router per Hermes process
+_IN_PROCESS_BOOT_LOCK = threading.Lock()
 
 
 def _detect_gpu_vendor() -> str | None:
@@ -240,28 +242,38 @@ def _cross_process_boot_lock(timeout_s: float = 130.0):
     Bounded, not indefinite: never hang session start dead if the lock is somehow stuck, and
     never raise into session start: an unwritable runtimes dir (or a foreign-owned lock file)
     proceeds unlocked with a warning, like the contention timeout."""
-    path = runtimes_root() / "boot.lock"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    except OSError as exc:
-        logger.warning("boot lock unavailable (%s); proceeding without it", exc)
+    # flock serializes independent processes, but a process-local guard is also
+    # needed for two threads when the platform's file-lock view is namespace- or
+    # process-scoped. Keep the OS lock below for cross-process callers.
+    if not _IN_PROCESS_BOOT_LOCK.acquire(timeout=timeout_s):
+        logger.warning("in-process boot lock contended past %.0fs; proceeding without it", timeout_s)
         yield
         return
     try:
-        deadline = time.monotonic() + timeout_s
-        while not _try_lock_boot_fd(fd):
-            if time.monotonic() >= deadline:
-                logger.warning("boot lock contended past %.0fs; proceeding without it", timeout_s)
-                break
-            time.sleep(0.2)
+        path = runtimes_root() / "boot.lock"
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            logger.warning("boot lock unavailable (%s); proceeding without it", exc)
             yield
+            return
+        try:
+            deadline = time.monotonic() + timeout_s
+            while not _try_lock_boot_fd(fd):
+                if time.monotonic() >= deadline:
+                    logger.warning("boot lock contended past %.0fs; proceeding without it", timeout_s)
+                    break
+                time.sleep(0.2)
+            try:
+                yield
+            finally:
+                with suppress(OSError):
+                    _unlock_boot_fd(fd)
         finally:
-            with suppress(OSError):
-                _unlock_boot_fd(fd)
+            os.close(fd)
     finally:
-        os.close(fd)
+        _IN_PROCESS_BOOT_LOCK.release()
 
 
 def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":

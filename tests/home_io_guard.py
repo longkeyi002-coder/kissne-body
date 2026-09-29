@@ -68,7 +68,10 @@ class HomeIOGuard:
             if metadata:
                 path = os.environ.get("PATH", "")
                 cwd = os.getcwd() if self._relative_path_entries(path) else None
-                if absolute.parent in self._path_entries(path, cwd):
+                path_entries = self._path_entries(path, cwd)
+                # A lookup may stat either ``<entry>/<command>`` or the PATH
+                # entry itself (notably when a command value is empty).
+                if absolute in path_entries or absolute.parent in path_entries:
                     return
             # The interpreter's own installation (a PM-managed python under ~/.hermes/tools):
             # stdlib source reads (linecache, traceback) are not Hermes state either, nor is

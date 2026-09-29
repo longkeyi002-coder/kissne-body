@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from contextvars import copy_context
 from dataclasses import dataclass, replace
-from threading import Lock, Thread, current_thread
+from threading import Event, Lock, Thread, current_thread
 from typing import Any, Optional
 
 _pricing_prewarm_lock = Lock()
@@ -753,8 +753,14 @@ def _prewarm_pricing_async(
             return current
         # The worker mutates only private copies; the pricing helpers populate shared process caches.
         worker_rows = [{**row, "models": list(row.get("models") or [])} for row in rows]
+        # ``Thread.start()`` waits until the child has begun.  If it immediately runs a Python-heavy
+        # pricing fetch, it can retain the GIL until that fetch blocks, accidentally making a normal
+        # picker open wait for the cold request.  Park it first, return control to the caller, then
+        # release the prewarm work below.
+        start_gate = Event()
 
         def _worker() -> None:
+            start_gate.wait()
             try:
                 _apply_pricing(worker_rows)
             finally:
@@ -766,6 +772,7 @@ def _prewarm_pricing_async(
                         name="hermes-picker-pricing-prewarm", daemon=True)
         _pricing_prewarm_threads[prewarm_key] = thread
         thread.start()
+        start_gate.set()
         return thread
 
 

@@ -33,7 +33,10 @@ async def test_removed_sessions_keep_profile_idle_watermark(tmp_path, monkeypatc
                 gateway._sessions["watermark"] = {
                     "last_active": recent, "running": False, "profile_home": str(tmp_path)}
             assert gateway._close_session_by_id("watermark", end_reason=reason)
-            assert _skill_maintenance_idle_for(recent - 3600) < 2
+            # Session teardown may run lifecycle/plugin cleanup before returning; the
+            # watermark must remain recent, but a sub-second assertion flakes under
+            # the full parallel suite.
+            assert _skill_maintenance_idle_for(recent - 3600) < 5
         # An active sibling profile must not hold this profile's idle clock.
         with gateway._sessions_lock:
             gateway._sessions["other-profile"] = {

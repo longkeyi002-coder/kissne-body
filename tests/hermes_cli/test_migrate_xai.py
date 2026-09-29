@@ -195,6 +195,9 @@ class TestUnreadableExistingConfig:
         the original bytes must survive."""
         import os
 
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("mode-bit readability cannot be tested as root")
+
         issues = find_retired_xai_refs(_parse(trap_config))
         assert issues  # sanity: trap_config has retired refs
         original = trap_config.read_bytes()
