@@ -605,11 +605,10 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: false, reasoningText: '', toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { timeline: [], toolCalls: {}, done: false, updatedAt: Date.now() };
     }
     var state = TURN_ACTIVITY[id];
-    if (typeof state.reasoningText !== 'string') state.reasoningText = '';
-    if (!Array.isArray(state.toolOrder)) state.toolOrder = [];
+    if (!Array.isArray(state.timeline)) state.timeline = [];
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
   }
@@ -624,23 +623,28 @@
         var row = parsed[id];
         if (!row || typeof row !== 'object') return;
         var state = activityForTurn(id);
-        state.reasoning = !!row.reasoning;
-        state.reasoningText = activityDetailText(row.reasoningText || '');
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
-        (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
-          var tool = row.toolCalls && row.toolCalls[key];
-          if (!tool || typeof tool !== 'object') return;
-          state.toolOrder.push(String(key));
-          state.toolCalls[String(key)] = {
-            id: String(tool.id || key),
-            name: cleanActivityText(tool.name || '', ''),
-            label: cleanActivityText(tool.label || '', '使用工具'),
-            detail: activityDetailText(tool.detail || ''),
-            result: activityDetailText(tool.result || ''),
-            status: toolCallStatus(tool.status, 'completed')
-          };
-        });
+        if (Array.isArray(row.timeline)) {
+          state.timeline = row.timeline.slice(-48).map(function (item) {
+            return item && typeof item === 'object' ? Object.assign({}, item) : null;
+          }).filter(Boolean);
+        } else {
+          /* One-time migration from the old grouped reasoning/tools store. */
+          var legacyReasoning = activityDetailText(row.reasoningText || '');
+          if (legacyReasoning) state.timeline.push({ kind: 'reasoning', text: legacyReasoning });
+          (Array.isArray(row.toolOrder) ? row.toolOrder : []).forEach(function (key) {
+            var tool = row.toolCalls && row.toolCalls[key];
+            if (!tool) return;
+            state.timeline.push({ kind: 'tool', key: String(key) });
+            state.toolCalls[String(key)] = Object.assign({}, tool);
+          });
+        }
+        if (row.toolCalls && typeof row.toolCalls === 'object') {
+          Object.keys(row.toolCalls).forEach(function (key) {
+            state.toolCalls[key] = Object.assign({}, row.toolCalls[key]);
+          });
+        }
       });
     } catch (e) {}
   }
@@ -655,27 +659,16 @@
       if (keyName) localStorage.setItem(keyName, JSON.stringify(TURN_ACTIVITY));
     } catch (e) {}
   }
-
   function upsertToolActivity(turnId, value, phase) {
     var state = activityForTurn(turnId);
     var row = value && typeof value === 'object' ? value : { detail: value };
-    var key = toolCallKey(row, state.toolOrder.length);
+    var key = toolCallKey(row, state.timeline.length);
     var current = state.toolCalls[key];
     if (!current) {
-      current = {
-        id: key,
-        name: '',
-        label: '',
-        detail: '',
-        result: '',
-        status: 'running'
-      };
+      current = { id: key, name: '', label: '', detail: '', result: '', status: 'running' };
       state.toolCalls[key] = current;
-      state.toolOrder.push(key);
-      if (state.toolOrder.length > 24) {
-        var dropped = state.toolOrder.shift();
-        delete state.toolCalls[dropped];
-      }
+      state.timeline.push({ kind: 'tool', key: key });
+      if (state.timeline.length > 48) state.timeline.shift();
     }
     current.name = cleanActivityText(row.tool_name || row.tool || row.function_name || current.name, current.name);
     current.label = cleanActivityText(row.label || '', current.label)
@@ -693,14 +686,16 @@
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
     if (kind === 'reasoning') {
-      var reasoningText = activityDetailText(value || '');
-      state.reasoning = true;
-      if (reasoningText) {
-        /* Reasoning may stream in cumulative snapshots or incremental chunks.
-           Replace cumulative snapshots; append genuinely new chunks. */
-        if (!state.reasoningText) state.reasoningText = reasoningText;
-        else if (reasoningText.indexOf(state.reasoningText) === 0) state.reasoningText = reasoningText;
-        else if (state.reasoningText.indexOf(reasoningText) < 0) state.reasoningText += '\n' + reasoningText;
+      var text = activityDetailText(value || '');
+      if (!text) return false;
+      var last = state.timeline[state.timeline.length - 1];
+      if (last && last.kind === 'reasoning') {
+        if (!last.text) last.text = text;
+        else if (text.indexOf(last.text) === 0) last.text = text;
+        else if (last.text.indexOf(text) < 0) last.text += '\n' + text;
+      } else {
+        state.timeline.push({ kind: 'reasoning', text: text });
+        if (state.timeline.length > 48) state.timeline.shift();
       }
       state.updatedAt = Date.now();
       persistTurnActivity();
@@ -708,33 +703,38 @@
     }
     return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
   }
+  function reasoningHtml(text) {
+    return esc(String(text || '')).replace(/\n{3,}/g, '\n\n');
+  }
   function activityRows(state, closed) {
-    var rows = [];
-    if (state.reasoning && String(state.reasoningText || '').trim()) {
-      rows.push('<div class="activity-item">'
-        + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(state.reasoningText) + '</div></div>');
-    }
-    (state.toolOrder || []).forEach(function (key) {
+    return (state.timeline || []).map(function (item, index) {
+      if (!item) return '';
+      var separator = index ? '<div class="process-separator" aria-hidden="true"><span>°。⑅♡⑅。°</span></div>' : '';
+      if (item.kind === 'reasoning') {
+        return separator + '<section class="process-step process-step--reasoning">'
+          + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="true">'
+          + '<span class="process-step__mark">✧</span><span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
+          + icon('chevron', 12, 'activity-chevron') + '</button>'
+          + '<div class="activity-detail process-reasoning">' + reasoningHtml(item.text) + '</div></section>';
+      }
+      if (item.kind !== 'tool') return '';
+      var key = String(item.key || '');
       var tool = state.toolCalls[key];
-      if (!tool) return;
+      if (!tool) return '';
       var status = closed && tool.status === 'running' ? 'completed' : tool.status;
       var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
       var meta = tool.name ? '<span class="activity-toolname">' + esc(tool.name) + '</span>' : '';
-      rows.push('<div class="activity-item activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+      return separator + '<section class="process-step process-step--tool activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
         + '<span class="activity-statusdot" aria-hidden="true"></span>'
         + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
         + '<span class="activity-copy"><span class="activity-label">' + esc(tool.label || '使用工具') + '</span>' + meta + '</span>'
         + '<span class="activity-count">' + esc(statusText) + '</span>'
         + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
-    });
-    return rows.join('');
+        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></section>';
+    }).join('');
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
@@ -742,8 +742,11 @@
     var closed = done === true || state.done === true;
     var rows = activityRows(state, closed);
     if (!rows) return '';
-    return '<div class="activity-stream' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
-      + rows + '</div>';
+    return '<div class="activity-stream process-frame' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
+      + '<div class="process-frame__top"><span>₊˚⊹♡</span><b>思考过程</b><span>♡⊹˚₊</span></div>'
+      + '<div class="process-frame__body">' + rows + '</div>'
+      + '<div class="process-frame__bottom" aria-hidden="true">𓂃𓈒𓐍 ⋆｡˚ ୨♡୧ ˚｡⋆ 𓂃𓈒𓐍</div>'
+      + '</div>';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
