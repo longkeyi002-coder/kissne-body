@@ -20,6 +20,15 @@ jobs:
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.10" }
+      - name: Verify bundled web app
+        run: |
+          test -f ../../kissne-prototype/prototype/index.html
+          test -f ../../kissne-prototype/prototype/app.js
+          test -f ../../kissne-prototype/prototype/core.js
+          test -f ../../kissne-prototype/prototype/screens-a.js
+          test -f ../../kissne-prototype/prototype/screens-b.js
+          test -f ../../kissne-prototype/prototype/styles.css
+          test -f ../../kissne-prototype/prototype/transport.js
       - run: gradle test
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
