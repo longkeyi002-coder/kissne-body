@@ -261,16 +261,23 @@
     closeWebAiSheet();
     var text = msg && msg.getAttribute('data-message-text') || '';
     if (!text.trim()) return;
+    var rect = msg.getBoundingClientRect();
     var sheet = document.createElement('div');
-    sheet.className = 'webai-sheet';
+    sheet.className = 'webai-sheet webai-popover';
     sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
-      + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
-      + '<div class="webai-sheet__title">发送给…</div>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>临时网页 · 不共享上下文</span></button>'
-      + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
+      + '<div class="webai-sheet__panel" role="menu" aria-label="发送给其他 AI">'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">发送给 DeepSeek</button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">发送给 GPT</button></div>';
     sheet.dataset.messageText = text;
     document.body.appendChild(sheet);
+    var panel = sheet.querySelector('.webai-sheet__panel');
+    var panelRect = panel.getBoundingClientRect();
+    var gap = 7;
+    var left = Math.max(8, Math.min(window.innerWidth - panelRect.width - 8, rect.left + (rect.width - panelRect.width) / 2));
+    var top = rect.top - panelRect.height - gap;
+    if (top < 8) top = Math.min(window.innerHeight - panelRect.height - 8, rect.bottom + gap);
+    panel.style.left = Math.round(left) + 'px';
+    panel.style.top = Math.round(top) + 'px';
   }
   document.addEventListener('pointerdown', function (e) {
     var msg = e.target.closest && e.target.closest('[data-chat-message]');
