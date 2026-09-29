@@ -132,6 +132,46 @@ def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
     assert payload["model"] == "anthropic/claude-sonnet-4.5"
 
 
+def test_set_model_rejects_when_next_turn_route_stays_on_old_model(tmp_path):
+    class Runner:
+        def __init__(self, adapter):
+            self.adapter = adapter
+            self._session_model_overrides = {}
+
+        async def _handle_model_command(self, event):
+            key = self.adapter.mobile_session_key(PAIRED_INSTALLATION)
+            self._session_model_overrides[key] = {
+                "model": "mimo-v2.6-flash", "provider": "opencode-go",
+            }
+            return "switched"
+
+        def _resolve_session_agent_runtime(self, *, source, session_key):
+            # Simulate the exact regression seen on device: slash bookkeeping changed,
+            # but the route used by the next turn is still the old backend model.
+            return "old-model", {"provider": "old-provider"}
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            adapter.set_session_store(sessions)
+            adapter.gateway_runner = Runner(adapter)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=preexisting_conversation(sessions))
+                return await http(port, "POST", "/set-model", token=token, body={
+                    "provider": "opencode-go", "model": "mimo-v2.6-flash",
+                })
+            finally:
+                await stop(adapter)
+
+    status, payload, _ = run(scenario())
+    assert status == 409, payload
+    assert payload["error"] == "model_switch_not_effective"
+    assert payload["actual_model"] == "old-model"
+    assert payload["actual_provider"] == "old-provider"
+
+
 def test_set_model_does_not_acknowledge_an_unapplied_gateway_command(tmp_path):
     class Runner:
         _session_model_overrides = {}
