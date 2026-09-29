@@ -1227,7 +1227,11 @@ def _route_explicit_provider(st: _Switch) -> Optional[ModelSwitchResult]:
     if pdef is None:
         return st.fail(_unknown_provider_message(st.explicit_provider))
 
-    st.target_provider, st.provider_label = pdef.id, pdef.name  # label is re-derived in the credential step
+    # Plugin profiles may intentionally expose a user-facing alias that differs from
+    # the normalized provider id; keep that spelling in the result while runtime
+    # resolution still uses the canonical definition.
+    st.target_provider = st.explicit_provider.strip() if pdef.source == "plugin-profile" else pdef.id
+    st.provider_label = pdef.name  # label is re-derived in the credential step
     if st.target_provider == "moa" and not st.new_model:
         st.new_model = _moa_default_preset()
 

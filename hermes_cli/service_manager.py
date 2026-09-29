@@ -1,6 +1,7 @@
 """Abstract service manager interface + systemd/launchd/Windows/s6 backends."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -319,6 +320,11 @@ def _chown_hermes(path: Path) -> None:
         # Already running as hermes → the dir is hermes-owned by default; swallowing keeps root
         # and unprivileged callers on one code path.
         pass
+    except OSError as exc:
+        # Minimal/test containers may not define the image UID/GID.  Treat that as an
+        # unavailable ownership remap; preserve all other filesystem failures.
+        if exc.errno != errno.EINVAL:
+            raise
 
 
 def _seed_supervise_skeleton(svc_dir: Path) -> None:

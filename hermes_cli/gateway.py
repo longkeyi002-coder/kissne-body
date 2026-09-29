@@ -2946,7 +2946,7 @@ def _hermes_home_for_target_user(target_home_dir: str) -> str:
     """Remap the current HERMES_HOME (root's, under sudo) to the target user's equivalent:
     ``/root/.hermes[/profiles/x]`` → ``/home/alice/.hermes[/profiles/x]``; custom paths kept as-is."""
     current_hermes_raw = os.environ.get("HERMES_HOME", "").strip()
-    current_hermes = Path(current_hermes_raw).expanduser() if current_hermes_raw else get_hermes_home()
+    current_hermes = Path(current_hermes_raw).expanduser() if current_hermes_raw else Path.home() / ".hermes"
     # Keep paths lexical: resolving a non-existent path can bake a different HERMES_HOME into the unit.
     current_default = Path.home() / ".hermes"
     target_default = Path(target_home_dir) / ".hermes"
@@ -3085,7 +3085,11 @@ def _prepare_service_launcher(*, system: bool = False, run_as_user: str | None =
     from hermes_cli._launchers import ENTRY_POINTS, ensure_install_launchers, resolve_store_python
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
 
-    root, home = PROJECT_ROOT, get_hermes_home()
+    from hermes_constants import get_process_hermes_home
+
+    # A service unit belongs to the launching process, not to a request-scoped
+    # profile override that may be active while the unit is being generated.
+    root, home = PROJECT_ROOT, get_process_hermes_home()
     owner = None
     if system:
         username, _group, home_dir, uid = _system_service_identity(run_as_user)
@@ -3157,7 +3161,8 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
         ) + _ld_library_path_line(system=True, target_home_dir=home_dir)
         wanted_by = "multi-user.target"
     else:
-        hermes_home = str(get_hermes_home().resolve())
+        from hermes_constants import get_process_hermes_home
+        hermes_home = str(get_process_hermes_home().resolve())
         profile_arg = _profile_arg(hermes_home)
         user_home = Path.home()
         identity_lines = ordering_lines = ""
@@ -5578,4 +5583,3 @@ def _pm_runtime_venv_dir(project_root: Path | None = None) -> Path | None:
 
     venv = selected_venv(root)  # a malformed committed selection raises: fail closed
     return venv if venv.is_dir() else None
-

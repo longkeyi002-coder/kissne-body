@@ -126,6 +126,20 @@ def store_root(project_root: Path) -> Path:
     return get_default_hermes_root() / "tools"
 
 
+def _store_python(project_root: Path) -> Path | None:
+    """Return the interpreter recorded for the PM store, when it exists."""
+    try:
+        runtime = store_root(project_root)
+        data = json.loads((runtime / "facts.json").read_text(encoding="utf-8-sig"))
+        entry = data.get("packages", {}).get("python", {}).get("entry")
+    except (AttributeError, FileNotFoundError, OSError, ValueError):
+        return None
+    if not isinstance(entry, str) or not entry:
+        return None
+    candidate = runtime / entry / ("python.exe" if os.name == "nt" else "bin/python3")
+    return candidate if candidate.is_file() else None
+
+
 def flush_before_selecting() -> None:
     """Make a finished generation tree durable before a selection record names it.
 
@@ -310,25 +324,45 @@ def activate_dependencies(project_root: Path) -> None:
                 recover_publication(project_root)
             environment = committed_venv(project_root)
             if environment is None:
-                return _require_own_dependencies(project_root)
-            release = lease_generation(environment)
-            # Without the lock, an installer may commit a new generation between the
-            # read and the lease, leaving the leased one unselected and collectable.
-            while not held and (current := committed_venv(project_root)) not in (None, environment):
-                release()
-                environment, release = current, lease_generation(current)
-            selected = site_packages(environment)
-            if not selected.is_dir() and not runtime_facts_path(project_root).is_file():
-                return
+                store_python = _store_python(project_root)
+                if store_python is None or Path(sys.executable).resolve() != store_python.resolve():
+                    return _require_own_dependencies(project_root)
+                # A bootstrap may have created the PM state directory before the first
+                # generation was committed.  The store interpreter may still use the
+                # install's legacy venv during that transition.
+                environment = base_venv(project_root)
+                selected = site_packages(environment)
+                if not selected.is_dir():
+                    return _require_own_dependencies(project_root)
+            else:
+                release = lease_generation(environment)
+                # Without the lock, an installer may commit a new generation between the
+                # read and the lease, leaving the leased one unselected and collectable.
+                while not held and (current := committed_venv(project_root)) not in (None, environment):
+                    release()
+                    environment, release = current, lease_generation(current)
+                selected = site_packages(environment)
+                if not selected.is_dir() and not runtime_facts_path(project_root).is_file():
+                    return
     else:
         # Sealed payloads still select once, before imports.
         # Never consult VIRTUAL_ENV: it can describe the invoking shell's Python.
         environment = payload_venv(project_root)
         if environment is None:
-            return _require_own_dependencies(project_root)
-        selected = site_packages(environment)
-        if not selected.is_dir():
-            return  # External/Nix interpreter owns its original sys.path.
+            store_python = _store_python(project_root)
+            if store_python is None or Path(sys.executable).resolve() != store_python.resolve():
+                return _require_own_dependencies(project_root)
+            # PM's first bootstrap runs from its store interpreter before a generation is
+            # committed.  Source launchers still need the repository's legacy environment
+            # for that bootstrap; foreign interpreters keep their original sys.path.
+            environment = base_venv(project_root)
+            selected = site_packages(environment)
+            if not selected.is_dir():
+                return _require_own_dependencies(project_root)
+        else:
+            selected = site_packages(environment)
+            if not selected.is_dir():
+                return  # External/Nix interpreter owns its original sys.path.
     if not selected.is_dir():
         raise RuntimeError(f"dependency environment has no site-packages: {selected}")
     import site

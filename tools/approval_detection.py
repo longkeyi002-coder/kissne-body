@@ -531,7 +531,7 @@ def _home_prefix_fold_regex(path: str):
     bare home is never folded. Returns ``None`` for an unset/degenerate path (fewer than two
     components: ``/``, ``C:\\``, ``""``) so a stray HOME cannot rewrite unrelated prefixes."""
     components = [c for c in re.split(r"[/\\]+", path) if c] if path else []
-    if len(components) < 2:
+    if not components or path.rstrip("/\\") in ("",) or re.fullmatch(r"[A-Za-z]:", path.rstrip("/\\")):
         return None
     # Optional leading root separator; a Windows drive letter is a component.
     return re.compile(r"[/\\]*" + r"[/\\]+".join(re.escape(c) for c in components) + _PATH_TAIL)
