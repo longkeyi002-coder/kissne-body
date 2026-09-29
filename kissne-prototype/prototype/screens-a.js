@@ -1857,8 +1857,10 @@
           }
           var commentaryEl = liveEnsure(turnId);
           livePresence(commentaryEl, false);
-          liveText(commentaryEl, commentaryText, true);
-          liveAvatar(commentaryEl, 'talk');
+          /* Commentary is process narration, not final answer text. Keep it in the
+             activity lane so only answer/delta/completed frames can own the bubble. */
+          addActivity(commentaryEl, 'reasoning', turnId, commentaryText);
+          liveAvatar(commentaryEl, 'think');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
