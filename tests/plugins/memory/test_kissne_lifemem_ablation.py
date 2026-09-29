@@ -80,3 +80,5 @@ def test_ablate_top_k_would_inject_more_than_five_memories(tmp_path):
     assert provider._last_recall is not None
     assert 3 <= provider._last_recall.count <= 5
     provider.shutdown()
+
+# CI probe: ablation verification.
