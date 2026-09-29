@@ -154,14 +154,20 @@ class LifememProvider(MemoryProvider):
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
                   messages=None, turn_author=None):
-        if self._store and self._writable:
-            self._q.put((session_id or self._session_id, user_content or "", assistant_content or ""))
+        if not self._store or not self._writable:
+            return
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        # Raw evidence is durable before asynchronous extraction starts. This is
+        # Lifemem's episode layer; the main model never receives it wholesale.
+        self._store.touch_session(sid)
+        turn_id = self._store.add_turn(sid, user_content or "", assistant_content or "")
+        self._q.put((sid, turn_id, user_content or "", assistant_content or ""))
 
-    def _persist_turn(self, sid: str, user: str, assistant: str):
+    def _persist_turn(self, sid: str, turn_id: int, user: str, assistant: str):
         if not self._store or not sid:
             return
-        self._store.touch_session(sid)
-        turn_id = self._store.add_turn(sid, user, assistant)
         decision = self._decision.decide(user, assistant)
         if decision.remember and decision.summary:
             self._store.add_memory(
@@ -179,23 +185,23 @@ class LifememProvider(MemoryProvider):
     def _writer_loop(self):
         while True:
             try:
-                sid, user, assistant = self._q.get(timeout=2)
+                sid, turn_id, user, assistant = self._q.get(timeout=2)
             except queue.Empty:
                 continue
             except Exception:
                 return
             try:
-                self._persist_turn(sid, user, assistant)
+                self._persist_turn(sid, turn_id, user, assistant)
             except Exception:
                 continue
 
     def _flush(self):
         while self._store:
             try:
-                sid, user, assistant = self._q.get_nowait()
+                sid, turn_id, user, assistant = self._q.get_nowait()
             except queue.Empty:
                 return
-            self._persist_turn(sid, user, assistant)
+            self._persist_turn(sid, turn_id, user, assistant)
 
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "",
                           reset=False, rewound=False, **kwargs):
