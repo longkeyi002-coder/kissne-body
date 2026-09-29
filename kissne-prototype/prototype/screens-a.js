@@ -438,8 +438,29 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 思考过程与工具调用共用一个折叠区。
-     没有真实 reasoning/tool 事件时不创建折叠区，也不伪造“正在思考”。 */
+  /* 过程记录只是一条轻量时间线，不再使用“思考/工具”大框。
+     阶段进行中显示短标签；阶段结束后只留下装饰分割线。
+     分割线仍可点击展开详情，默认不会占用聊天正文空间。 */
+  var ACTIVITY_DIVIDERS = [
+    '・꣑୧・┈・┈・꣑୧・┈・┈・꣑୧・',
+    ': ˚꒷︶︶꒷︶︶꒷꒦︶︶꒦♡₊˚',
+    'ᯓ :ִ ࣪✮ ݁∶ ᯓ :ִ ࣪✧ ݁∶ᯓ :ִ ࣪✩ ݁∶⊹˖ᯓ',
+    '⭑ . ₊ ⊹ . ₊˖ . ₊. ₊ ⊹ . ₊˖ . ₊',
+    'ヽ｀ヽ｀☂o(•ω•。)｀ヽ、｀ヽ、',
+    '✩┈┈∘*┈୨୧┈*∘┈┈✩',
+    '୨﹒˖˚──﹕𝜗𝜚﹕──˚˖﹒୧ .',
+    '・゜✧﹒𝜗𝜚﹒✧゜・．',
+    '⋅.˳˳.⋅ॱི☘︎⋅.˳˳.⋅ॱི☘︎ྀ⋅.˳˳.⋅ॱི☘︎ྀ⋅.˳˳.⋅ॱི☘︎',
+    '❥・・┈┈┈༚༅༚˳.୨୧.˳༚༅༚┈┈・・❥',
+    '˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི',
+    '────── 🎀༘⋆──𐀔˚˖♡ ──────',
+    '────── ･｡✧˚༘♡💞⋆｡ ──────',
+    '────── ✩︎⸝🩷ˎˊ˗𓍲･💮ྉ ──────',
+    '✧・✢◌̥🪞࿙࿚࿙࿚𓈒✢◌࿙࿚࿙࿚𓈒✢◌𓈒✢꒪'
+  ];
+  function activityDivider(index) {
+    return ACTIVITY_DIVIDERS[Math.abs(Number(index) || 0) % ACTIVITY_DIVIDERS.length];
+  }
   function cleanActivityText(value, fallback) {
     var text = String(value == null ? '' : value);
     try {
@@ -725,32 +746,37 @@
     }).join('');
   }
   function activityRows(state, closed) {
+    var timeline = state.timeline || [];
+    var lastIndex = timeline.length - 1;
     return (state.timeline || []).map(function (item, index) {
       if (!item) return '';
-      var separator = index ? '<div class="process-separator" aria-hidden="true"></div>' : '';
+      var divider = activityDivider(index);
       if (item.kind === 'reasoning') {
-        return separator + '<section class="process-step process-step--reasoning is-open">'
-          + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="true">'
-          + '<span class="process-step__mark">✧</span><span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
-          + icon('chevron', 12, 'activity-chevron') + '</button>'
-          + '<div class="activity-detail process-reasoning">' + reasoningHtml(item.text) + '</div></section>';
+        var reasoningActive = !closed && index === lastIndex;
+        return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
+          + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false" aria-label="'
+          + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
+          + '<span class="process-line__mark" aria-hidden="true">✧</span>'
+          + '<span class="process-line__ornament" aria-hidden="true">' + esc(divider) + '</span>'
+          + (reasoningActive ? '<span class="process-line__label">正在处理</span>' + dots() : '')
+          + '</button>'
+          + '<div class="activity-detail process-reasoning" hidden>' + reasoningHtml(item.text) + '</div></section>';
       }
       if (item.kind !== 'tool') return '';
       var key = String(item.key || '');
       var tool = state.toolCalls[key];
       if (!tool) return '';
       var status = closed && tool.status === 'running' ? 'completed' : tool.status;
-      var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
+      var toolActive = !closed && index === lastIndex && status === 'running';
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
-      var meta = tool.name ? '<span class="activity-toolname">' + esc(tool.name) + '</span>' : '';
-      return separator + '<section class="process-step process-step--tool activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
-        + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-statusdot" aria-hidden="true"></span>'
-        + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
-        + '<span class="activity-copy"><span class="activity-label">' + esc(tool.label || '使用工具') + '</span>' + meta + '</span>'
-        + '<span class="activity-count">' + esc(statusText) + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
+      return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+        + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="false" aria-label="'
+        + (toolActive ? '正在调用工具' : '展开工具调用详情') + '">'
+        + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">●</span>'
+        + '<span class="process-line__ornament" aria-hidden="true">' + esc(divider) + '</span>'
+        + (toolActive ? '<span class="process-line__label">正在调用工具</span>' + dots() : '')
+        + '</button>'
         + '<div class="activity-detail" hidden>' + esc(detail) + '</div></section>';
     }).join('');
   }
@@ -760,10 +786,8 @@
     var closed = done === true || state.done === true;
     var rows = activityRows(state, closed);
     if (!rows) return '';
-    return '<div class="activity-stream process-frame' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
-      + '<div class="process-frame__top"><b>' + (closed ? '过程记录' : '处理中') + '</b></div>'
-      + '<div class="process-frame__body">' + rows + '</div>'
-      + '<div class="process-frame__bottom" aria-hidden="true"></div>'
+    return '<div class="activity-stream' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
+      + rows
       + '</div>';
   }
   function rememberFinalActivity(text, turnId) {
@@ -1727,11 +1751,11 @@
       function liveEnsure(turnId) {
         var id = String(turnId || '');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        append('<div class="live-turn" data-live-turn><div class="activity-history" data-live-activity></div>'
-          + '<div class="msg msg--ai is-awaiting" data-live-message>' + ava('FOX_CHAT_AVATAR', '', 'read')
-          + '<div class="msg__body"><div class="aipresence" data-live-presence>'
-          + '<span class="aipresence__text">正在看你刚才说的话</span>' + dots() + '</div>'
-          + '<div class="liveanswer bubble" data-live-answer hidden></div>'
+        append('<div class="live-turn" data-live-turn>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star">✦</span></div>'
+          + '<div class="activity-history" data-live-activity></div>'
+          + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
+          + '<div class="msg__body"><div class="liveanswer bubble" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
@@ -1739,15 +1763,9 @@
       }
       function livePresence(el, visible, text) {
         if (!el) return;
-        var presence = el.querySelector('[data-live-presence]');
-        if (presence) {
-          presence.hidden = !visible;
-          var label = presence.querySelector('.aipresence__text');
-          if (label && text) label.textContent = text;
-        }
         var message = el.querySelector('[data-live-message]');
-        if (message) message.classList.toggle('is-awaiting', !!visible);
-        el.classList.toggle('is-process-only', !visible && !el.querySelector('[data-live-answer]:not([hidden])'));
+        if (message && !el.querySelector('[data-live-answer]:not([hidden])')) message.hidden = true;
+        el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -1779,6 +1797,8 @@
         if (!box) return;
         var value = String(text || '');
         box.hidden = !value;
+        var message = el.querySelector('[data-live-message]');
+        if (message) message.hidden = !value;
         el.classList.toggle('is-process-only', !value);
         box.classList.toggle('is-pending', !!pending && !!value);
         /* Drafts can already contain a complete sticker marker. Rendering through the
@@ -1918,7 +1938,7 @@
             livePendingTurns[turnId] = true;
             liveCurrentTurn = turnId;
             var pendingEl = liveEnsure(turnId);
-            livePresence(pendingEl, true, '正在看你刚才说的话');
+            livePresence(pendingEl, false);
             liveAvatar(pendingEl, 'read');
             liveSetCancel(true);
           }
@@ -2081,7 +2101,7 @@
               var lastPendingStep = pendingState.timeline[pendingState.timeline.length - 1];
               liveAvatar(pendingEl, lastPendingStep && lastPendingStep.kind === 'tool' ? 'work' : 'think');
             } else {
-              livePresence(pendingEl, true, '正在继续处理刚才的消息');
+              livePresence(pendingEl, false);
               liveAvatar(pendingEl, 'read');
             }
           }
@@ -2258,7 +2278,7 @@
             liveSetCancel(true);
             var acceptedEl = liveEnsure(acceptedTurn);
             liveAvatar(acceptedEl, 'read');
-            livePresence(acceptedEl, true, '正在看你刚才说的话');
+            livePresence(acceptedEl, false);
           }
           scheduleLivePoll(0);
         } catch (err) {
@@ -2388,7 +2408,7 @@
             liveCurrentTurn = turn;
             liveSetCancel(true);
             var attachmentEl = liveEnsure(turn);
-            livePresence(attachmentEl, true, '正在查看你发来的' + (kind === 'photo' ? '照片' : '文件'));
+            livePresence(attachmentEl, false);
             liveAvatar(attachmentEl, 'read');
           }
           scheduleLivePoll(0);

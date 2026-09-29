@@ -72,12 +72,18 @@ assert('memory 页可渲染', memory && memory.indexOf('appbar__title">记忆库
 assert('stickers 页可渲染', stickers && stickers.indexOf('appbar__title">表情包') >= 0);
 
 /* Chat process UI contract: activity is independent from spoken assistant text,
-   uses a compact label, and remains individually expandable. */
+   uses stage dividers instead of a shared frame, and remains individually expandable. */
 var screensSource = fs.readFileSync(path.join(base, 'screens-a.js'), 'utf8');
 assert('过程记录不复用正文头像行', screensSource.indexOf('var process = activity ?') >= 0
   && screensSource.indexOf('data-live-message') >= 0);
-assert('过程框不用大号“思考过程”标题', screensSource.indexOf("<b>思考过程</b>") < 0
-  && screensSource.indexOf("closed ? '过程记录' : '处理中'") >= 0);
+assert('过程记录使用分割线而非共享大框', screensSource.indexOf('ACTIVITY_DIVIDERS') >= 0
+  && screensSource.indexOf('class="process-line activity-row"') >= 0
+  && screensSource.indexOf('closed ? \'过程记录\' : \'处理中\'') < 0);
+assert('处理完成后不显示完成文字', screensSource.indexOf('var statusText = status') < 0
+  && screensSource.indexOf('正在调用工具') >= 0
+  && screensSource.indexOf('正在处理') >= 0);
+assert('处理中不创建等待头像', screensSource.indexOf('<div class="aipresence"') < 0
+  && screensSource.indexOf('正在看你刚才说的话') < 0);
 assert('工具与思考均可展开', screensSource.indexOf("row.closest('.process-step')") >= 0);
 
 console.log('\n示例 K.icon(home):', ic);
