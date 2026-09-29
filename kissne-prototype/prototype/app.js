@@ -260,24 +260,25 @@
   function openWebAiSheet(msg) {
     closeWebAiSheet();
     var text = msg && msg.getAttribute('data-message-text') || '';
-    if (!text.trim()) return;
+    if (!text.trim() || !msg) return;
     var rect = msg.getBoundingClientRect();
     var sheet = document.createElement('div');
-    sheet.className = 'webai-sheet webai-popover';
+    sheet.className = 'webai-sheet';
     sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
-      + '<div class="webai-sheet__panel" role="menu" aria-label="发送给其他 AI">'
+      + '<div class="webai-sheet__panel">'
       + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">发送给 DeepSeek</button>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">发送给 GPT</button></div>';
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">发送给 ChatGPT</button>'
+      + '</div>';
     sheet.dataset.messageText = text;
     document.body.appendChild(sheet);
     var panel = sheet.querySelector('.webai-sheet__panel');
-    var panelRect = panel.getBoundingClientRect();
-    var gap = 7;
-    var left = Math.max(8, Math.min(window.innerWidth - panelRect.width - 8, rect.left + (rect.width - panelRect.width) / 2));
-    var top = rect.top - panelRect.height - gap;
-    if (top < 8) top = Math.min(window.innerHeight - panelRect.height - 8, rect.bottom + gap);
-    panel.style.left = Math.round(left) + 'px';
-    panel.style.top = Math.round(top) + 'px';
+    if (panel) {
+      var panelRect = panel.getBoundingClientRect();
+      var left = Math.max(8, Math.min(window.innerWidth - panelRect.width - 8, rect.left));
+      var top = Math.max(8, rect.top - panelRect.height - 8);
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+    }
   }
   document.addEventListener('pointerdown', function (e) {
     var msg = e.target.closest && e.target.closest('[data-chat-message]');
