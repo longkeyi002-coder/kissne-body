@@ -201,19 +201,29 @@ class LifememProvider(MemoryProvider):
         if not self._store or not sid:
             return
         batch=max(1,min(200,int(self._config.get("consolidation_batch_size") or 24)))
-        # Snapshot the pending ids for this pass. Failed episodes remain pending
-        # for a future trigger/restart, but are never retried in a tight loop here.
-        rows=self._store.pending_turns(session_id=sid,limit=batch)
-        for row in rows:
-            try:
-                self._persist_turn(
-                    sid,int(row["id"]),str(row.get("user_content") or ""),
-                    str(row.get("assistant_content") or ""),
-                )
-            except Exception as exc:
-                self._store.mark_turn_failed(int(row["id"]),exc)
-                continue
-            self._store.mark_turn_processed(int(row["id"]))
+        # Process each episode at most once in this pass. Failed rows remain
+        # pending for a later trigger, while successful rows beyond one batch
+        # are still drained now.
+        attempted=set()
+        while True:
+            rows=[
+                row for row in self._store.pending_turns(session_id=sid,limit=200)
+                if int(row["id"]) not in attempted
+            ][:batch]
+            if not rows:
+                return
+            for row in rows:
+                turn_id=int(row["id"])
+                attempted.add(turn_id)
+                try:
+                    self._persist_turn(
+                        sid,turn_id,str(row.get("user_content") or ""),
+                        str(row.get("assistant_content") or ""),
+                    )
+                except Exception as exc:
+                    self._store.mark_turn_failed(turn_id,exc)
+                    continue
+                self._store.mark_turn_processed(turn_id)
 
     def _writer_loop(self):
         while True:
