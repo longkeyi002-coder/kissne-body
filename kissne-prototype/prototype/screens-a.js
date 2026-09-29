@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 50173)
+Total output lines: 4019
+
 /* =====================================================================
    Kissne 手机端 UI · screens-a.js
    页面： 首页 / 聊天 / 小机星 / 通话 / 表情包
@@ -562,6 +565,8 @@
     var low = text.toLowerCase();
     if (!low) return '使用工具';
     if (/sticker|表情包/.test(low) && /grep|rg|find|search|terminal/.test(low)) return '查找表情包发送逻辑';
+    if (/search[_-]?files?|find[_-]?files?|grep|ripgrep|\brg\b/.test(low)) return '查找相关文件';
+    if (/execute[_-]?code|running\s+code|hermes[_\s-]?tools/.test(low)) return '运行代码';
     if (/adapter\.py|mobile adapter|kissne_mobile/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查 Mobile Adapter';
     if (/screens-a\.js|chat|bubble|message/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查聊天界面逻辑';
     if (/\bgit\s+log\b|commit history|history/.test(low)) return '检查 Git 历史';
@@ -608,7 +613,8 @@
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
       || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
       || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text)
-      || /^\s*[🐍]?\s*Running code from\s+hermes_tools_import\b/i.test(text);
+      || /^\s*Running code from\s+hermes_tools(?:[_\s]+)import\b/i.test(text)
+      || /^\s*Running code from\s+[a-z0-9_.-]+\s+import\b/i.test(text);
   }
 
   function looksLikeRuntimeControl(value) {
@@ -849,7 +855,7 @@
         return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
           + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false" aria-label="'
           + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
-          + '<span class="process-line__mark" aria-hidden="true">+</span>'
+          + '<span class="process-line__mark" aria-hidden="true"></span>'
           + (reasoningActive ? '<span class="process-line__label">正在处理</span>' + dots() : '')
           + '</button>'
           + '<div class="activity-detail process-reasoning" hidden>' + reasoningHtml(item.text) + '</div></section>';
@@ -863,13 +869,13 @@
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
       var label = tool.label || toolActivityLabel(tool.name || detail);
+      if (/^使用工具$|^使用\s+[a-z0-9_.-]+$/i.test(label)) label = toolActivityLabel(tool.name || detail);
       var iconName = toolActivityIcon(label);
       return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="false" aria-label="'
         + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
         + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
         + '<span class="process-line__label process-line__label--tool">' + esc(label) + '</span>'
-        + (tool.name ? '<span class="process-line__tool-name">' + esc(tool.name) + '</span>' : '')
         + (toolActive ? dots() : '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>')
         + '</button>'
         + '<div class="activity-detail" hidden>' + esc(detail) + '</div></section>';
@@ -1968,24 +1974,7 @@
             }
           }
           if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
-          var historyHtml = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
-          if (messageRef && CHAT_LOG.some(function (row) { return row.messageRef === messageRef; })) return;
-          CHAT_LOG.push({
-            who: role === 'user' ? 'me' : 'ai',
-            html: historyHtml,
-            activity: activity,
-            attachments: attachments,
-            replyTo: String(item.reply_to || ''),
-            replyPreview: item.reply_preview || null,
-            time: historyClock(item.created_at),
-            day: chatDayKey(item.created_at),
-            sortAt: item.created_at,
-            messageRef: messageRef,
-            turnId: turnId,
-            localOwned: false,
-            optimistic: false
-          });
-        });
+          var historyHtml = chatHtmlFromWire(rawText) + h…173 tokens truncated…     });
 
         function keepRecoveredLocal(m) {
           if (!m) return false;
@@ -2023,7 +2012,7 @@
         updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
-          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star">*</span></div>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star"></span></div>'
           + '<div class="activity-history" data-live-activity></div>'
           + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
           + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
@@ -2034,11 +2023,18 @@
       }
       function livePresence(el, visible, text) {
         if (!el) return;
-        var bridge = el.querySelector('[data-turn-bridge]');
-        if (bridge && bridge.parentNode) bridge.parentNode.removeChild(bridge);
         var message = el.querySelector('[data-live-message]');
         if (message && !el.querySelector('[data-live-answer]:not([hidden])')) message.hidden = true;
         el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
+      }
+      function dismissTurnBridge(el) {
+        if (!el) return;
+        var bridge = el.querySelector('[data-turn-bridge]');
+        if (!bridge) return;
+        bridge.classList.add('is-delivered');
+        setTimeout(function () {
+          if (bridge.parentNode) bridge.parentNode.removeChild(bridge);
+        }, 220);
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -2267,6 +2263,7 @@
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
           livePresence(el, false);
+          dismissTurnBridge(el);
           setSessionStatus('');
           var finalText = String(event.text || '');
           if (looksLikeRuntimeControl(finalText)) {
@@ -2311,6 +2308,7 @@
           updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         } else if (type === 'cancelled') {
           livePresence(el, false);
+          dismissTurnBridge(el);
           setSessionStatus('');
           finishActivities(el, turnId);
           if (liveSteeredTurns[turnId]) {
