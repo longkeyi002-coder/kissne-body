@@ -252,3 +252,29 @@ def test_mobile_history_uses_stable_turn_refs_and_persists_quote_preview(tmp_pat
     assert rows[1]["attachments"][0]["label"] == "notes.txt"
     assert rows[2]["message_ref"] == "turn:kbm_turn_quote:assistant"
 
+
+
+def test_scoped_new_chat_does_not_rehydrate_legacy_device_attachments(tmp_path):
+    with isolated_runtime(tmp_path):
+        adapter = make_adapter()
+        old_turn = "kbm_turn_old_attachment"
+
+        class TranscriptStore:
+            @staticmethod
+            def load_transcript(session_id):
+                assert session_id == "new-session"
+                return []
+
+        adapter._session_store = TranscriptStore()
+        adapter.device_store().record_attachment_message(
+            "phone-a", old_turn, "[文件：fox-cheer.webp]",
+            [{"type": "file", "mime_type": "image/webp", "label": "fox-cheer.webp"}],
+        )
+
+        # Explicit session scope is what the app uses after selecting/creating a chat.
+        scoped = adapter._mobile_history_rows("phone-a", [{"id": "new-session"}])
+        # The merged timeline keeps the legacy recovery behavior for old data.
+        merged = adapter._mobile_history_rows("phone-a", [])
+
+    assert scoped == []
+    assert any(row.get("_turn_id") == old_turn for row in merged)
