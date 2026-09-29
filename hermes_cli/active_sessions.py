@@ -355,6 +355,12 @@ def _pid_liveness(pid: Any, process_start_time: Any = None, *, lenient: bool = F
         return True
     current_start = _own_start_time() if is_self else _process_start_time(pid_int)
     if current_start is None:
+        # For our own PID, a stored start-time fingerprint that cannot be
+        # verified must not keep a lease alive.  The PID is known to exist,
+        # but the (pid, start_time) identity is not; admitting it would let a
+        # recycled or stale self-entry block a new session indefinitely.
+        if is_self and expected_start is not None:
+            return False
         return True if lenient else None
     return abs(current_start - expected_start) < 0.001
 
