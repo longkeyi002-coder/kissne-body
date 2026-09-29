@@ -112,7 +112,7 @@
       },
       sessions: function () { return nativeCall('sessions', {}); },
       history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
-      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
+      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 500 }); },
       memoryTimeline: function (options) {
         options = options || {};
         return nativeCall('memoryTimeline', {
@@ -325,7 +325,7 @@
   function searchHistory(q, limit) {
     var query = String(q || '').trim();
     if (!query) throw new ApiError(400, { error: 'query_required' }, 'query_required');
-    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 20), { method: 'GET' });
+    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 500), { method: 'GET' });
   }
   function deleteSession(sessionId) {
     var id = String(sessionId || '').trim();

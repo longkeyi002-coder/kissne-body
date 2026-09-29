@@ -1656,7 +1656,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             limit = int(request.query.get("limit", "20"))
         except (TypeError, ValueError):
             return _error_response("limit_must_be_an_integer", 400)
-        limit = max(1, min(limit, 50))
+        # Search is used as a global history index. Keep the cap above the normal
+        # conversation size so the client can render every matching row and jump
+        # to the exact message instead of silently truncating at 50.
+        limit = max(1, min(limit, 500))
         needle = query.casefold()
         rows = await asyncio.to_thread(self._mobile_history_rows, installation)
         matches = [item for item in reversed(rows) if needle in str(item.get("text") or "").casefold()]

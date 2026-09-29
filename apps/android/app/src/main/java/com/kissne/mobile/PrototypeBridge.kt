@@ -154,7 +154,7 @@ class PrototypeBridge(
             "search" -> {
                 val query = body.optString("q").trim()
                 if (query.isBlank()) throw IllegalArgumentException("query_required")
-                client().searchPayload(query, body.optInt("limit", 20))
+                client().searchPayload(query, body.optInt("limit", 500))
             }
             "memoryTimeline" -> client().memoryTimelinePayload(
                 limit = body.optInt("limit", 50),

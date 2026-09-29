@@ -478,6 +478,7 @@
           var p=await T.layaClassify(text), a=p.answer||{}, probs=a.probabilities||{};
           var labels=Object.keys(probs);
           result.textContent='判断：'+String(a.choice||'')+' · 置信度 '+String(a.confidence||0)+'\n'
+            +'判定来源：'+(a.heuristic_override?'本地规则已纠正模型的过度否定':'Laya 模型')+'\n'
             +labels.map(function(k){return k+' '+probs[k];}).join(' / ')
             +'\n推理耗时约 '+Math.round(p.elapsed_ms||0)+' ms';
         } catch(e){result.textContent='本地判断失败：'+String(e.message||e);}

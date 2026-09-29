@@ -84,9 +84,9 @@ class MobileTransportClient(
         return request("GET", query.toString())
     }
 
-    fun searchPayload(queryText: String, limit: Int = 20): JSONObject =
+    fun searchPayload(queryText: String, limit: Int = 500): JSONObject =
         request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
-            "&limit=" + limit.coerceIn(1, 50))
+            "&limit=" + limit.coerceIn(1, 500))
 
     fun memoryTimelinePayload(
         limit: Int = 50,

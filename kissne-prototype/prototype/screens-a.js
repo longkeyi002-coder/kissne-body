@@ -141,11 +141,13 @@
     } else {
       body = sessions.map(function (s) {
         var active = sessionIsCurrent(s);
-        return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-          + ((s.key || s.id) ? '' : ' disabled')
-          + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+        return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+          + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+          + '<button type="button" class="sessiondrawer__select"' + ((s.key || s.id) ? '' : ' disabled') + '>'
+          + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+          + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+          + '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话"'
+          + ((s.id && !active) ? '' : ' disabled') + '>' + icon('trash', 14) + '</button></div>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -616,8 +618,10 @@
 
   function looksLikeRuntimeControl(value) {
     var text = cleanActivityText(value, '').trim();
-    return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
-      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
+    return /^\s*Interrupting current task\b/i.test(text)
+      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text)
+      || /^(?:回复)?已(?:暂停|停止)回复[。.!！]?\s*$/.test(text)
+      || /^(?:回复)?(?:暂停|停止)回复[。.!！]?\s*$/.test(text);
   }
 
   var CHAT_LOG = [];
@@ -966,24 +970,30 @@
     var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
+    function inlineMarkdown(value) {
+      var html = esc(value);
+      html = html.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
+      return html;
+    }
     var re = /[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]/g;
     var out = '';
     var last = 0;
     var matched = false;
     var m;
     while ((m = re.exec(raw))) {
-      out += esc(raw.slice(last, m.index));
+      out += inlineMarkdown(raw.slice(last, m.index));
       var sticker = stickerMatch(m[1]);
       if (sticker) {
         out += '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
         matched = true;
       } else {
-        out += esc(m[0]);
+        out += inlineMarkdown(m[0]);
       }
       last = m.index + m[0].length;
     }
-    if (!matched) return esc(raw);
-    out += esc(raw.slice(last));
+    if (!matched) return inlineMarkdown(raw);
+    out += inlineMarkdown(raw.slice(last));
     return '<span class="stkmix">' + out + '</span>';
   }
   function chatHtmlFromWire(text) {
@@ -1112,6 +1122,7 @@
      模块级，删除与清空都是真的生效（只在本会话内）。 */
   var SEARCH_LOG = [];
   var SEARCH_RESULTS = [];
+  var SEARCH_RESULT_CACHE = Object.create(null);
   var SEARCH_QUERY = '';
   var PENDING_QUOTE = null;
   function searchResultTime(raw) {
@@ -1349,6 +1360,8 @@
           }
           var grouped = {};
           rows.forEach(function (it) {
+            var cachedRef = String(it && it.message_ref || '');
+            if (cachedRef) SEARCH_RESULT_CACHE[cachedRef] = it;
             var day = chatDayLabel(chatDayKey(it.created_at));
             if (!grouped[day]) grouped[day] = [];
             grouped[day].push(it);
@@ -1360,7 +1373,7 @@
               var jump = '#/chat?state=normal&find=' + encodeURIComponent(q)
                 + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '');
               var sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
-              return '<div class="srch__row" data-kw="' + esc(String(it.text || '')) + '" data-nav="' + esc(jump) + '">'
+              return '<div class="srch__row" data-kw="' + esc(String(it.text || '')) + '" data-message-ref="' + esc(ref) + '" data-nav="' + esc(jump) + '">'
                 + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
                 + '<span class="srch__kw"><b>' + esc(sender) + '</b>' + esc(String(it.text || '')) + '</span>'
                 + '<span class="srch__t">' + esc(searchResultTime(it.created_at)) + '</span>'
@@ -1386,7 +1399,7 @@
               listEl.innerHTML = '<div class="srch__empty">当前连接不支持历史搜索</div>';
               return;
             }
-            transport.search(value, 50).then(function (payload) {
+            transport.search(value, 500).then(function (payload) {
               if (seq !== searchSeq) return;
               SEARCH_RESULTS = Array.isArray(payload && payload.results) ? payload.results : [];
               paintRemoteResults(SEARCH_RESULTS);
@@ -1443,7 +1456,9 @@
           e.preventDefault();
           e.stopPropagation();
           var ref = String(button.getAttribute('data-quote-ref') || '');
-          PENDING_QUOTE = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === ref; })[0] || { message_ref: ref, text: '' };
+          PENDING_QUOTE = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === ref; })[0]
+            || SEARCH_RESULT_CACHE[ref]
+            || { message_ref: ref, text: '' };
           if (window.KissneApp && typeof window.KissneApp.nav === 'function') window.KissneApp.nav('#/chat?state=normal&quote_ref=' + encodeURIComponent(ref));
           else location.hash = '#/chat?state=normal&quote_ref=' + encodeURIComponent(ref);
         }
@@ -1555,11 +1570,13 @@
         }
         host.innerHTML = sessions.map(function (s) {
           var active = sessionIsCurrent(s);
-          return '<button type="button" class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
-            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '"'
-            + ((s.key || s.id) ? '' : ' disabled')
-            + '><span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
-            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>';
+          return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
+            + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
+            + '<button type="button" class="sessiondrawer__select"' + ((s.key || s.id) ? '' : ' disabled') + '>'
+            + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
+            + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
+            + '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话"'
+            + ((s.id && !active) ? '' : ' disabled') + '>' + icon('trash', 14) + '</button></div>';
         }).join('');
       }
       function setSessionDrawer(open) {
@@ -2676,7 +2693,8 @@
       var jumpRef = (p && p.get('jump_ref')) || '';
       var hitT = null;
       if (jumpRef && !CHAT_LOG.some(function (row) { return String(row.messageRef || '') === String(jumpRef); })) {
-        var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0];
+        var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0]
+          || SEARCH_RESULT_CACHE[String(jumpRef)];
         if (jumpItem) {
           CHAT_LOG.push({
             who: String(jumpItem.role || '') === 'assistant' ? 'ai' : 'me',
@@ -3031,6 +3049,27 @@
           e.preventDefault();
           refresh.disabled = true;
           try { await refreshSessions(); } finally { refresh.disabled = false; }
+          return;
+        }
+
+        var del = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
+        if (del && root.contains(del)) {
+          e.preventDefault();
+          e.stopPropagation();
+          var delRow = del.closest('[data-session-key]');
+          var delId = String(delRow && delRow.getAttribute('data-session-id') || '');
+          if (!delId || !T || typeof T.deleteSession !== 'function') return;
+          if (typeof window.confirm === 'function' && !window.confirm('删除这个会话？删除后无法恢复。')) return;
+          del.disabled = true;
+          setSessionStatus('正在删除会话…');
+          try {
+            await T.deleteSession(delId);
+            await refreshSessions();
+            setSessionStatus('会话已删除。');
+          } catch (err) {
+            del.disabled = false;
+            setSessionStatus('会话删除失败，请稍后重试。');
+          }
           return;
         }
 

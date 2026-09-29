@@ -119,11 +119,34 @@ internal object LayaLocal {
             ),
         )
         val result = active.answer(input, question, LayaEngine.Backend.CPU, questionId = "kissne_memory_candidate")
+        val modelChoice = result.answer["choice"]?.toString().orEmpty()
+        val answer = LinkedHashMap<String, Any?>(result.answer)
+        /* Laya is a useful local judge, but its small classifier can overuse the
+           negative class for short first-person preference/fact statements. Keep
+           the model result visible while applying a narrow, explainable override
+           for content that is plainly useful across future conversations. */
+        val heuristicOverride = modelChoice == "不适合" && looksLikeLongTermMemory(input)
+        if (heuristicOverride) answer["choice"] = "记忆候选"
+        answer["model_choice"] = modelChoice
+        answer["heuristic_override"] = heuristicOverride
         return JSONObject(LayaJson.stringify(linkedMapOf(
-            "answer" to result.answer,
+            "answer" to answer,
             "elapsed_ms" to ((System.nanoTime() - started) / 1_000_000.0).toLong(),
             "local_only" to true,
         )))
+    }
+
+    private fun looksLikeLongTermMemory(input: String): Boolean {
+        val chineseSignals = listOf(
+            "我喜欢", "我不喜欢", "我偏好", "我习惯", "我的名字", "称呼我",
+            "我住在", "我来自", "我的生日", "我的工作", "我的职业", "我的目标",
+            "请记住", "记住我", "以后请", "以后都", "不要再", "不希望",
+            "不准有", "始终", "经常", "通常", "偏爱",
+        )
+        if (chineseSignals.any(input::contains)) return true
+        return Regex(
+            "(?i)\\b(i like|i prefer|my name is|call me|remember that|please remember|i live|my birthday|my job|my goal|always|never)\\b",
+        ).containsMatchIn(input)
     }
 
     private fun isInstalled(context: Context): Boolean {
