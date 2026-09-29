@@ -76,6 +76,35 @@ def test_completed_turn_represented_by_bootstrap_covers_exact_unacked_frames_wit
     assert before == after, "bootstrap must be non-destructive; only ACK may retire outbound rows"
 
 
+def test_bootstrap_does_not_leak_unmatched_legacy_attachment_into_new_conversation(tmp_path):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                # Durable device metadata from an older conversation must not become
+                # a synthetic user message in this freshly-selected conversation.
+                adapter.device_store().record_attachment_message(
+                    PAIRED_INSTALLATION,
+                    "kbm_turn_old_attachment",
+                    "",
+                    [{"kind": "sticker", "file_name": "fox-cheer.webp", "mime_type": "image/webp"}],
+                )
+                return await http(port, "POST", "/bootstrap", token=token, body={"cursor": 0})
+            finally:
+                await stop(adapter)
+
+    status, payload, _ = run(scenario())
+    assert status == 200, payload
+    history = payload.get("history") or []
+    assert all(row.get("_turn_id") != "kbm_turn_old_attachment" for row in history), history
+    assert all("fox-cheer.webp" not in str(row) for row in history), history
+
+
 def test_pending_cancelled_and_unidentified_events_are_never_covered(tmp_path):
     async def scenario():
         with isolated_runtime(tmp_path) as home:
