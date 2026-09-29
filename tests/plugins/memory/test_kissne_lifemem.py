@@ -281,3 +281,5 @@ def test_shutdown_does_not_spin_forever_on_permanent_episode_failure(tmp_path):
     provider._decision.decide=always_fail
     provider.shutdown()
     assert calls==["永久失败样本"]
+
+# CI probe: negative lifecycle and multi-batch drain.
