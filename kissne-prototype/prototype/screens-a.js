@@ -753,7 +753,7 @@
     if (!raw) return '';
     var state = activityForTurn(turnId);
     state.done = true;
-    state.toolOrder.forEach(function (key) {
+    Object.keys(state.toolCalls || {}).forEach(function (key) {
       var tool = state.toolCalls[key];
       if (tool && tool.status === 'running') tool.status = 'completed';
     });
@@ -1655,7 +1655,7 @@
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
-            if (state && (state.reasoning || (state.toolOrder && state.toolOrder.length))) {
+            if (state && state.timeline && state.timeline.length) {
               state.done = true;
               activity = activityMarkupForTurn(turnId, true);
             }
@@ -1745,7 +1745,7 @@
       function finishActivities(el, turnId) {
         var state = activityForTurn(turnId || 'pending');
         state.done = true;
-        state.toolOrder.forEach(function (key) {
+        Object.keys(state.toolCalls || {}).forEach(function (key) {
           var tool = state.toolCalls[key];
           if (tool && tool.status === 'running') tool.status = 'completed';
         });
@@ -2053,12 +2053,12 @@
             livePendingTurns[restoredPendingTurn] = true;
             var pendingEl = liveEnsure(restoredPendingTurn);
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
-            if (pendingState && (pendingState.reasoning
-                || (pendingState.toolOrder && pendingState.toolOrder.length))) {
+            if (pendingState && pendingState.timeline && pendingState.timeline.length) {
               livePresence(pendingEl, false);
               pendingState.done = false;
               paintActivity(pendingEl, restoredPendingTurn, false);
-              liveAvatar(pendingEl, pendingState.toolOrder && pendingState.toolOrder.length ? 'work' : 'think');
+              var lastPendingStep = pendingState.timeline[pendingState.timeline.length - 1];
+              liveAvatar(pendingEl, lastPendingStep && lastPendingStep.kind === 'tool' ? 'work' : 'think');
             } else {
               livePresence(pendingEl, true, '正在继续处理刚才的消息');
               liveAvatar(pendingEl, 'read');
