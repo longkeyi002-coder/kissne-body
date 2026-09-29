@@ -296,9 +296,7 @@
   }
 
   function modelsForProvider(provider) {
-    var p = String(provider || '');
-    var filtered = p ? MODELS.filter(function (m) { return m.p === p; }) : MODELS.slice();
-    return filtered.length ? filtered : MODELS.slice();
+    return window.KissneChatLifecycle.providerModels(MODELS, provider);
   }
 
   function dropdown(title, items, curKey, param, origin) {
@@ -1530,6 +1528,10 @@
       }
       var live = !!(T && T.hasToken());
       var liveStopped = false;
+      var liveEpoch = 0;
+      var liveSwitching = false;
+      var livePollBusy = false;
+      var liveClosedTurns = Object.create(null);
       var livePollTimer = null;
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
@@ -2055,7 +2057,6 @@
       function liveEnsure(turnId) {
         var requestedId = String(turnId || '');
         var id = requestedId || String(liveCurrentTurn || 'pending');
-        updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
           + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star"></span></div>'
@@ -2200,6 +2201,38 @@
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
         if (presentation === 'hidden' || presentation === 'internal_notification') return;
+        var terminal = !!(turnId && (liveClosedTurns[turnId] || liveCompleted[turnId]
+          || (TURN_ACTIVITY[turnId] && TURN_ACTIVITY[turnId].done)));
+        var action = window.KissneChatLifecycle.eventAction(event, terminal);
+        if (action === 'ignore') return;
+        if (action === 'late_activity') {
+          var lateValue = event.activity && typeof event.activity === 'object'
+            ? Object.assign({}, event.activity) : {};
+          var lateKind = 'reasoning';
+          if (presentation.indexOf('tool') === 0) {
+            lateKind = presentation === 'tool_result' ? 'tool_result' : 'tool';
+            lateValue.tool_call_id = lateValue.tool_call_id || event.tool_call_id || event.call_id || event.id || '';
+            lateValue.tool_name = lateValue.tool_name || event.tool_name || event.function_name || '';
+            lateValue.arguments = lateValue.arguments || event.arguments || '';
+            lateValue.result = lateValue.result || event.result || event.output || '';
+            lateValue.detail = lateValue.detail || event.text || '';
+            lateValue.status = lateValue.status || event.status || (lateKind === 'tool_result' ? 'completed' : 'running');
+          } else lateValue = event.text || '';
+          appendActivity(turnId, lateKind, lateValue);
+          var lateState = activityForTurn(turnId);
+          lateState.done = true;
+          var lateHtml = activityMarkupForTurn(turnId, true);
+          CHAT_LOG.forEach(function (m) { if (m.who === 'ai' && m.turnId === turnId) m.activity = lateHtml; });
+          var lateEl = liveTurns[turnId];
+          if (lateEl && lateEl.isConnected) paintActivity(lateEl, turnId, true);
+          list.querySelectorAll('[data-activity-turn]').forEach(function (node) {
+            if (node.getAttribute('data-activity-turn') === turnId) node.outerHTML = lateHtml;
+          });
+          persistTurnActivity();
+          persistChatLog();
+          return;
+        }
+
         if (presentation === 'reasoning') {
           var reasoningText = cleanActivityText(event.text || '', '');
           if (!reasoningText) return;
@@ -2310,6 +2343,7 @@
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
+          if (turnId) liveClosedTurns[turnId] = true;
           livePresence(el, false);
           dismissTurnBridge(el);
           setSessionStatus('');
@@ -2348,13 +2382,16 @@
                 optimistic: true
               });
             }
-            updateSystemNotification('done', 'Kissne 回复完成', finalText.replace(/\s+/g, ' ').slice(0, 64) || '打开人人星查看回复');
+            if (T && typeof T.notifyReply === 'function') T.notifyReply(
+              turnId || String(event.event_id || event.message_id || ''), 'Kissne 回复完成',
+              finalText.replace(/\s+/g, ' ').slice(0, 64) || '打开人人星查看回复');
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
           updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         } else if (type === 'cancelled') {
+          if (turnId) liveClosedTurns[turnId] = true;
           livePresence(el, false);
           dismissTurnBridge(el);
           setSessionStatus('');
@@ -2375,11 +2412,11 @@
       }
       function scheduleLivePoll(ms) {
         clearTimeout(livePollTimer);
-        if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
+        if (!liveStopped && !liveSwitching && live) livePollTimer = setTimeout(livePoll, ms);
       }
       function scheduleLiveBootstrap(ms) {
         clearTimeout(liveBootstrapTimer);
-        if (!liveStopped && live) liveBootstrapTimer = setTimeout(liveBootstrap, ms);
+        if (!liveStopped && !liveSwitching && live) liveBootstrapTimer = setTimeout(function () { liveBootstrap(true); }, ms);
       }
       async function recoverLiveAuth() {
         if (!T || typeof T.ensureToken !== 'function') return false;
@@ -2396,9 +2433,13 @@
         }
       }
       async function livePoll() {
-        if (!live || liveStopped) return;
+        if (!live || liveStopped || liveSwitching) return;
+        if (livePollBusy) { scheduleLivePoll(100); return; }
+        livePollBusy = true;
+        var pollEpoch = liveEpoch;
         try {
           var payload = await T.poll();
+          if (liveStopped || liveSwitching || pollEpoch !== liveEpoch) return;
           var events = (payload && payload.events) || [];
           for (var ei = 0; ei < events.length; ei++) {
             var ev = events[ei], seq = Number(ev && ev.seq);
@@ -2408,17 +2449,20 @@
           if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
           scheduleLivePoll(payload && payload.has_more ? 30 : 850);
         } catch (err) {
+          if (liveStopped || liveSwitching || pollEpoch !== liveEpoch) return;
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
           scheduleLivePoll(1800);
-        }
+        } finally { livePollBusy = false; }
       }
-      async function liveBootstrap() {
-        if (!live) return;
+      async function liveBootstrap(force) {
+        if (!live || liveStopped || liveSwitching) return;
+        var bootEpoch = liveEpoch;
         try {
-          var boot = await T.bootstrap();
+          var boot = await T.bootstrap(!!force);
+          if (liveStopped || liveSwitching || bootEpoch !== liveEpoch) return;
           if (!boot || !boot.bound) {
             setSessionStatus('会话准备中…');
             scheduleLiveBootstrap(1800);
@@ -2440,6 +2484,13 @@
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
+          Object.keys(livePendingTurns).forEach(function (id) {
+            if (id === restoredPendingTurn) return;
+            liveClosedTurns[id] = true;
+            var staleEl = liveTurns[id];
+            if (staleEl && staleEl.isConnected) finishActivities(staleEl, id);
+          });
+          livePendingTurns = Object.create(null);
           liveCurrentTurn = restoredPendingTurn;
           liveSetCancel(!!restoredPendingTurn);
           if (restoredPendingTurn) {
@@ -2456,6 +2507,8 @@
               livePresence(pendingEl, false);
               liveAvatar(pendingEl, 'read');
             }
+          } else {
+            updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
           }
           scheduleOutboxDrain();
           scheduleLivePoll(0);
@@ -2464,6 +2517,7 @@
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
+          if (liveStopped || liveSwitching || bootEpoch !== liveEpoch) return;
           setSessionStatus('正在恢复服务…');
           scheduleLiveBootstrap(1200);
         }
@@ -2475,7 +2529,10 @@
           await T.cancel(id);
           applyLiveEvent({ type: 'cancelled', turn_id: id });
         } catch (err) {
-          if (err && err.status === 409) { liveCurrentTurn = ''; liveSetCancel(false); }
+          if (err && err.status === 409) {
+            applyLiveEvent({ type: 'cancelled', turn_id: id });
+            scheduleLiveBootstrap(0);
+          }
         }
       }
       function voiceErrorText(err) {
@@ -3098,6 +3155,9 @@
           return;
         }
 
+        if (liveSwitching) return;
+        liveSwitching = true;
+        liveEpoch += 1;
         setSessionStatus('正在切换会话…');
         setSessionDrawer(false);
         clearTimeout(livePollTimer);
@@ -3114,11 +3174,13 @@
           bindTurnActivitySession('');
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
+          liveClosedTurns = Object.create(null);
           liveCovered = Object.create(null);
           livePendingTurns = Object.create(null);
           liveCurrentTurn = '';
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
+          liveSwitching = false;
           await liveBootstrap();
           await refreshSessions();
         } catch (err) {
@@ -3128,6 +3190,8 @@
           bindTurnActivitySession(previousSessionId || previousSessionKey || '');
           paintSessionList();
           setSessionStatus('会话切换失败，请稍后重试。');
+          liveSwitching = false;
+          scheduleLiveBootstrap(0);
         }
       }
       function onSessionOpen(e) {
@@ -3201,6 +3265,8 @@
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
+        liveEpoch += 1;
+        clearTimeout(liveBootstrapTimer);
         clearTimeout(livePollTimer);
         clearTimeout(liveOutboxTimer);
         clearTimeout(hitT);

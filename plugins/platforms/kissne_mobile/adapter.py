@@ -2089,6 +2089,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "events": events,
             "next_cursor": next_cursor,
             "has_more": len(events) >= limit,
+            # Native notification readers must reconcile state even when the chat
+            # reader has already acknowledged the terminal event.
+            "pending_turn_id": await asyncio.to_thread(
+                self.device_store().pending_turn_id, installation),
         })
 
     # -- model controls ---------------------------------------------------------------------------

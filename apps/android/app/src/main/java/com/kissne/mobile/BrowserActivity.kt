@@ -276,6 +276,7 @@ class BrowserActivity : AppCompatActivity() {
               const setText = (text) => {
                 const el = findComposer();
                 if (!el) return false;
+                if (String(el.value ?? el.textContent ?? '').trim()) return false;
                 el.focus();
                 if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
                   const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -305,12 +306,15 @@ class BrowserActivity : AppCompatActivity() {
                 let tries = 0;
                 const timer = setInterval(() => {
                   tries += 1;
-                  if (setText(pending) || tries >= 40) clearInterval(timer);
+                  if (setText(pending)) {
+                    clearInterval(timer);
+                    window.__kissneTransferApplied = true;
+                  } else if (tries >= 40) clearInterval(timer);
                 }, 250);
               }
             })();
         """.trimIndent()
-        view.evaluateJavascript(script, null)
+        applyTransferScript(view, script)
     }
 
     private fun injectChatGptAdapter(view: WebView) {
@@ -326,6 +330,7 @@ class BrowserActivity : AppCompatActivity() {
               const setText = (text) => {
                 const el = findComposer();
                 if (!el) return false;
+                if (String(el.value ?? el.textContent ?? '').trim()) return false;
                 el.focus();
                 if (el.tagName === 'TEXTAREA') {
                   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
@@ -351,12 +356,34 @@ class BrowserActivity : AppCompatActivity() {
                 let tries = 0;
                 const timer = setInterval(() => {
                   tries += 1;
-                  if (setText(pending) || tries >= 40) clearInterval(timer);
+                  if (setText(pending)) {
+                    clearInterval(timer);
+                    window.__kissneTransferApplied = true;
+                  } else if (tries >= 40) clearInterval(timer);
                 }, 250);
               }
             })();
         """.trimIndent()
+        applyTransferScript(view, script)
+    }
+
+    private fun applyTransferScript(view: WebView, script: String) {
+        val expectedText = intent.getStringExtra(EXTRA_TEXT)
+        val pageUrl = view.url
         view.evaluateJavascript(script, null)
+        if (expectedText.isNullOrBlank()) return
+        var attempts = 0
+        val check = object : Runnable {
+            override fun run() {
+                if (isFinishing || isDestroyed || view.url != pageUrl) return
+                view.evaluateJavascript("Boolean(window.__kissneTransferApplied)") { applied ->
+                    if (applied == "true" && intent.getStringExtra(EXTRA_TEXT) == expectedText) {
+                        intent.removeExtra(EXTRA_TEXT)
+                    } else if (++attempts < 45) view.postDelayed(this, 250)
+                }
+            }
+        }
+        view.postDelayed(check, 300)
     }
 
     private fun normalizeUrl(raw: String): String =

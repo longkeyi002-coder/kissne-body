@@ -234,7 +234,9 @@ class PrototypeBridge(
                 store.cursor = cursor
                 JSONObject().put("ok", true).put("cursor", cursor)
             }
-            "cancel" -> client().cancelPayload(body.optString("turn_id"))
+            "cancel" -> client().cancelPayload(body.optString("turn_id")).also {
+                invalidateBootstrapCache(clearPersistedMetadata = false)
+            }
             "modelOptions" -> client().modelOptionsPayload()
             "setModel" -> client().setModelPayload(
                 model = body.optString("model").takeIf { it.isNotBlank() },
@@ -278,6 +280,17 @@ class PrototypeBridge(
     fun haptic() {
         webView.post {
             webView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+
+    @JavascriptInterface
+    fun notifyReply(id: String?, title: String?, body: String?) {
+        val replyId = id?.trim().orEmpty()
+        if (replyId.isBlank()) return
+        webView.post {
+            KissneNotificationService.notifyReply(
+                webView.context, replyId, title.orEmpty(), body.orEmpty(),
+            )
         }
     }
 

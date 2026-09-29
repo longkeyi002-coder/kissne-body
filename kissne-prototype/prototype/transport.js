@@ -93,6 +93,9 @@
         return typeof Native.hasBootstrapCache === 'function' && !!Native.hasBootstrapCache();
       },
       isConnected: function () { return typeof Native.isConnected === 'function' ? !!Native.isConnected() : !!Native.hasToken(); },
+      notifyReply: function (id, title, body) {
+        if (typeof Native.notifyReply === 'function') Native.notifyReply(String(id || ''), String(title || ''), String(body || ''));
+      },
       updateNotification: function (state, title, body) {
         if (typeof Native.updateNotification === 'function') Native.updateNotification(String(state || ''), String(title || ''), String(body || ''));
       },

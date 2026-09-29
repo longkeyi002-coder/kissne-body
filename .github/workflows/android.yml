@@ -29,6 +29,8 @@ jobs:
           test -f ../../kissne-prototype/prototype/screens-b.js
           test -f ../../kissne-prototype/prototype/styles.css
           test -f ../../kissne-prototype/prototype/transport.js
+      - name: Chat lifecycle regressions
+        run: node --test ../../tests-js/kissne-chat-lifecycle.test.mjs
       - run: gradle test
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
