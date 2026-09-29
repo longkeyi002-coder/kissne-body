@@ -1993,6 +1993,17 @@
           });
         });
 
+        /* Tool/reasoning frames can arrive after the assistant history row. Reattach the
+           completed activity to its own assistant turn after the whole history is read,
+           instead of leaving it as a late item at the bottom of the chat. */
+        CHAT_LOG.forEach(function (m) {
+          if (!m || m.who !== 'ai' || !m.turnId) return;
+          var recoveredState = TURN_ACTIVITY[String(m.turnId)];
+          if (!recoveredState || !recoveredState.timeline || !recoveredState.timeline.length) return;
+          recoveredState.done = true;
+          m.activity = activityMarkupForTurn(String(m.turnId), true);
+        });
+
         function keepRecoveredLocal(m) {
           if (!m) return false;
           var text = String(m.html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
