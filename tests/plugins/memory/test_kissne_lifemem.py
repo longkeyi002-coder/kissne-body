@@ -147,3 +147,35 @@ def test_timeline_cursor_follows_event_time_not_insertion_id(tmp_path):
     third=db.timeline(limit=1,before=second["next_before"])
     assert [x["id"] for x in third["items"]]==[oldest_inserted_later]
     db.close()
+
+
+def test_sync_turn_persists_episode_before_async_memory_extraction(tmp_path):
+    import plugins.memory.lifemem as mod
+    provider=mod.LifememProvider(config=dict(mod.DEFAULTS))
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    # Keep extraction queued: the evidence row must already exist independently.
+    provider._q.put=lambda item: None
+    provider.sync_turn("记住，我们决定使用总记忆库","好的",session_id="session-a")
+    row=provider._store._conn.execute(
+        "SELECT session_id,user_content,assistant_content FROM turns ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert dict(row)=={
+        "session_id":"session-a",
+        "user_content":"记住，我们决定使用总记忆库",
+        "assistant_content":"好的",
+    }
+    provider.shutdown()
+
+
+def test_session_switch_flushes_pending_memory_before_new_session(tmp_path):
+    import plugins.memory.lifemem as mod
+    provider=mod.LifememProvider(config=dict(mod.DEFAULTS))
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    provider._q.put(("session-a",provider._store.add_turn("session-a","记住，我喜欢绿色","收到"),
+                     "记住，我喜欢绿色","收到"))
+    provider.on_session_switch("session-b")
+    rows=provider._store.recall("绿色",limit=10,memory_spaces=["reality"])
+    assert rows
+    assert rows[0]["session_id"]=="session-a"
+    assert provider._session_id=="session-b"
+    provider.shutdown()
