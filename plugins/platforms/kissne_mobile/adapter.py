@@ -2249,12 +2249,31 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # A slash command can return None after registering a confirmation, or a
                 # localized error without either prefix. Only an applied override proves
                 # that the following Mobile turn will actually use this selection.
+                runtime_key = self._runtime_session_key(installation)
                 applied = (getattr(runner, "_session_model_overrides", {}) or {}).get(
-                    self._runtime_session_key(installation)) or {}
+                    runtime_key) or {}
                 if applied.get("model") != model or applied.get("provider") != provider:
                     return _json_response({
                         "ok": False, "error": "model_switch_not_applied", "detail": model_reply,
                     }, 409)
+                # Verify the route the *next real turn* will resolve, not merely the slash
+                # command's bookkeeping map. This prevents Mobile from reporting success while
+                # the turn runner would still use the previous provider/model.
+                resolve_runtime = getattr(runner, "_resolve_session_agent_runtime", None)
+                if callable(resolve_runtime):
+                    effective_model, effective_runtime = resolve_runtime(
+                        source=source, session_key=runtime_key)
+                    effective_provider = str((effective_runtime or {}).get("provider") or "")
+                    if str(effective_model or "") != model or effective_provider != provider:
+                        return _json_response({
+                            "ok": False,
+                            "error": "model_switch_not_effective",
+                            "requested_model": model,
+                            "requested_provider": provider,
+                            "actual_model": str(effective_model or ""),
+                            "actual_provider": effective_provider,
+                            "detail": model_reply,
+                        }, 409)
 
             reasoning_reply = ""
             if effort:
