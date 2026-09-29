@@ -29,10 +29,10 @@ class TransportContractTest {
         assertEquals(BridgeLane.CONTROL, bridgeLane("memoryTimeline"))
     }
     @Test fun history_request_can_be_scoped_to_current_session() {
-        val source = java.io.File("../../app/src/main/java/com/kissne/mobile/MobileTransportClient.kt").readText()
+        val source = java.io.File("app/src/main/java/com/kissne/mobile/MobileTransportClient.kt").readText()
         assertTrue(source.contains("session_id="))
         assertTrue(source.contains("sessionId?.trim()"))
-        val bridge = java.io.File("../../app/src/main/java/com/kissne/mobile/PrototypeBridge.kt").readText()
+        val bridge = java.io.File("app/src/main/java/com/kissne/mobile/PrototypeBridge.kt").readText()
         assertTrue(bridge.contains("cachedBootstrapPayload()"))
         assertTrue(bridge.contains("optString(\"session_id\")"))
     }
