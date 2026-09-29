@@ -29,6 +29,8 @@ DEFAULTS = {
     "decision_engine": "laya",
     "decision_endpoint": "",
     "decision_timeout": 0.8,
+    "consolidation_threshold": 8,
+    "consolidation_batch_size": 24,
 }
 
 
@@ -86,6 +88,8 @@ class LifememProvider(MemoryProvider):
         self._session_id = ""
         self._writable = True
         self._q = queue.Queue()
+        self._queued_sessions = set()
+        self._queue_lock = __import__("threading").RLock()
         self._writer = None
         self._last_recall = None
 
@@ -162,8 +166,19 @@ class LifememProvider(MemoryProvider):
         # Raw evidence is durable before asynchronous extraction starts. This is
         # Lifemem's episode layer; the main model never receives it wholesale.
         self._store.touch_session(sid)
-        turn_id = self._store.add_turn(sid, user_content or "", assistant_content or "")
-        self._q.put((sid, turn_id, user_content or "", assistant_content or ""))
+        self._store.add_turn(sid, user_content or "", assistant_content or "")
+        threshold=max(1,int(self._config.get("consolidation_threshold") or 8))
+        if self._store.pending_turn_count(session_id=sid) >= threshold:
+            self._queue_consolidation(sid)
+
+    def _queue_consolidation(self, sid: str):
+        if not sid:
+            return
+        with self._queue_lock:
+            if sid in self._queued_sessions:
+                return
+            self._queued_sessions.add(sid)
+            self._q.put(sid)
 
     def _persist_turn(self, sid: str, turn_id: int, user: str, assistant: str):
         if not self._store or not sid:
@@ -182,28 +197,54 @@ class LifememProvider(MemoryProvider):
                 embedding=self._embedder.encode(decision.summary),
             )
 
+    def _consolidate_session(self, sid: str):
+        if not self._store or not sid:
+            return
+        batch=max(1,min(200,int(self._config.get("consolidation_batch_size") or 24)))
+        while True:
+            rows=self._store.pending_turns(session_id=sid,limit=batch)
+            if not rows:
+                return
+            for row in rows:
+                try:
+                    self._persist_turn(
+                        sid,int(row["id"]),str(row.get("user_content") or ""),
+                        str(row.get("assistant_content") or ""),
+                    )
+                except Exception as exc:
+                    self._store.mark_turn_failed(int(row["id"]),exc)
+                    continue
+                self._store.mark_turn_processed(int(row["id"]))
+            if len(rows) < batch:
+                return
+
     def _writer_loop(self):
         while True:
             try:
-                sid, turn_id, user, assistant = self._q.get(timeout=2)
+                sid = self._q.get(timeout=2)
             except queue.Empty:
                 continue
             except Exception:
                 return
             try:
-                self._persist_turn(sid, turn_id, user, assistant)
+                self._consolidate_session(sid)
             except Exception:
                 pass
             finally:
+                with self._queue_lock:
+                    self._queued_sessions.discard(sid)
                 self._q.task_done()
 
-    def _flush(self):
-        """Wait until every turn queued before this call has finished extraction."""
+    def _flush(self, sid: str = ""):
+        """Consolidate pending episodes, then wait for queued work to finish."""
+        if sid and self._store and self._store.pending_turn_count(session_id=sid):
+            self._queue_consolidation(sid)
         self._q.join()
 
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "",
                           reset=False, rewound=False, **kwargs):
-        self._flush()
+        previous=self._session_id
+        self._flush(previous)
         self._session_id = new_session_id or self._session_id
         if reset and self._store and self._writable and self._session_id:
             self._store.touch_session(self._session_id)
@@ -217,6 +258,9 @@ class LifememProvider(MemoryProvider):
         return f"lifemem checkpoint ok: {digest[:12]}"
 
     def shutdown(self):
+        if self._store:
+            for row in self._store._conn.execute("SELECT DISTINCT session_id FROM turns WHERE memory_state='pending'").fetchall():
+                self._queue_consolidation(str(row["session_id"]))
         self._flush()
         if self._store:
             self._store.close()
