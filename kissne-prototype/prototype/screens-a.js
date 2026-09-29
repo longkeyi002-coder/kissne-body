@@ -1742,6 +1742,10 @@
       function finishActivities(el, turnId) {
         var state = activityForTurn(turnId || 'pending');
         state.done = true;
+        state.toolOrder.forEach(function (key) {
+          var tool = state.toolCalls[key];
+          if (tool && tool.status === 'running') tool.status = 'completed';
+        });
         state.updatedAt = Date.now();
         persistTurnActivity();
         paintActivity(el, turnId, true);
