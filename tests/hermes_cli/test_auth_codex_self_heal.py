@@ -124,6 +124,10 @@ def test_opt_out_never_adopts_codex_cli_login(tmp_path, monkeypatch):
     def _rejected(*_a, **_k):
         raise AuthError("bad", provider="openai-codex", code="invalid_grant", relogin_required=True)
 
+    # _refresh_codex_auth_tokens is re-exported by hermes_cli.auth and imports
+    # the refresh function from that module at call time. Patch both module
+    # surfaces so this regression test never reaches the network.
+    monkeypatch.setattr(auth, "refresh_codex_oauth_pure", _rejected)
     monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", _rejected)
     with pytest.raises(AuthError) as info:
         _refresh_codex_auth_tokens(dict(STALE), 5.0)
