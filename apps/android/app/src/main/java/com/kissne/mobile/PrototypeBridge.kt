@@ -121,7 +121,7 @@ class PrototypeBridge(
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
             "sessions", "history", "search", "memoryTimeline", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
-            "modelOptions", "setModel", "approval",
+            "modelOptions", "setModel", "approval", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
             "adminStatus",
         )
 
@@ -162,6 +162,10 @@ class PrototypeBridge(
                 space = body.optString("space").takeIf { it.isNotBlank() },
                 queryText = body.optString("q").takeIf { it.isNotBlank() },
             )
+            "adminMemory" -> client().adminMemoryPayload()
+            "deleteAdminMemory" -> client().deleteAdminMemoryPayload(body.optString("memory_id"))
+            "adminSkills" -> client().adminSkillsPayload()
+            "adminMcp" -> client().adminMcpPayload()
             "deleteSession" -> {
                 val sessionId = body.optString("session_id").trim()
                 if (sessionId.isBlank()) throw IllegalArgumentException("session_id_required")
@@ -275,6 +279,15 @@ class PrototypeBridge(
     }
 
     @JavascriptInterface
+    fun updateNotification(state: String?, title: String?, body: String?) {
+        val safeTitle = title?.trim().orEmpty().ifBlank { "Kissne 已就绪" }
+        val safeBody = body?.trim().orEmpty().ifBlank { "打开人人星继续对话" }
+        webView.post {
+            KissneNotificationService.update(webView.context, safeTitle, safeBody)
+        }
+    }
+
+    @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         if (action == "voiceInput") {
             webView.post { startVoiceInput(id) }
@@ -289,7 +302,12 @@ class PrototypeBridge(
                 return
             }
             val kind = body.optString("kind", "file").let {
-                if (it == "photo") "photo" else "file"
+                when (it) {
+                    "photo" -> "photo"
+                    "sticker" -> "sticker"
+                    "audio" -> "audio"
+                    else -> "file"
+                }
             }
             webView.post { startAttachmentPicker(id, kind) }
             return

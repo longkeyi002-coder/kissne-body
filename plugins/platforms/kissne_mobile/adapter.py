@@ -112,6 +112,7 @@ DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 MAX_ATTACHMENTS = 4
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+ALLOWED_AUDIO_MIME_TYPES = {"audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm", "audio/amr"}
 ALLOWED_DOCUMENT_MIME_TYPES = {
     "application/pdf",
     "text/plain",
@@ -120,7 +121,7 @@ ALLOWED_DOCUMENT_MIME_TYPES = {
     "application/json",
     "application/zip",
 }
-ALLOWED_ATTACHMENT_MIME_TYPES = ALLOWED_IMAGE_MIME_TYPES | ALLOWED_DOCUMENT_MIME_TYPES
+ALLOWED_ATTACHMENT_MIME_TYPES = ALLOWED_IMAGE_MIME_TYPES | ALLOWED_AUDIO_MIME_TYPES | ALLOWED_DOCUMENT_MIME_TYPES
 DEFAULT_MEDIA_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_OUTBOUND_QUEUE_CAP = 200
 
@@ -1212,13 +1213,15 @@ class KissneMobileAdapter(BasePlatformAdapter):
             kind = str(item.get("type") or "").strip().lower()
             mime = str(item.get("mime_type") or "").strip().lower()
             data = item.get("data")
-            if kind not in {"image", "sticker", "file"}:
+            if kind not in {"image", "sticker", "audio", "file"}:
                 return None, "unsupported_attachment_type"
             if mime not in ALLOWED_ATTACHMENT_MIME_TYPES:
                 return None, "unsupported_attachment_mime_type"
             if kind in {"image", "sticker"} and mime not in ALLOWED_IMAGE_MIME_TYPES:
                 return None, "unsupported_attachment_mime_type"
             if kind == "file" and mime not in ALLOWED_DOCUMENT_MIME_TYPES:
+                return None, "unsupported_attachment_mime_type"
+            if kind == "audio" and mime not in ALLOWED_AUDIO_MIME_TYPES:
                 return None, "unsupported_attachment_mime_type"
             if not isinstance(data, str) or not data:
                 return None, "attachment_data_required"
@@ -1302,7 +1305,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     if field == "message_id":
                         message_id = value
                     elif field == "kind":
-                        kind = value if value in {"photo", "sticker"} else "file"
+                        kind = value if value in {"photo", "sticker", "audio"} else "file"
                     elif field == "file_name":
                         file_name = value
                     elif field == "mime_type":
@@ -1315,7 +1318,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         if not file_bytes:
             return _error_response("attachment_required", 400)
-        file_name = _Path(file_name or ("photo" if kind == "photo" else "file")).name
+        file_name = _Path(file_name or ("photo" if kind == "photo" else ("voice" if kind == "audio" else "file"))).name
         mime_type = (mime_type or "application/octet-stream").strip()
         if mime_type.startswith("image/") and kind != "sticker":
             kind = "photo"
@@ -1371,10 +1374,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
 
         is_photo = kind == "photo"
-        marker = f"[照片：{file_name}]" if is_photo else f"[文件：{file_name}]"
+        is_audio = kind == "audio"
+        marker = f"[照片：{file_name}]" if is_photo else (f"[语音：{file_name}]" if is_audio else f"[文件：{file_name}]")
         event = MessageEvent(
             text=marker,
-            message_type=MessageType.PHOTO if is_photo else MessageType.DOCUMENT,
+            message_type=MessageType.PHOTO if is_photo else (MessageType.VOICE if is_audio else MessageType.DOCUMENT),
             source=self.source_for_installation(installation),
             raw_message={
                 "kind": kind,
@@ -1393,7 +1397,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             await asyncio.to_thread(
                 store.record_attachment_message,
                 installation, turn_id, marker,
-                [{"type": "image" if is_photo else "file", "mime_type": mime_type, "label": file_name}],
+                [{"type": "image" if is_photo else ("audio" if is_audio else "file"), "mime_type": mime_type, "label": file_name}],
             )
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
@@ -1686,9 +1690,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             for item in items:
                 kind = str(item.get("type") or "").strip().lower()
                 mime_type = str(item.get("mime_type") or "").strip().lower()
-                if kind not in {"image", "sticker", "file"} or not mime_type:
+                if kind not in {"image", "sticker", "audio", "file"} or not mime_type:
                     raise ValueError("invalid_attachment")
                 if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+                    raise ValueError("invalid_attachment")
+                if kind == "audio" and not mime_type.startswith("audio/"):
                     raise ValueError("invalid_attachment")
                 # Two inbound shapes: kissne's decoder yields raw bytes; main's JSON body carries base64.
                 encoded = item.get("data")
@@ -1760,9 +1766,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         kind = str(item.get("type") or "").strip().lower()
         mime_type = str(item.get("mime_type") or "").strip().lower()
         encoded = item.get("data")
-        if kind not in {"image", "sticker", "file"} or not mime_type:
+        if kind not in {"image", "sticker", "audio", "file"} or not mime_type:
             return _error_response("invalid_attachment", 400)
         if kind in {"image", "sticker"} and not mime_type.startswith("image/"):
+            return _error_response("invalid_attachment", 400)
+        if kind == "audio" and not mime_type.startswith("audio/"):
             return _error_response("invalid_attachment", 400)
         if not isinstance(encoded, str) or not encoded:
             return _error_response("attachment_required", 400)
@@ -1817,6 +1825,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         message_type = (
             MessageType.STICKER if kind == "sticker"
             else MessageType.PHOTO if kind == "image"
+            else MessageType.VOICE if kind == "audio"
             else MessageType.DOCUMENT
         )
         safe_attachment = {
@@ -1982,6 +1991,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if attachments:
                 if all(item["type"] == "sticker" for item in attachments):
                     message_type = MessageType.STICKER
+                elif all(item["type"] == "audio" for item in attachments):
+                    message_type = MessageType.VOICE
                 elif all(item["type"] == "file" for item in attachments):
                     message_type = MessageType.DOCUMENT
                 else:

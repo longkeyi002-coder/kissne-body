@@ -7,6 +7,6 @@ internal fun bridgeLane(action: String): BridgeLane =
         // Background reads must never sit in front of an interactive send.
         "bootstrap", "poll", "ack" -> BridgeLane.BACKGROUND
         "modelOptions", "setModel", "sessions", "deleteSession", "memoryTimeline",
-        "adminStatus", "adminMerge", "adminRollback", "adminDeployLog" -> BridgeLane.CONTROL
+        "adminStatus", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp", "adminMerge", "adminRollback", "adminDeployLog" -> BridgeLane.CONTROL
         else -> BridgeLane.TRANSPORT
     }

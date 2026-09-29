@@ -355,7 +355,8 @@
   function plusPopLayer(origin) {
     var items = [
       { ic: 'image', t: '照片', d: '从相册选择并发送原图', kind: 'photo' },
-      { ic: 'file',  t: '文件', d: '选择文档、压缩包等并发送', kind: 'file' }
+      { ic: 'file',  t: '文件', d: '选择文档、压缩包等并发送', kind: 'file' },
+      { ic: 'mic',   t: '语音文件', d: '选择录音或音频文件并发送', kind: 'audio' }
     ];
     return '<div class="pop" data-plus-panel hidden>'
       + items.map(function (it) {
@@ -368,18 +369,31 @@
 
   function attachmentMsg(meta, kind, status, localId) {
     meta = meta || {};
-    var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : '文件'));
+    var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : ((kind === 'voice' || kind === 'audio') ? '语音消息' : '文件')));
     var size = Number(meta.size || 0);
     var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
     var state = String(status || 'sent');
     var statusText = state === 'sending' ? '正在发送…' : (state === 'failed' ? '发送失败' : '已发送');
     return '<span class="attachmsg attachmsg--' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
-      + '<span class="attachmsg__ic">' + icon(kind === 'photo' ? 'image' : 'file', 19) + '</span>'
+      + '<span class="attachmsg__ic">' + icon(kind === 'photo' || kind === 'sticker' ? 'image' : ((kind === 'voice' || kind === 'audio') ? 'mic' : 'file'), 19) + '</span>'
       + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
       + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
       + '<small class="attachmsg__status">' + esc(statusText) + '</small></span>'
       + (state === 'sending' ? '<span class="attachmsg__spin" aria-hidden="true"></span>' : '')
       + '</span>';
+  }
+  function historyAttachmentHtml(item) {
+    var rows = Array.isArray(item && item.attachments) ? item.attachments : [];
+    return rows.map(function (meta) {
+      meta = meta || {};
+      var kind = String(meta.type || meta.kind || '').toLowerCase();
+      if (kind === 'sticker') {
+        var key = String(meta.key || meta.sticker_key || meta.file_name || '').replace(/\.(?:webp|png|jpg|jpeg|gif)$/i, '');
+        var sticker = stickerMatch(key) || stickerMatch(meta.label || '');
+        if (sticker) return '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
+      }
+      return attachmentMsg(meta, kind === 'image' ? 'photo' : (kind === 'sticker' ? 'sticker' : (kind === 'audio' || kind === 'voice' ? 'voice' : 'file')), 'sent', '');
+    }).join('');
   }
 
   var AVA_STATES = {
@@ -403,20 +417,74 @@
       + '</div>';
   }
   function assistantBubbleHtml(html, cls) {
-    var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
-      return !!String(part || '').trim();
-    });
+    var parts = splitAssistantBubbleParts(html);
     if (!parts.length) parts = [''];
     return parts.map(function (part) {
       return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
     }).join('');
   }
-  function aiMsg(html, cls, time, tag, state, activity) {
+  function splitAssistantBubbleParts(html) {
+    var raw = String(html == null ? '' : html).replace(/\r\n?/g, '\n').trim();
+    if (!raw) return [];
+    var blocks = raw.split(/\n\s*\n+/).filter(function (part) { return !!String(part || '').trim(); });
+    var out = [];
+    blocks.forEach(function (block) {
+      block = String(block || '').trim();
+      /* Structured HTML, code fences, and sticker markup are already a visual unit. */
+      var fence = String.fromCharCode(96, 96, 96);
+      if (/class="stkmix"/.test(block)) {
+        /* A sticker marker mixed with prose is two human messages, never one bubble. */
+        var mixed = block.replace(/^<span class="stkmix">/, '').replace(/<\/span>\s*$/, '');
+        mixed.split(/(<span class="stkmsg">[\s\S]*?<\/span>)/g).forEach(function (part) {
+          part = String(part || '').trim();
+          if (!part) return;
+          if (/^<span class="stkmsg">[\s\S]*<\/span>$/.test(part)) out.push(part);
+          else out.push.apply(out, splitAssistantBubbleParts(part));
+        });
+        return;
+      }
+      if (/(?:<pre|<table|<ul|<ol|<blockquote)/i.test(block)
+          || block.indexOf(fence) >= 0
+          || /class="stkmsg/.test(block)) {
+        out.push(block);
+        return;
+      }
+      var lines = block.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+      /* A few providers persist the streamed answer with one token per line.
+         Treat that transport artifact as one sentence before making human-sized
+         bubbles; otherwise the final answer becomes a column of one-word cards. */
+      var tokenLikeLines = lines.length > 2
+        && lines.every(function (line) {
+          return line.length <= 32 && !/^(?:[-*•]|\d+[.)])\s+/.test(line);
+        })
+        && lines.filter(function (line) { return /[。！？!?；;:]$/.test(line); }).length < Math.ceil(lines.length / 2);
+      if (tokenLikeLines) lines = [joinReasoningLines(lines)];
+      lines.forEach(function (line) {
+        var current = '';
+        var chars = Array.from(line);
+        for (var i = 0; i < chars.length; i++) {
+          var ch = chars[i];
+          current += ch;
+          var next = chars[i + 1] || '';
+          var cjkEnd = /[。！？!?]/.test(ch);
+          var englishEnd = /[.!?]/.test(ch) && /\s/.test(next);
+          if (cjkEnd || englishEnd) {
+            if (current.trim()) out.push(current.trim());
+            current = '';
+            while (i + 1 < chars.length && /\s/.test(chars[i + 1])) i++;
+          }
+        }
+        if (current.trim()) out.push(current.trim());
+      });
+    });
+    return out;
+  }
+  function aiMsg(html, cls, time, tag, state, activity, messageRef) {
     /* Process records deliberately live outside the assistant text row.  A tool call
        or visible reasoning is not spoken content, so it must not borrow the fox
        avatar that identifies an actual reply. */
     var process = activity ? '<div class="activity-history">' + activity + '</div>' : '';
-    return process + '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
+    return process + '<div class="msg msg--ai" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">'
       + assistantBubbleHtml(html, cls)
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
@@ -429,8 +497,8 @@
      省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
-  function meMsg(html, meta, time, state) {
-    return '<div class="msg msg--me" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
+  function meMsg(html, meta, time, state, messageRef) {
+    return '<div class="msg msg--me" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
       + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
@@ -438,29 +506,8 @@
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 过程记录只是一条轻量时间线，不再使用“思考/工具”大框。
-     阶段进行中显示短标签；阶段结束后只留下装饰分割线。
-     分割线仍可点击展开详情，默认不会占用聊天正文空间。 */
-  var ACTIVITY_DIVIDERS = [
-    '・꣑୧・┈・┈・꣑୧・┈・┈・꣑୧・',
-    ': ˚꒷︶︶꒷︶︶꒷꒦︶︶꒦♡₊˚',
-    'ᯓ :ִ ࣪✮ ݁∶ ᯓ :ִ ࣪✧ ݁∶ᯓ :ִ ࣪✩ ݁∶⊹˖ᯓ',
-    '⭑ . ₊ ⊹ . ₊˖ . ₊. ₊ ⊹ . ₊˖ . ₊',
-    'ヽ｀ヽ｀☂o(•ω•。)｀ヽ、｀ヽ、',
-    '✩┈┈∘*┈୨୧┈*∘┈┈✩',
-    '୨﹒˖˚──﹕𝜗𝜚﹕──˚˖﹒୧ .',
-    '・゜✧﹒𝜗𝜚﹒✧゜・．',
-    '⋅.˳˳.⋅ॱི☘︎⋅.˳˳.⋅ॱི☘︎ྀ⋅.˳˳.⋅ॱི☘︎ྀ⋅.˳˳.⋅ॱི☘︎',
-    '❥・・┈┈┈༚༅༚˳.୨୧.˳༚༅༚┈┈・・❥',
-    '˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི˳˳.⋅ॱ˙ॱ⋅.𝄞︶ྀི',
-    '────── 🎀༘⋆──𐀔˚˖♡ ──────',
-    '────── ･｡✧˚༘♡💞⋆｡ ──────',
-    '────── ✩︎⸝🩷ˎˊ˗𓍲･💮ྉ ──────',
-    '✧・✢◌̥🪞࿙࿚࿙࿚𓈒✢◌࿙࿚࿙࿚𓈒✢◌𓈒✢꒪'
-  ];
-  function activityDivider(index) {
-    return ACTIVITY_DIVIDERS[Math.abs(Number(index) || 0) % ACTIVITY_DIVIDERS.length];
-  }
+  /* 过程记录是 AI 侧的独立时间线。思考可以折叠；工具调用必须保留
+     人类可读的动作说明和结果，不能退化成一条装饰分割线。 */
   function cleanActivityText(value, fallback) {
     var text = String(value == null ? '' : value);
     try {
@@ -470,6 +517,44 @@
     }
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
     return text || String(fallback || '');
+  }
+
+  function joinReasoningLines(lines) {
+    var out = '';
+    (lines || []).forEach(function (line) {
+      var value = String(line || '').trim();
+      if (!value) return;
+      if (!out) { out = value; return; }
+      var left = out.slice(-1), right = value.charAt(0);
+      var asciiWord = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right);
+      out += (asciiWord ? ' ' : '') + value;
+    });
+    return out;
+  }
+
+  /* Providers sometimes stream one token per line. A single newline is a transport
+     boundary, not a paragraph boundary; blank lines and list markers remain semantic. */
+  function normalizeReasoningText(value) {
+    var raw = activityDetailText(value || '').replace(/\r\n?/g, '\n').trim();
+    if (!raw) return '';
+    return raw.split(/\n\s*\n+/).map(function (block) {
+      var lines = block.split('\n').map(function (line) { return line.trim(); }).filter(Boolean);
+      if (!lines.length) return '';
+      if (lines.some(function (line) { return /^(?:[-*•]|\d+[.)])\s+/.test(line); })) {
+        return lines.join('\n');
+      }
+      return joinReasoningLines(lines);
+    }).filter(Boolean).join('\n\n');
+  }
+
+  function mergeReasoningText(previous, incoming) {
+    var oldText = normalizeReasoningText(previous || '');
+    var nextText = normalizeReasoningText(incoming || '');
+    if (!oldText) return nextText;
+    if (!nextText) return oldText;
+    if (nextText.indexOf(oldText) === 0) return nextText;
+    if (oldText.indexOf(nextText) >= 0) return oldText;
+    return joinReasoningLines([oldText, nextText]);
   }
 
   function toolActivityLabel(value) {
@@ -555,6 +640,8 @@
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
+          messageId: m.messageId || '', attachments: Array.isArray(m.attachments) ? m.attachments : [],
+          replyTo: m.replyTo || '', replyPreview: m.replyPreview || null,
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
           sid: sid
         };
@@ -651,9 +738,16 @@
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
         if (Array.isArray(row.timeline)) {
+          var seenTimeline = Object.create(null);
           state.timeline = row.timeline.slice(-48).map(function (item) {
             return item && typeof item === 'object' ? Object.assign({}, item) : null;
-          }).filter(Boolean);
+          }).filter(function (item) {
+            if (!item) return false;
+            var key = item.kind === 'tool' ? 'tool:' + String(item.key || '') : 'reasoning:' + String(item.text || '');
+            if (seenTimeline[key]) return false;
+            seenTimeline[key] = true;
+            return true;
+          });
         } else {
           /* One-time migration from the old grouped reasoning/tools store. */
           var legacyReasoning = activityDetailText(row.reasoningText || '');
@@ -711,13 +805,13 @@
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
     if (kind === 'reasoning') {
-      var text = activityDetailText(value || '');
+      var text = normalizeReasoningText(value || '');
       if (!text) return false;
       var last = state.timeline[state.timeline.length - 1];
       if (last && last.kind === 'reasoning') {
-        if (!last.text) last.text = text;
-        else if (text.indexOf(last.text) === 0) last.text = text;
-        else if (last.text.indexOf(text) < 0) last.text += '\n' + text;
+        var merged = mergeReasoningText(last.text, text);
+        if (merged === normalizeReasoningText(last.text)) return false;
+        last.text = merged;
       } else {
         state.timeline.push({ kind: 'reasoning', text: text });
         if (state.timeline.length > 48) state.timeline.shift();
@@ -729,7 +823,7 @@
     return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
   }
   function reasoningHtml(text) {
-    var raw = String(text || '').replace(/\r\n?/g, '\n').trim();
+    var raw = normalizeReasoningText(text);
     if (!raw) return '';
     var blocks = raw.split(/\n\s*\n+/).map(function (part) { return part.trim(); }).filter(Boolean);
     return blocks.map(function (part) {
@@ -742,7 +836,7 @@
           return '<li>' + esc(line.replace(/^(?:[-*•]|\d+[.)])\s+/, '')) + '</li>';
         }).join('') + '</ul>';
       }
-      return '<p>' + lines.map(esc).join('<br>') + '</p>';
+      return '<p>' + esc(joinReasoningLines(lines)) + '</p>';
     }).join('');
   }
   function activityRows(state, closed) {
@@ -750,14 +844,12 @@
     var lastIndex = timeline.length - 1;
     return (state.timeline || []).map(function (item, index) {
       if (!item) return '';
-      var divider = activityDivider(index);
       if (item.kind === 'reasoning') {
         var reasoningActive = !closed && index === lastIndex;
         return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
           + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false" aria-label="'
           + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
-          + '<span class="process-line__mark" aria-hidden="true">✧</span>'
-          + '<span class="process-line__ornament" aria-hidden="true">' + esc(divider) + '</span>'
+          + '<span class="process-line__mark" aria-hidden="true">+</span>'
           + (reasoningActive ? '<span class="process-line__label">正在处理</span>' + dots() : '')
           + '</button>'
           + '<div class="activity-detail process-reasoning" hidden>' + reasoningHtml(item.text) + '</div></section>';
@@ -770,12 +862,15 @@
       var toolActive = !closed && index === lastIndex && status === 'running';
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
+      var label = tool.label || toolActivityLabel(tool.name || detail);
+      var iconName = toolActivityIcon(label);
       return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="false" aria-label="'
-        + (toolActive ? '正在调用工具' : '展开工具调用详情') + '">'
-        + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">●</span>'
-        + '<span class="process-line__ornament" aria-hidden="true">' + esc(divider) + '</span>'
-        + (toolActive ? '<span class="process-line__label">正在调用工具</span>' + dots() : '')
+        + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
+        + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
+        + '<span class="process-line__label process-line__label--tool">' + esc(label) + '</span>'
+        + (tool.name ? '<span class="process-line__tool-name">' + esc(tool.name) + '</span>' : '')
+        + (toolActive ? dots() : '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>')
         + '</button>'
         + '<div class="activity-detail" hidden>' + esc(detail) + '</div></section>';
     }).join('');
@@ -856,7 +951,12 @@
       ''
     );
   }
-  function chatHtmlFromWire(text) {
+  function visibleAttachmentText(text, attachments) {
+    var raw = visibleChatText(text);
+    if (!Array.isArray(attachments) || !attachments.length) return raw;
+    return raw.replace(/[\[【]\s*(?:照片|文件|表情包)\s*[:：][^\]】]+[\]】]/g, '').trim();
+  }
+  function chatHtmlInlineFromWire(text) {
     var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
@@ -879,6 +979,25 @@
     if (!matched) return esc(raw);
     out += esc(raw.slice(last));
     return '<span class="stkmix">' + out + '</span>';
+  }
+  function chatHtmlFromWire(text) {
+    var raw = visibleChatText(text);
+    var fence = String.fromCharCode(96, 96, 96);
+    if (raw.indexOf(fence) < 0) return chatHtmlInlineFromWire(raw);
+    var out = '', last = 0, match;
+    var re = /```([^\n]*)\n([\s\S]*?)```/g;
+    while ((match = re.exec(raw))) {
+      out += chatHtmlInlineFromWire(raw.slice(last, match.index));
+      var language = String(match[1] || '').trim();
+      var code = String(match[2] || '').replace(/\n$/, '');
+      out += '<div class="codeblock" data-copy-code="' + esc(code) + '">'
+        + '<div class="codeblock__bar"><span>' + esc(language || '代码') + '</span>'
+        + '<button type="button" class="codeblock__copy" data-copy-text="' + esc(code) + '">复制</button></div>'
+        + '<pre><code>' + esc(code) + '</code></pre></div>';
+      last = match.index + match[0].length;
+    }
+    out += chatHtmlInlineFromWire(raw.slice(last));
+    return out;
   }
   function clockNow() {
     var d = new Date();
@@ -903,11 +1022,11 @@
     return bits.length === 3 ? bits[1] + '/' + bits[2] : key;
   }
   var CHAT_DIVIDER_PATTERNS = [
-    '₊⁺ ♡₊⁺',
-    '°. ⑅♡⑅.°',
-    '𓂃𓈒𓐍 *ﾟ.',
-    'ଘ*⑅┈⋆°˖┈⑅*ଓ',
-    '✩₊ ·̩͙. ᘏ▸◂ᘏ .·̩͙ ₊ ✩'
+    '· ─ ·',
+    '─ · ─',
+    '· · ·',
+    '─ ┈ ─',
+    '· ─── ·'
   ];
   function chatDivider(day, index) {
     var pattern = CHAT_DIVIDER_PATTERNS[Math.abs(Number(index) || 0) % CHAT_DIVIDER_PATTERNS.length];
@@ -948,11 +1067,20 @@
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
-    CHAT_LOG.push(m);
+    var ref = String(m && (m.messageRef || m.messageId) || '');
+    var existing = ref && CHAT_LOG.filter(function (row) {
+      return String(row && (row.messageRef || row.messageId) || '') === ref;
+    })[0];
+    if (existing) {
+      Object.keys(m || {}).forEach(function (key) { if (m[key] !== undefined) existing[key] = m[key]; });
+      m = existing;
+    } else {
+      CHAT_LOG.push(m);
+    }
     persistChatLog();
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
-      if (!UNREAD.n) UNREAD.first = CHAT_LOG.length - 1;
+      if (!UNREAD.n) UNREAD.first = CHAT_LOG.indexOf(m);
       UNREAD.n++;
     }
     return m;
@@ -977,6 +1105,15 @@
   /* 历史搜索：像微信的搜索记录那样**按时间线排列**（今天 / 昨天 / 更早）。
      模块级，删除与清空都是真的生效（只在本会话内）。 */
   var SEARCH_LOG = [];
+  var SEARCH_RESULTS = [];
+  var SEARCH_QUERY = '';
+  var PENDING_QUOTE = null;
+  function searchResultTime(raw) {
+    var n = Number(raw || 0);
+    if (!isFinite(n) || !n) return '';
+    var d = new Date(n < 100000000000 ? n * 1000 : n);
+    return isNaN(d.getTime()) ? '' : ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
   function logRender() {
     var lastDay = '';
     return CHAT_LOG.map(function (m, index) {
@@ -985,8 +1122,8 @@
       lastDay = day;
       var row = m.who === 'sys' ? sysMsg(m.html, m.time)
         : (m.who === 'ai'
-          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
-          : meMsg(m.html, m.meta || '', m.time));
+          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '', m.messageRef || '')
+          : meMsg(m.html, m.meta || '', m.time, MY_AVA, m.messageRef || ''));
       return divider + row;
     }).join('');
   }
@@ -1012,7 +1149,15 @@
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
         var groups = [];
-        SEARCH_LOG.forEach(function (it) {
+        var searchRows = SEARCH_RESULTS.length ? SEARCH_RESULTS.map(function (it) {
+          var copy = Object.assign({}, it);
+          copy.k = String(it.text || '').slice(0, 80);
+          copy.g = chatDayLabel(chatDayKey(it.created_at));
+          copy.t = searchResultTime(it.created_at);
+          copy.sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
+          return copy;
+        }) : SEARCH_LOG;
+        searchRows.forEach(function (it) {
           var g = groups.length ? groups[groups.length - 1] : null;
           if (!g || g.name !== it.g) { g = { name: it.g, items: [] }; groups.push(g); }
           g.items.push(it);
@@ -1021,13 +1166,16 @@
           return '<div class="srch__g">' + esc(g.name) + '</div>'
             + g.items.map(function (it) {
                 /* 点一条 → 回人人星并**定位到那条消息**（find=关键词），和微信一样 */
+                var ref = String(it.message_ref || '');
+                var jump = '#/chat?state=normal&find=' + encodeURIComponent(SEARCH_QUERY || it.k)
+                  + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '');
                 return '<div class="srch__row" data-kw="' + esc(it.k) + '"'
-                  + ' data-nav="#/chat?state=normal&find=' + encodeURIComponent(it.k) + '">'
+                  + ' data-nav="' + esc(jump) + '">'
                   + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
-                  + '<span class="srch__kw">' + esc(it.k) + '</span>'
+                  + '<span class="srch__kw"><b>' + esc(it.sender || '') + '</b>' + esc(it.k) + '</span>'
                   + '<span class="srch__t">' + esc(it.t) + '</span>'
-                  + '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">'
-                  + icon('close', 12) + '</button>'
+                  + (ref ? '<button class="srch__quote" type="button" data-quote-ref="' + esc(ref) + '" aria-label="引用这条消息">' + icon('link', 12) + '</button>' : '')
+                  + (!SEARCH_RESULTS.length ? '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">' + icon('close', 12) + '</button>' : '')
                   + '</div>';
               }).join('');
         }).join('');
@@ -1049,7 +1197,7 @@
             <div class="srch__head"><span>历史搜索</span>
               <button class="srch__clear" type="button" data-clearsrch>${icon('trash', 12)}清空</button></div>
             <div class="srch__list" data-srchlist>${rows}</div>
-            ${note('搜索只针对当前已加载的真实聊天记录。')}
+            ${note('搜索整个连续聊天记录，点击结果定位；使用引用按钮可带入当前对话。')}
           </div>
         </div>`;
       }
@@ -1107,6 +1255,13 @@
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
         + '</div>';
       var popLayer = plusPopLayer(origin);
+      var quoteRef = q && q.get('quote_ref') || '';
+      var quote = PENDING_QUOTE && String(PENDING_QUOTE.message_ref || '') === String(quoteRef)
+        ? PENDING_QUOTE : null;
+      var quoteBar = quote ? '<div class="quote-bar" data-quote-bar><span class="quote-bar__main"><b>引用'
+        + (String(quote.role || '') === 'assistant' ? '叶青栩' : '我的消息') + '</b><span>'
+        + esc(String(quote.text || '').slice(0, 90)) + '</span></span><button type="button" data-quote-clear aria-label="取消引用">'
+        + icon('close', 13) + '</button></div>' : '';
       var composer = '<div class="composer">'
         + popLayer
         + '<button class="composer__btn" aria-label="添加" data-plus-toggle>' + icon('plus', 19) + '</button>'
@@ -1156,7 +1311,7 @@
           <button class="unread" data-unread type="button"${UNREAD.n ? '' : ' hidden'}>
             <span data-unread-n>${UNREAD.n || 0}</span> 条新消息 ↓
           </button>
-          ${stkPanel}${quickbar}${composer}</div>
+          ${quoteBar}${stkPanel}${quickbar}${composer}</div>
         <div data-chat-menu-host>${menuLayer}</div>
         ${sessionDrawerHtml()}
         ${bs === 'request-enter' ? modal({
@@ -1178,6 +1333,62 @@
       var sIn = root.querySelector('input.srchbox__in');
       if (sIn) {
         var listEl = root.querySelector('[data-srchlist]');
+        var searchTimer = null;
+        var searchSeq = 0;
+        function paintRemoteResults(rows) {
+          if (!listEl) return;
+          if (!rows.length) {
+            listEl.innerHTML = '<div class="srch__empty">没有找到匹配的聊天记录</div>';
+            return;
+          }
+          var grouped = {};
+          rows.forEach(function (it) {
+            var day = chatDayLabel(chatDayKey(it.created_at));
+            if (!grouped[day]) grouped[day] = [];
+            grouped[day].push(it);
+          });
+          listEl.innerHTML = Object.keys(grouped).map(function (day) {
+            return '<div class="srch__g">' + esc(day) + '</div>' + grouped[day].map(function (it) {
+              var ref = String(it.message_ref || '');
+              var q = String(sIn.value || '').trim();
+              var jump = '#/chat?state=normal&find=' + encodeURIComponent(q)
+                + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '');
+              var sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
+              return '<div class="srch__row" data-kw="' + esc(String(it.text || '')) + '" data-nav="' + esc(jump) + '">'
+                + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
+                + '<span class="srch__kw"><b>' + esc(sender) + '</b>' + esc(String(it.text || '')) + '</span>'
+                + '<span class="srch__t">' + esc(searchResultTime(it.created_at)) + '</span>'
+                + (ref ? '<button class="srch__quote" type="button" data-quote-ref="' + esc(ref) + '" aria-label="引用这条消息">' + icon('link', 12) + '</button>' : '')
+                + '</div>';
+            }).join('');
+          }).join('');
+        }
+        function remoteSearch() {
+          var value = (sIn.value || '').trim();
+          SEARCH_QUERY = value;
+          SEARCH_RESULTS = [];
+          clearTimeout(searchTimer);
+          if (!value) {
+            listEl.innerHTML = SEARCH_LOG.length ? listEl.innerHTML : '<div class="srch__empty">输入关键词，搜索全部聊天记录</div>';
+            return;
+          }
+          var seq = ++searchSeq;
+          listEl.innerHTML = '<div class="srch__empty">正在搜索全部聊天记录…</div>';
+          searchTimer = setTimeout(function () {
+            var transport = window.KissneTransport;
+            if (!transport || typeof transport.search !== 'function') {
+              listEl.innerHTML = '<div class="srch__empty">当前连接不支持历史搜索</div>';
+              return;
+            }
+            transport.search(value, 50).then(function (payload) {
+              if (seq !== searchSeq) return;
+              SEARCH_RESULTS = Array.isArray(payload && payload.results) ? payload.results : [];
+              paintRemoteResults(SEARCH_RESULTS);
+            }).catch(function () {
+              if (seq === searchSeq) listEl.innerHTML = '<div class="srch__empty">搜索失败，请稍后重试</div>';
+            });
+          }, 180);
+        }
         function sweep() {
           if (!listEl) return;
           var gs = listEl.querySelectorAll('.srch__g');
@@ -1215,15 +1426,31 @@
         }
         function onClear() {
           SEARCH_LOG.length = 0;
+          SEARCH_RESULTS = [];
+          SEARCH_QUERY = '';
+          sIn.value = '';
           if (listEl) listEl.innerHTML = '<div class="srch__empty">没有搜索记录</div>';
         }
-        sIn.addEventListener('input', filter);
+        function onQuote(e) {
+          var button = e.target && e.target.closest ? e.target.closest('[data-quote-ref]') : null;
+          if (!button || !root.contains(button)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          var ref = String(button.getAttribute('data-quote-ref') || '');
+          PENDING_QUOTE = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === ref; })[0] || { message_ref: ref, text: '' };
+          if (window.KissneApp && typeof window.KissneApp.nav === 'function') window.KissneApp.nav('#/chat?state=normal&quote_ref=' + encodeURIComponent(ref));
+          else location.hash = '#/chat?state=normal&quote_ref=' + encodeURIComponent(ref);
+        }
+        sIn.addEventListener('input', remoteSearch);
+        root.addEventListener('click', onQuote);
         var xBtns = root.querySelectorAll('[data-delsrch]');
         for (var xi = 0; xi < xBtns.length; xi++) xBtns[xi].addEventListener('click', onDel);
         var clr = root.querySelector('[data-clearsrch]');
         if (clr) clr.addEventListener('click', onClear);
         return function () {
           sIn.removeEventListener('input', filter);
+          sIn.removeEventListener('input', remoteSearch);
+          root.removeEventListener('click', onQuote);
           for (var xj = 0; xj < xBtns.length; xj++) xBtns[xj].removeEventListener('click', onDel);
           if (clr) clr.removeEventListener('click', onClear);
         };
@@ -1236,6 +1463,13 @@
       var list  = root.querySelector('.chatbody');
       if (!input || !send || !list) return null;
       var p = ctx && ctx.params;      /* 放在最前面：下面的 find / sticker 都要用 */
+      var quoteClear = root.querySelector('[data-quote-clear]');
+      if (quoteClear) quoteClear.addEventListener('click', function () {
+        PENDING_QUOTE = null;
+        try { history.replaceState(null, '', '#/chat?state=normal'); } catch (ignore) {}
+        var bar = root.querySelector('[data-quote-bar]');
+        if (bar) bar.parentNode.removeChild(bar);
+      });
 
       /* 我们自己的"程序化滚动"（打开就到底 / 发完消息 / 点胶囊跳过去）**不算已读**，
          否则一进聊天页就自动把未读清掉了。400ms 内的滚动事件一律忽略。 */
@@ -1265,12 +1499,21 @@
         pushLog({ who: 'sys', html: html, time: time, localOnly: true });
       }
       var T = window.KissneTransport;
+      var lastSystemNotification = '';
+      function updateSystemNotification(state, title, body) {
+        if (!T || typeof T.updateNotification !== 'function') return;
+        var key = String(state || '') + '|' + String(title || '') + '|' + String(body || '');
+        if (key === lastSystemNotification) return;
+        lastSystemNotification = key;
+        try { T.updateNotification(state, title, body); } catch (ignore) {}
+      }
       var live = !!(T && T.hasToken());
       var liveStopped = false;
       var livePollTimer = null;
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
       var liveCovered = Object.create(null);
+      var liveSeenEvents = Object.create(null);
       var liveCurrentTurn = '';
       var livePendingTurns = Object.create(null);
       var liveSteeredTurns = Object.create(null);
@@ -1591,8 +1834,9 @@
         (history || []).forEach(function (item) {
           if (!item) return;
           var role = String(item.role || '');
+          var attachments = Array.isArray(item.attachments) ? item.attachments : [];
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
-          if (role === 'user') rawText = visibleChatText(rawText);
+          if (role === 'user') rawText = visibleAttachmentText(rawText, attachments);
           var historyPresentation = String(item.presentation || '');
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
@@ -1681,9 +1925,30 @@
           }
 
           var localRows = messageRef && localByRef[messageRef];
+          if ((!localRows || !localRows.length) && unboundLocal.length) {
+            var legacyText = String(rawText || '').replace(/\s+/g, ' ').trim();
+            var legacyIndex = -1;
+            for (var li = 0; li < unboundLocal.length; li++) {
+              var candidateText = String(unboundLocal[li].html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (legacyText && candidateText.indexOf(legacyText) >= 0) { legacyIndex = li; break; }
+            }
+            if (legacyIndex >= 0) {
+              localRows = [unboundLocal[legacyIndex]];
+              unboundLocal.splice(legacyIndex, 1);
+            }
+          }
           if (localRows && localRows.length) {
             localRows.forEach(function (m) {
+              /* History is authoritative for role/content. This repairs old caches that
+                 incorrectly restored an assistant row as a user bubble. */
+              m.who = role === 'user' ? 'me' : 'ai';
+              m.html = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
+              m.attachments = attachments;
+              m.replyTo = String(item.reply_to || m.replyTo || '');
+              m.replyPreview = item.reply_preview || m.replyPreview || null;
               m.optimistic = false;
+              m.localOwned = false;
+              m.sid = boundSid;
               if (item.created_at != null) m.sortAt = item.created_at;
               m.day = chatDayKey(item.created_at || m.sortAt || Date.now());
               m.time = historyClock(item.created_at) || m.time;
@@ -1703,10 +1968,15 @@
             }
           }
           if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
+          var historyHtml = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
+          if (messageRef && CHAT_LOG.some(function (row) { return row.messageRef === messageRef; })) return;
           CHAT_LOG.push({
             who: role === 'user' ? 'me' : 'ai',
-            html: chatHtmlFromWire(rawText),
+            html: historyHtml,
             activity: activity,
+            attachments: attachments,
+            replyTo: String(item.reply_to || ''),
+            replyPreview: item.reply_preview || null,
             time: historyClock(item.created_at),
             day: chatDayKey(item.created_at),
             sortAt: item.created_at,
@@ -1750,12 +2020,13 @@
       }
       function liveEnsure(turnId) {
         var id = String(turnId || '');
+        updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
-          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star">✦</span></div>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star">*</span></div>'
           + '<div class="activity-history" data-live-activity></div>'
           + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
-          + '<div class="msg__body"><div class="liveanswer bubble" data-live-answer hidden></div>'
+          + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
         var el = list.lastElementChild;
         if (id) liveTurns[id] = el;
@@ -1763,6 +2034,8 @@
       }
       function livePresence(el, visible, text) {
         if (!el) return;
+        var bridge = el.querySelector('[data-turn-bridge]');
+        if (bridge && bridge.parentNode) bridge.parentNode.removeChild(bridge);
         var message = el.querySelector('[data-live-message]');
         if (message && !el.querySelector('[data-live-answer]:not([hidden])')) message.hidden = true;
         el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
@@ -1796,14 +2069,37 @@
         var box = el.querySelector('[data-live-answer]') || el.querySelector('.msg__text');
         if (!box) return;
         var value = String(text || '');
-        box.hidden = !value;
+        var frozen = box.getAttribute('data-live-frozen-prefix') || '';
+        var display = value;
+        if (frozen && value.indexOf(frozen) === 0) display = value.slice(frozen.length).replace(/^\s+/, '');
+        box.hidden = !display;
         var message = el.querySelector('[data-live-message]');
-        if (message) message.hidden = !value;
-        el.classList.toggle('is-process-only', !value);
-        box.classList.toggle('is-pending', !!pending && !!value);
+        if (message) message.hidden = !display;
+        el.classList.toggle('is-process-only', !display);
+        box.classList.toggle('is-pending', !!pending && !!display);
+        box.setAttribute('data-live-raw', value);
         /* Drafts can already contain a complete sticker marker. Rendering through the
            same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
-        box.innerHTML = chatHtmlFromWire(value);
+        box.innerHTML = assistantBubbleHtml(chatHtmlFromWire(display));
+      }
+      function freezeVisibleAnswerBeforeUser() {
+        var id = String(liveCurrentTurn || '');
+        var el = id && liveTurns[id];
+        if (!el || !el.isConnected) return;
+        var box = el.querySelector('[data-live-answer]');
+        var raw = box && box.getAttribute('data-live-raw') || '';
+        if (!raw.trim()) return;
+        /* Keep the already spoken part before the user's new bubble, then let the
+           same logical turn continue below it. This is visual interleaving only;
+           the persisted assistant message still has one turn_id. */
+        append(aiMsg(chatHtmlFromWire(raw), '', clockNow(), '', 'talk', '', ''));
+        box.innerHTML = '';
+        box.setAttribute('data-live-frozen-prefix', raw);
+        box.removeAttribute('data-live-raw');
+        box.hidden = true;
+        var message = el.querySelector('[data-live-message]');
+        if (message) message.hidden = true;
+        el.classList.add('is-process-only');
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1848,6 +2144,11 @@
       }
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
+        var eventKey = String(event.event_id || event.message_id || '');
+        if (eventKey) {
+          if (liveSeenEvents[eventKey]) return;
+          liveSeenEvents[eventKey] = true;
+        }
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
         var presentation = String(event.presentation || '');
@@ -1974,6 +2275,7 @@
             if (turnId) delete livePendingTurns[turnId];
             if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
             scheduleOutboxDrain();
+            updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
             return;
           }
           if (looksLikeToolTranscript(finalText)) {
@@ -1988,23 +2290,25 @@
             liveAvatar(el, 'happy');
             if (turnId && !liveCompleted[turnId]) {
               liveCompleted[turnId] = true;
-              CHAT_LOG.push({
+              pushLog({
                 who: 'ai',
                 html: chatHtmlFromWire(finalText),
                 activity: finalActivity,
                 time: clockNow(),
                 day: chatDayKey(Date.now()),
                 messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
+                messageId: String(event.message_id || ''),
                 turnId: turnId,
                 localOwned: true,
                 optimistic: true
               });
-              persistChatLog();
             }
+            updateSystemNotification('done', 'Kissne 回复完成', finalText.replace(/\s+/g, ' ').slice(0, 64) || '打开人人星查看回复');
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
+          updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         } else if (type === 'cancelled') {
           livePresence(el, false);
           setSessionStatus('');
@@ -2013,12 +2317,14 @@
             liveText(el, '', false);
             delete liveSteeredTurns[turnId];
           } else {
-            liveText(el, '已停止回复', false);
+            /* Cancellation is transport state, not a spoken assistant message. */
+            liveText(el, '', false);
           }
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
+          updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         }
       }
       function scheduleLivePoll(ms) {
@@ -2050,8 +2356,8 @@
           var events = (payload && payload.events) || [];
           for (var ei = 0; ei < events.length; ei++) {
             var ev = events[ei], seq = Number(ev && ev.seq);
-            if (isFinite(seq) && liveCovered[seq]) delete liveCovered[seq];
-            else applyLiveEvent(ev);
+            if (isFinite(seq) && liveCovered[seq]) continue;
+            applyLiveEvent(ev);
           }
           if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
           scheduleLivePoll(payload && payload.has_more ? 30 : 850);
@@ -2175,6 +2481,7 @@
       }
 
       var OUTBOX_BATCH_DELAY_MS = 1600;
+      var FRAGMENT_JOIN_WINDOW_MS = 600;
       var USER_TYPING_IDLE_MS = 420;
       function nextMessageId() {
         var r = '';
@@ -2195,7 +2502,25 @@
             USER_TYPING_IDLE_MS - sinceTyping
           ));
         }
+        /* A second quick tap may finish the sentence that the first tap started. Keep a
+           short join window even after the composer is empty; this is not the long typing
+           debounce above, so an ordinary message still feels immediate. */
+        if (CHAT_OUTBOX.length && CHAT_OUTBOX_UPDATED_AT) {
+          return Math.max(0, FRAGMENT_JOIN_WINDOW_MS - sinceBubble);
+        }
         return 0;
+      }
+      function mergeUserFragments(items) {
+        var result = '';
+        (items || []).forEach(function (item) {
+          var value = String(item && item.text || '').trim();
+          if (!value) return;
+          if (!result) { result = value; return; }
+          var left = result.slice(-1), right = value.charAt(0);
+          var needsSpace = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right);
+          result += (needsSpace ? ' ' : '') + value;
+        });
+        return result;
       }
       function scheduleOutboxDrain() {
         clearTimeout(liveOutboxTimer);
@@ -2205,7 +2530,12 @@
       function queueOutboundText(text, logEntry) {
         var value = String(text || '').trim();
         if (!value) return;
-        CHAT_OUTBOX.push({ text: value, log: logEntry || null });
+        var quote = PENDING_QUOTE;
+        CHAT_OUTBOX.push({
+          text: value, log: logEntry || null,
+          replyTo: quote && quote.message_ref ? String(quote.message_ref) : ''
+        });
+        PENDING_QUOTE = null;
         CHAT_OUTBOX_UPDATED_AT = Date.now();
         scheduleOutboxDrain();
       }
@@ -2248,8 +2578,9 @@
           var pendingItems = CHAT_OUTBOX.slice(0, count);
           CHAT_OUTBOX_RETRY = {
             count: count,
-            text: pendingItems.map(function (item) { return item.text; }).join('\n'),
+            text: mergeUserFragments(pendingItems),
             messageId: nextMessageId(),
+            replyTo: pendingItems.length ? String(pendingItems[0].replyTo || '') : '',
             logs: pendingItems.map(function (item) { return item.log; }).filter(Boolean)
           };
         }
@@ -2258,12 +2589,7 @@
         CHAT_OUTBOX_BUSY = true;
         liveSendInFlight += 1;
         try {
-          if (liveCurrentTurn || Object.keys(livePendingTurns).length) {
-            /* A second user message is steering, not a user-requested stop. Cancel only the
-               obsolete execution turn; liveSteeredTurns suppresses its cancelled UI. */
-            await interruptForSteer();
-          }
-          var accepted = await T.sendText(batch.text, batch.messageId);
+          var accepted = await T.sendText(batch.text, batch.messageId, batch.replyTo);
           CHAT_OUTBOX.splice(0, batch.count);
           CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
@@ -2272,6 +2598,7 @@
               if (!logEntry) return;
               logEntry.messageRef = 'turn:' + acceptedTurn + ':user';
               logEntry.turnId = acceptedTurn;
+              logEntry.replyTo = batch.replyTo || '';
             });
             livePendingTurns[acceptedTurn] = true;
             liveCurrentTurn = acceptedTurn;
@@ -2309,6 +2636,7 @@
         input.value = '';
         /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
         CHAT_USER_INPUT_AT = 0;
+        freezeVisibleAnswerBeforeUser();
         append(meMsg(esc(v), '', clockNow()));
         var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
         queueOutboundText(v, localLog);
@@ -2316,12 +2644,31 @@
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
       var findKw = (p && p.get('find')) || '';
+      var jumpRef = (p && p.get('jump_ref')) || '';
       var hitT = null;
-      if (findKw) {
+      if (jumpRef && !CHAT_LOG.some(function (row) { return String(row.messageRef || '') === String(jumpRef); })) {
+        var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0];
+        if (jumpItem) {
+          CHAT_LOG.push({
+            who: String(jumpItem.role || '') === 'assistant' ? 'ai' : 'me',
+            html: chatHtmlFromWire(String(jumpItem.text || '')) + historyAttachmentHtml(jumpItem),
+            attachments: Array.isArray(jumpItem.attachments) ? jumpItem.attachments : [],
+            time: searchResultTime(jumpItem.created_at),
+            day: chatDayKey(jumpItem.created_at), sortAt: jumpItem.created_at,
+            messageRef: jumpRef, localOwned: false, optimistic: false, sid: CHAT_LOG_SESSION
+          });
+          sortChatLogChronologically();
+          persistChatLog();
+          list.innerHTML = logRender();
+        }
+      }
+      if (findKw || jumpRef) {
         var msgs2 = list.querySelectorAll('.msg');
         var hit = null;
         for (var mi = 0; mi < msgs2.length; mi++) {
-          if ((msgs2[mi].textContent || '').indexOf(findKw) >= 0) hit = msgs2[mi];
+          var matchesRef = jumpRef && msgs2[mi].getAttribute('data-message-ref') === jumpRef;
+          var matchesText = findKw && (msgs2[mi].textContent || '').indexOf(findKw) >= 0;
+          if (matchesRef || (!jumpRef && matchesText)) { hit = msgs2[mi]; break; }
         }
         if (hit) {
           var top = 0, node = hit;
@@ -2331,7 +2678,7 @@
           hitT = setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
         } else {
           list.insertAdjacentHTML('afterbegin',
-            '<div class="srchmiss">没有找到「' + esc(findKw) + '」，可能已被清理。</div>');
+            '<div class="srchmiss">没有找到「' + esc(findKw || jumpRef) + '」，可能已被清理。</div>');
         }
       }
 
@@ -2359,7 +2706,7 @@
         var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
         var sendSession = chatLogSessionId();
         btn.disabled = true;
-        setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
+        setSessionStatus(kind === 'photo' ? '正在选择照片…' : (kind === 'audio' ? '正在选择语音文件…' : '正在选择文件…'));
         try {
           var localId = 'attachment-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
           var selectedMeta = null;
@@ -2379,8 +2726,9 @@
               selectedMeta = meta || {};
               if (chatLogSessionId() !== sendSession) return;
               var html = attachmentMsg(selectedMeta, kind, 'sending', localId);
+              freezeVisibleAnswerBeforeUser();
               append(meMsg(html, '', clockNow()));
-              selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+              selectedLog = pushLog({ who: 'me', html: html, time: clockNow(), attachments: [Object.assign({}, selectedMeta, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })] });
               setPlusPanel(false);
               setSessionStatus('');
             }
@@ -2393,9 +2741,13 @@
           bindChatLogSession(sendSession);
           if (!selectedLog) {
             var html = attachmentMsg(result, kind, 'sent', localId);
-            if (chatLogSessionId() === sendSession) append(meMsg(html, '', clockNow()));
-            selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+            if (chatLogSessionId() === sendSession) {
+              freezeVisibleAnswerBeforeUser();
+              append(meMsg(html, '', clockNow()));
+            }
+            selectedLog = pushLog({ who: 'me', html: html, time: clockNow(), attachments: [Object.assign({}, result, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })] });
           } else {
+            selectedLog.attachments = [Object.assign({}, selectedMeta || {}, result || {}, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })];
             paintAttachment('sent', Object.assign({}, selectedMeta || {}, result || {}));
           }
           selectedLog.messageRef = turn ? 'turn:' + turn + ':user' : '';
@@ -2443,17 +2795,45 @@
         e.stopPropagation();
         setStickerPanel(stickerPanel ? stickerPanel.hidden : false);
       }
-      function onStkTap(e) {
+      async function onStkTap(e) {
+        e.preventDefault();
+        e.stopPropagation();
         var s2 = pick(STICKERS, e.currentTarget.getAttribute('data-stk'), STICKERS[0].k);
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
+        if (!live || !T || typeof T.sendSticker !== 'function') {
+          setSessionStatus('服务正在自动恢复，暂时无法发送表情包。');
+          return;
+        }
+        freezeVisibleAnswerBeforeUser();
         append(meMsg(html, '', clockNow()));
-        var stickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        /* 真连接时不能只在 UI 里画贴图：当前 /mobile/messages 合同仍只有 text。
-           先明确把贴图语义送进真实会话，避免 AI 完全看不见；待附件合同落地后改为发送原图。 */
-        if (live) queueOutboundText('[表情包：' + s2.label + ']', stickerLog);
+        var stickerLog = pushLog({
+          who: 'me', html: html, time: clockNow(), messageId: nextMessageId(),
+          stickerKey: s2.k, stickerLabel: s2.label
+        });
+        setSessionStatus('正在发送表情包…');
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         setStickerPanel(false);
+        try {
+          var accepted = await T.sendSticker(s2.k, s2.label);
+          var acceptedTurn = String(accepted && accepted.turn_id || '');
+          if (acceptedTurn) {
+            stickerLog.messageRef = 'turn:' + acceptedTurn + ':user';
+            stickerLog.turnId = acceptedTurn;
+            livePendingTurns[acceptedTurn] = true;
+            liveCurrentTurn = acceptedTurn;
+            liveSetCancel(true);
+            var stickerEl = liveEnsure(acceptedTurn);
+            livePresence(stickerEl, false);
+            liveAvatar(stickerEl, 'read');
+          }
+          persistChatLog();
+          setSessionStatus('');
+          scheduleLivePoll(0);
+        } catch (err) {
+          var code = String(err && err.payload && err.payload.error || err && err.message || '');
+          setSessionStatus(code ? '表情包发送失败：' + code : '表情包发送失败，请重试。');
+        }
         try { history.replaceState(null, '', '#/chat?state=' + stkState); } catch (ignore) {}
       }
       if (stickerToggle) stickerToggle.addEventListener('click', onStickerToggle);
@@ -2543,6 +2923,31 @@
         item.classList.toggle('is-open', open);
       }
       list.addEventListener('click', onActivityTap);
+      function copyText(value) {
+        var text = String(value || '');
+        if (!text) return Promise.resolve(false);
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          return navigator.clipboard.writeText(text).then(function () { return true; });
+        }
+        var area = document.createElement('textarea');
+        area.value = text; area.setAttribute('readonly', '');
+        area.style.position = 'fixed'; area.style.opacity = '0';
+        document.body.appendChild(area); area.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (ignore) {}
+        area.parentNode.removeChild(area);
+        return Promise.resolve(ok);
+      }
+      async function onCopyTap(e) {
+        var button = e.target && e.target.closest ? e.target.closest('[data-copy-text]') : null;
+        if (!button || !list.contains(button)) return;
+        e.preventDefault(); e.stopPropagation();
+        var ok = await copyText(button.getAttribute('data-copy-text') || '');
+        var original = button.textContent;
+        button.textContent = ok ? '已复制' : '复制失败';
+        setTimeout(function () { if (button.isConnected) button.textContent = original; }, 1200);
+      }
+      list.addEventListener('click', onCopyTap);
       async function onApprovalTap(e) {
         var control = e.target.closest && e.target.closest('[data-approval-decision]');
         if (!control || !list.contains(control)) return;
@@ -3533,7 +3938,7 @@
         <div class="screen__body">
           ${fromChat ? '' : card(
             '<div class="stkup">'
-            + '<span class="stkup__box">' + icon('plus', 20) + '</span>'
+            + '<button type="button" class="stkup__box" data-sticker-upload aria-label="上传表情包">' + icon('plus', 20) + '</button>'
             + '<span class="stkup__main"><b>上传表情包</b>'
             + '<span>从相册选图，上传后我和叶青栩都能用</span></span>'
             + '</div>'
@@ -3559,7 +3964,6 @@
     /* 表情包页（从首页进来）：点一张只是选中，不跳转到人人星 */
     mount: function (root) {
       var picks = root.querySelectorAll('[data-pick]');
-      if (!picks.length) return null;
       var hint = root.querySelector('[data-stkpick]');
       function onPick(e) {
         var el = e.currentTarget;
@@ -3572,8 +3976,31 @@
         }
       }
       for (var i = 0; i < picks.length; i++) picks[i].addEventListener('click', onPick);
+      var upload = root.querySelector('[data-sticker-upload]');
+      var transport = window.KissneTransport;
+      async function onUpload(e) {
+        e.preventDefault();
+        if (!upload || !transport || typeof transport.pickAttachment !== 'function') {
+          if (hint) hint.textContent = '当前连接不支持表情包上传，请先完成配对。';
+          return;
+        }
+        upload.disabled = true;
+        if (hint) hint.textContent = '正在选择表情包…';
+        try {
+          var result = await transport.pickAttachment('sticker');
+          if (hint) hint.textContent = result && result.turn_id
+            ? '表情包已上传并发送到当前对话。'
+            : '表情包上传完成。';
+        } catch (err) {
+          if (hint) hint.textContent = '表情包上传失败，请重试。';
+        } finally {
+          upload.disabled = false;
+        }
+      }
+      if (upload) upload.addEventListener('click', onUpload);
       return function () {
         for (var j = 0; j < picks.length; j++) picks[j].removeEventListener('click', onPick);
+        if (upload) upload.removeEventListener('click', onUpload);
       };
     }
   });

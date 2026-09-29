@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.provider.OpenableColumns
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -38,6 +39,11 @@ class MainActivity : AppCompatActivity() {
     private var pendingVoiceRequestId: String? = null
     private var pendingAttachmentRequestId: String? = null
     private var pendingAttachmentKind: String? = null
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) KissneNotificationService.start(this)
+        }
 
     private val attachmentPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -123,6 +129,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         setContentView(root)
+        ensureResidentNotification()
 
         /*
          * Android 15/16 edge-to-edge: consume the system bars on the native root,
@@ -170,6 +177,16 @@ class MainActivity : AppCompatActivity() {
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
 
+    private fun ensureResidentNotification() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            KissneNotificationService.start(this)
+        }
+    }
+
     private fun openBrowser(url: String?, text: String? = null) {
         startActivity(Intent(this, BrowserActivity::class.java).apply {
             url?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_URL, it) }
@@ -178,7 +195,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAttachmentPicker(requestId: String, rawKind: String) {
-        val kind = if (rawKind == "photo") "photo" else "file"
+        val kind = when (rawKind) {
+            "photo" -> "photo"
+            "sticker" -> "sticker"
+            "audio" -> "audio"
+            else -> "file"
+        }
         pendingAttachmentRequestId?.takeIf { it != requestId }?.let { previous ->
             if (::bridge.isInitialized) {
                 bridge.resolveNative(
@@ -190,7 +212,11 @@ class MainActivity : AppCompatActivity() {
         }
         pendingAttachmentRequestId = requestId
         pendingAttachmentKind = kind
-        attachmentPicker.launch(if (kind == "photo") arrayOf("image/*") else arrayOf("*/*"))
+        attachmentPicker.launch(when (kind) {
+            "photo", "sticker" -> arrayOf("image/*")
+            "audio" -> arrayOf("audio/*")
+            else -> arrayOf("*/*")
+        })
     }
 
     private fun readAndUploadAttachment(requestId: String, kind: String, uri: Uri) {

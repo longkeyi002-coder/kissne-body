@@ -107,6 +107,15 @@ class MobileTransportClient(
         return request("GET", query.toString())
     }
 
+    fun adminMemoryPayload(): JSONObject = request("GET", "/admin/memory")
+
+    fun deleteAdminMemoryPayload(memoryId: String): JSONObject =
+        request("DELETE", "/admin/memory/" + java.net.URLEncoder.encode(memoryId, "UTF-8"))
+
+    fun adminSkillsPayload(): JSONObject = request("GET", "/admin/skills")
+
+    fun adminMcpPayload(): JSONObject = request("GET", "/admin/mcp")
+
 
     fun bootstrapPayload(cursor: Long): JSONObject =
         request("POST", "/bootstrap", JSONObject().put("cursor", cursor))
@@ -246,5 +255,6 @@ internal fun resolveMobileRequestUrl(baseUrl: String, path: String): String =
 internal fun normalizeAttachmentKind(kind: String): String = when (kind.trim().lowercase()) {
     "photo" -> "photo"
     "sticker" -> "sticker"
+    "audio", "voice" -> "audio"
     else -> "file"
 }

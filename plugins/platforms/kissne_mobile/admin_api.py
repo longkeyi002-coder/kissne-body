@@ -22,6 +22,8 @@ ADMIN_PATH_DEPLOY_LOG = "/admin/deploy-log"
 ADMIN_PATH_SESSIONS = "/admin/sessions"
 ADMIN_PATH_MEMORY = "/admin/memory"
 ADMIN_PATH_CONFIG = "/admin/config"
+ADMIN_PATH_SKILLS = "/admin/skills"
+ADMIN_PATH_MCP = "/admin/mcp"
 
 INSTALL = Path("/home/admin/.hermes/hermes-agent")
 DEPLOY_SCRIPT = Path("/home/admin/kissne-workspace/backups/deploy-upstream-merge.sh")
@@ -117,6 +119,8 @@ def _register_admin_routes(app: Any) -> None:
     app.router.add_delete(ADMIN_PATH_MEMORY + "/{memory_id}", _handle_admin_memory_delete)
     app.router.add_get(ADMIN_PATH_CONFIG, _handle_admin_config)
     app.router.add_post(ADMIN_PATH_CONFIG, _handle_admin_config_update)
+    app.router.add_get(ADMIN_PATH_SKILLS, _handle_admin_skills)
+    app.router.add_get(ADMIN_PATH_MCP, _handle_admin_mcp)
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +530,96 @@ async def _handle_admin_config_update(request: Any) -> Any:
         return web.json_response({"ok": True, "message": "config updated, restart gateway to apply"})
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
+
+
+def _skill_summaries() -> list[dict[str, Any]]:
+    """Return installed skill metadata without exposing the skill body or secrets."""
+    from hermes_constants import get_hermes_home
+
+    root = Path(get_hermes_home()) / "skills"
+    if not root.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for skill_file in sorted(root.rglob("SKILL.md")):
+        if any(part in {".git", ".archive", "__pycache__", ".venv", "node_modules"} for part in skill_file.parts):
+            continue
+        name = skill_file.parent.name
+        description = ""
+        try:
+            lines = skill_file.read_text(encoding="utf-8-sig", errors="replace")[:4000].splitlines()
+            in_frontmatter = False
+            for line in lines:
+                if line.strip() == "---":
+                    if in_frontmatter:
+                        break
+                    in_frontmatter = True
+                    continue
+                if in_frontmatter and line.strip().startswith("name:"):
+                    name = line.split(":", 1)[1].strip().strip("\"'") or name
+                if in_frontmatter and line.strip().startswith("description:"):
+                    description = line.split(":", 1)[1].strip().strip("\"'")
+        except OSError:
+            continue
+        rows.append({
+            "name": name,
+            "description": description[:240],
+            "source": str(skill_file.parent.relative_to(root)),
+            "enabled": True,
+        })
+    return rows
+
+
+async def _handle_admin_skills(request: Any) -> Any:
+    from aiohttp import web
+
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        items = await asyncio.to_thread(_skill_summaries)
+        return web.json_response({"ok": True, "items": items, "count": len(items)})
+    except Exception as exc:
+        logger.warning("[kissne_mobile] failed to read skills: %s", exc, exc_info=True)
+        return web.json_response({"error": "skills_unavailable"}, status=503)
+
+
+def _mcp_summaries() -> list[dict[str, Any]]:
+    cfg = _read_config_yaml()
+    servers = cfg.get("mcp_servers") or {}
+    if not isinstance(servers, dict):
+        return []
+    from tools.mcp_tool_common import mcp_server_enabled
+
+    registered: set[str] = set()
+    try:
+        from tools.mcp_tool_discovery import get_registered_mcp_server_names
+        registered = {str(name) for name in (get_registered_mcp_server_names() or [])}
+    except Exception:
+        pass
+    rows: list[dict[str, Any]] = []
+    for name, raw in sorted(servers.items()):
+        server = raw if isinstance(raw, dict) else {}
+        rows.append({
+            "name": str(name),
+            "transport": "http" if server.get("url") else ("stdio" if server.get("command") else "unknown"),
+            "enabled": bool(mcp_server_enabled(server)),
+            "connected": str(name) in registered,
+            "url": str(server.get("url") or ""),
+            "command": str(server.get("command") or ""),
+            "tool_count": len(server.get("tools") or []) if isinstance(server.get("tools"), list) else None,
+        })
+    return rows
+
+
+async def _handle_admin_mcp(request: Any) -> Any:
+    from aiohttp import web
+
+    installation = await _authenticated_admin(request)
+    if not installation:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        items = await asyncio.to_thread(_mcp_summaries)
+        return web.json_response({"ok": True, "items": items, "count": len(items)})
+    except Exception as exc:
+        logger.warning("[kissne_mobile] failed to read MCP servers: %s", exc, exc_info=True)
+        return web.json_response({"error": "mcp_unavailable"}, status=503)

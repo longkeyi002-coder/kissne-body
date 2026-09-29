@@ -14,7 +14,7 @@
      07 记忆库页 — Lifemem external provider journal projection
      ===================================================================== */
   var MEMORY_STATES = [{ key: 'list', label: '时间线' }, { key: 'detail', label: '记忆详情' }];
-  var MEMORY_INDEX = { items: [], loaded: false, error: '', space: '', query: '' };
+  var MEMORY_INDEX = { items: [], builtin: [], loaded: false, error: '', space: '', query: '' };
   var MEMORY_SPACES = [
     { k: '', v: '全部' }, { k: 'reality', v: '现实' }, { k: 'relationship', v: '关系' },
     { k: 'ai_self', v: '叶青栩' }, { k: 'ai_world', v: '小机星' }
@@ -22,7 +22,7 @@
 
   function memoryItemById(id) {
     id=String(id||'');
-    return MEMORY_INDEX.items.find(function(item){ return String(item.id||'')===id; }) || null;
+    return MEMORY_INDEX.items.concat(MEMORY_INDEX.builtin || []).find(function(item){ return String(item.id||'')===id; }) || null;
   }
   function memoryTitle(item) { return String(item && item.title || '未命名记忆'); }
   function memorySpaceLabel(space) {
@@ -36,8 +36,9 @@
   function memoryTimelineHtml() {
     if(!MEMORY_INDEX.loaded && MEMORY_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div><div class="mempty__s">Lifemem 当前不可用。</div></div>';
     if(!MEMORY_INDEX.loaded) return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
-    if(!MEMORY_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">暂无匹配记忆</div><div class="mempty__s">时间线只展示 Lifemem 已确认写入的长期记忆。</div></div>';
-    return '<div class="memtimeline">'+MEMORY_INDEX.items.map(function(item){
+    var all = MEMORY_INDEX.items.concat(MEMORY_INDEX.builtin || []);
+    if(!all.length) return '<div class="mempty"><div class="mempty__t">暂无匹配记忆</div><div class="mempty__s">这里显示 Runtime 已确认写入的长期记忆。</div></div>';
+    return '<div class="memtimeline">'+all.map(function(item){
       return '<a class="memtimeline__item" data-nav="#/memory?state=detail&id='+encodeURIComponent(String(item.id||''))+'">'
         +'<span class="memtimeline__dot"></span><span class="memtimeline__time">'+esc(memoryTime(item.occurred_at))+'</span>'
         +'<span class="memtimeline__card"><b>'+esc(memoryTitle(item))+'</b>'
@@ -55,8 +56,10 @@
         var detail=item
           ? '<div class="memdetail"><h2 class="memdetail__t">'+esc(memoryTitle(item))+'</h2>'
             +'<div class="memdetail__meta">'+chip(memorySpaceLabel(item.memory_space))+'<span class="muted">'+esc(memoryTime(item.occurred_at))+'</span></div>'
-            +'<p class="memdetail__body">'+esc(item.body||'')+'</p>'
+            +'<p class="memdetail__body">'+esc(item.body||item.text||'')+'</p>'
             +(item.source_ref&&item.source_ref.session_id?'<div class="muted">来源会话 '+esc(item.source_ref.session_id)+' · turn '+esc(item.source_ref.turn_id||0)+'</div>':'')
+            +(item.source?'<div class="muted">来源：'+esc(item.source)+'</div>':'')
+            +(item.deletable?'<button type="button" class="btn btn--ghost is-small" data-memory-delete="'+esc(item.id)+'" style="margin-top:12px">删除这条记忆</button>':'')
             +'</div>'
           : '<div class="mempty"><div class="mempty__t">这条记忆不在当前时间线中</div></div>';
         return '<div class="screen">'+appbar({title:'记忆详情',back:'#/memory'})+'<div class="screen__body">'+detail+'</div></div>';
@@ -82,17 +85,32 @@
           if(typeof T.ensureToken==='function') await T.ensureToken(false);
           var payload=await T.memoryTimeline({limit:100,space:MEMORY_INDEX.space,q:MEMORY_INDEX.query});
           MEMORY_INDEX.items=Array.isArray(payload&&payload.items)?payload.items:[];
+          if (T.adminMemory) {
+            try {
+              var builtin=await T.adminMemory();
+              MEMORY_INDEX.builtin=(Array.isArray(builtin&&builtin.items)?builtin.items:[]).map(function(item){
+                return Object.assign({}, item, { title: '内置记忆', body: item.text, occurred_at: 0, memory_space: item.target||'memory' });
+              });
+            } catch (ignore) { MEMORY_INDEX.builtin=[]; }
+          }
           MEMORY_INDEX.loaded=true; MEMORY_INDEX.error=''; if(!stopped){show('');paint();}
         }catch(err){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error=String(err&&err.message||'memory_unavailable');if(!stopped){show('记忆库读取失败');paint();}}
       }
       function onRefresh(e){e.preventDefault();reload();}
       function onSpace(e){var b=e.target.closest('[data-memory-space]');if(!b)return;MEMORY_INDEX.space=String(b.getAttribute('data-memory-space')||'');location.hash='#/memory';reload();}
       function onSearch(){clearTimeout(timer);timer=setTimeout(function(){MEMORY_INDEX.query=String(search&&search.value||'').trim();reload();},320);}
+      async function onDelete(e){
+        var b=e.target.closest('[data-memory-delete]'); if(!b||!T||typeof T.deleteAdminMemory!=='function')return;
+        e.preventDefault(); b.disabled=true;
+        try { await T.deleteAdminMemory(b.getAttribute('data-memory-delete')); await reload(); location.hash='#/memory'; }
+        catch (err) { show('删除记忆失败'); b.disabled=false; }
+      }
       if(refresh)refresh.addEventListener('click',onRefresh);
       root.addEventListener('click',onSpace);
+      root.addEventListener('click',onDelete);
       if(search)search.addEventListener('input',onSearch);
       if((ctx&&ctx.state||'list')==='list')reload();
-      return function(){stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);if(search)search.removeEventListener('input',onSearch);};
+      return function(){stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);root.removeEventListener('click',onDelete);if(search)search.removeEventListener('input',onSearch);};
     }
   });
 
@@ -708,46 +726,76 @@
   /* =====================================================================
      13 Skills
      ===================================================================== */
+  var SKILL_INDEX = { items: [], loaded: false, error: '' };
+  function skillsHtml() {
+    if (!SKILL_INDEX.loaded) return '<div class="mempty">正在读取 Runtime Skills…</div>';
+    if (SKILL_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取 Skills</div><div class="mempty__s">'+esc(SKILL_INDEX.error)+'</div></div>';
+    if (!SKILL_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">当前没有已安装 Skill</div></div>';
+    return '<div class="list">'+SKILL_INDEX.items.map(function(item){
+      return listRow({ title: item.name || '未命名 Skill', sub: (item.description || '已从 Hermes Runtime 读取') + ' · ' + (item.source || '本地'), icon: 'box' });
+    }).join('')+'</div>';
+  }
   K.registerScreen({
     no: '13', id: 'skills', name: 'Skills', route: '#/skills', tab: null,
-    purpose: 'Kissne 的 Skills 管理入口。只展示真实 Runtime 数据；Mobile Adapter 尚未暴露管理接口时明确显示未接入。',
+    purpose: '读取 Hermes Runtime 当前实际安装的 Skills。',
     out: ['#/home', '#/settings'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return '<div class="screen">'
-        + appbar({ title: 'Skills', sub: '给叶青栩扩展可复用能力', back: '#/home' })
+        + appbar({ title: 'Skills', sub: 'Hermes Runtime · 已安装能力', back: '#/home', right: '<button class="iconbtn" data-skills-refresh aria-label="刷新">'+icon('refresh')+'</button>' })
         + '<div class="screen__body">'
-        + sectionTitle('技能管理')
-        + card(
-            listRow({ title: '已安装 Skills', sub: '仅显示 Hermes Runtime 的真实安装状态', icon: 'box' })
-            + listRow({ title: '安装 / 更新', sub: '后续从 Skills 管理接口直接操作', icon: 'plus' }),
-            { tight: true }
-          )
-        + note('当前 Mobile Adapter 还没有暴露 Skills 列表与安装接口，因此这里不会伪造“已安装”条目。接入后本页直接读取真实 Runtime。')
+        + '<div class="adminnotice" data-skills-notice hidden></div><div data-skills-list>'+skillsHtml()+'</div>'
         + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport, host=root.querySelector('[data-skills-list]'), notice=root.querySelector('[data-skills-notice]'), refresh=root.querySelector('[data-skills-refresh]'), stopped=false;
+      function paint(){if(host&&!stopped)host.innerHTML=skillsHtml();}
+      async function reload(){
+        if(!T||typeof T.adminSkills!=='function'){SKILL_INDEX.loaded=true;SKILL_INDEX.error='当前版本未接入 Skills 数据接口';paint();return;}
+        try{if(T.ensureToken)await T.ensureToken(false);var p=await T.adminSkills();SKILL_INDEX.items=Array.isArray(p&&p.items)?p.items:[];SKILL_INDEX.loaded=true;SKILL_INDEX.error='';paint();}
+        catch(err){SKILL_INDEX.loaded=true;SKILL_INDEX.error=String(err&&err.message||'skills_unavailable');if(notice){notice.hidden=false;notice.textContent='Skills 读取失败';}paint();}
+      }
+      if(refresh)refresh.addEventListener('click',reload);reload();
+      return function(){stopped=true;if(refresh)refresh.removeEventListener('click',reload);};
     }
   });
 
   /* =====================================================================
      14 MCP
      ===================================================================== */
+  var MCP_INDEX = { items: [], loaded: false, error: '' };
+  function mcpHtml() {
+    if (!MCP_INDEX.loaded) return '<div class="mempty">正在读取 MCP Runtime…</div>';
+    if (MCP_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取 MCP</div><div class="mempty__s">'+esc(MCP_INDEX.error)+'</div></div>';
+    if (!MCP_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">当前没有配置 MCP Server</div><div class="mempty__s">页面只显示真实配置，不生成演示服务器。</div></div>';
+    return '<div class="list">'+MCP_INDEX.items.map(function(item){
+      var state=item.connected?'已连接':(item.enabled?'已配置':'已停用');
+      var transport=item.transport==='stdio'?'本地进程':(item.transport==='http'?'HTTP':'未识别');
+      return listRow({ title: item.name, sub: state+' · '+transport+(item.url?' · '+item.url:'')+(item.tool_count!=null?' · '+item.tool_count+' 个工具':''), icon: 'server' });
+    }).join('')+'</div>';
+  }
   K.registerScreen({
     no: '14', id: 'mcp', name: 'MCP', route: '#/mcp', tab: null,
-    purpose: 'Kissne 的 MCP Server 管理入口。只展示真实连接状态；未接入控制接口时不生成演示服务器。',
+    purpose: '读取 Hermes Runtime 当前配置与连接状态的 MCP Server。',
     out: ['#/home', '#/settings'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return '<div class="screen">'
-        + appbar({ title: 'MCP', sub: '连接外部工具与数据源', back: '#/home' })
+        + appbar({ title: 'MCP', sub: 'Runtime · 外部工具与数据源', back: '#/home', right: '<button class="iconbtn" data-mcp-refresh aria-label="刷新">'+icon('refresh')+'</button>' })
         + '<div class="screen__body">'
-        + sectionTitle('MCP Servers')
-        + card(
-            listRow({ title: '服务器列表', sub: '接入后显示真实 MCP Server 与连接状态', icon: 'server' })
-            + listRow({ title: '添加 MCP', sub: '后续支持地址、认证与启停配置', icon: 'plus' }),
-            { tight: true }
-          )
-        + note('当前 Mobile Adapter 尚未暴露 MCP 管理接口，所以本页不会显示假的服务器。后续接线后再开放新增、启停和配置。')
+        + '<div class="adminnotice" data-mcp-notice hidden></div><div data-mcp-list>'+mcpHtml()+'</div>'
         + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport,host=root.querySelector('[data-mcp-list]'),notice=root.querySelector('[data-mcp-notice]'),refresh=root.querySelector('[data-mcp-refresh]'),stopped=false;
+      function paint(){if(host&&!stopped)host.innerHTML=mcpHtml();}
+      async function reload(){
+        if(!T||typeof T.adminMcp!=='function'){MCP_INDEX.loaded=true;MCP_INDEX.error='当前版本未接入 MCP 数据接口';paint();return;}
+        try{if(T.ensureToken)await T.ensureToken(false);var p=await T.adminMcp();MCP_INDEX.items=Array.isArray(p&&p.items)?p.items:[];MCP_INDEX.loaded=true;MCP_INDEX.error='';paint();}
+        catch(err){MCP_INDEX.loaded=true;MCP_INDEX.error=String(err&&err.message||'mcp_unavailable');if(notice){notice.hidden=false;notice.textContent='MCP 读取失败';}paint();}
+      }
+      if(refresh)refresh.addEventListener('click',reload);reload();
+      return function(){stopped=true;if(refresh)refresh.removeEventListener('click',reload);};
     }
   });
 

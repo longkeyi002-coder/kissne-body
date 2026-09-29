@@ -93,6 +93,9 @@
         return typeof Native.hasBootstrapCache === 'function' && !!Native.hasBootstrapCache();
       },
       isConnected: function () { return typeof Native.isConnected === 'function' ? !!Native.isConnected() : !!Native.hasToken(); },
+      updateNotification: function (state, title, body) {
+        if (typeof Native.updateNotification === 'function') Native.updateNotification(String(state || ''), String(title || ''), String(body || ''));
+      },
       clearToken: function () { Native.clearToken(); },
       cursor: function () {
         var n = Number(Native.getCursor());
@@ -119,6 +122,10 @@
           q: String(options.q || '')
         });
       },
+      adminMemory: function () { return nativeCall('adminMemory', {}); },
+      deleteAdminMemory: function (id) { return nativeCall('deleteAdminMemory', { memory_id: String(id || '') }); },
+      adminSkills: function () { return nativeCall('adminSkills', {}); },
+      adminMcp: function () { return nativeCall('adminMcp', {}); },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
@@ -330,6 +337,10 @@
     if (options.q) path += '&q=' + encodeURIComponent(String(options.q));
     return request(path, { method: 'GET' });
   }
+  function adminMemory() { return request('/admin/memory', { method: 'GET', base: adminBase() }); }
+  function deleteAdminMemory(id) { return request('/admin/memory/' + encodeURIComponent(String(id || '')), { method: 'DELETE', base: adminBase() }); }
+  function adminSkills() { return request('/admin/skills', { method: 'GET', base: adminBase() }); }
+  function adminMcp() { return request('/admin/mcp', { method: 'GET', base: adminBase() }); }
   async function selectSession(sessionKey, sessionId) {
     var key = String(sessionKey || '').trim();
     var id = String(sessionId || '').trim();
@@ -371,6 +382,25 @@
     var body = { text: String(text || ''), message_id: messageId || makeMessageId() };
     if (replyTo) body.reply_to = String(replyTo);
     return request('/mobile/messages', { method: 'POST', body: body });
+  }
+
+  async function sendSticker(key, label) {
+    var assets = window.KSN && window.KSN.ASSETS;
+    var rel = assets && assets.stickers && assets.stickers[String(key || '')];
+    if (!rel) throw new ApiError(0, { error: 'sticker_asset_not_found' }, 'sticker_asset_not_found');
+    var response = await fetch(new URL('assets/' + rel, location.href).toString(), { cache: 'force-cache' });
+    if (!response.ok) throw new ApiError(0, { error: 'sticker_asset_read_failed' }, 'sticker_asset_read_failed');
+    var bytes = new Uint8Array(await response.arrayBuffer());
+    var chunk = 0x8000, binary = '';
+    for (var i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+    }
+    return request('/mobile/messages', { method: 'POST', body: {
+      message_id: makeMessageId(), text: '', attachments: [{
+        type: 'sticker', mime_type: String(response.headers.get('content-type') || 'image/webp').split(';')[0].trim(),
+        label: String(label || key || ''), data: btoa(binary)
+      }]
+    }});
   }
 
   function pickAttachment() {
@@ -424,6 +454,7 @@
     hasToken: function () { return !!deviceToken(); },
     hasBootstrapCache: hasBootstrapCache,
     isConnected: function () { return hasBootstrapCache(); },
+    updateNotification: function () {},
     clearToken: clearToken,
     cursor: cursor,
     pair: pair,
@@ -432,10 +463,15 @@
     history: history,
     search: searchHistory,
     memoryTimeline: memoryTimeline,
+    adminMemory: adminMemory,
+    deleteAdminMemory: deleteAdminMemory,
+    adminSkills: adminSkills,
+    adminMcp: adminMcp,
     deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
+    sendSticker: sendSticker,
     pickAttachment: pickAttachment,
     poll: poll,
     ack: ack,

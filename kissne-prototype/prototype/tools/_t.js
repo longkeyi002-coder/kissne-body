@@ -72,19 +72,33 @@ assert('memory 页可渲染', memory && memory.indexOf('appbar__title">记忆库
 assert('stickers 页可渲染', stickers && stickers.indexOf('appbar__title">表情包') >= 0);
 
 /* Chat process UI contract: activity is independent from spoken assistant text,
-   uses stage dividers instead of a shared frame, and remains individually expandable. */
+   tool rows explain the action, and every row remains individually expandable. */
 var screensSource = fs.readFileSync(path.join(base, 'screens-a.js'), 'utf8');
 assert('过程记录不复用正文头像行', screensSource.indexOf('var process = activity ?') >= 0
   && screensSource.indexOf('data-live-message') >= 0);
-assert('过程记录使用分割线而非共享大框', screensSource.indexOf('ACTIVITY_DIVIDERS') >= 0
+assert('思考过程使用真实动作行而非装饰分割线', screensSource.indexOf('ACTIVITY_DIVIDERS') < 0
   && screensSource.indexOf('class="process-line activity-row"') >= 0
   && screensSource.indexOf('closed ? \'过程记录\' : \'处理中\'') < 0);
-assert('处理完成后不显示完成文字', screensSource.indexOf('var statusText = status') < 0
-  && screensSource.indexOf('正在调用工具') >= 0
-  && screensSource.indexOf('正在处理') >= 0);
+assert('工具调用显示动作说明而非装饰线', screensSource.indexOf('process-line__label--tool') >= 0
+  && screensSource.indexOf('toolActivityLabel') >= 0
+  && screensSource.indexOf('process-line__tool-name') >= 0);
+assert('AI 正文按自然句拆分气泡', screensSource.indexOf('splitAssistantBubbleParts') >= 0
+  && screensSource.indexOf('assistantBubbleHtml') >= 0);
+assert('星星过渡在处理开始后移除', screensSource.indexOf('data-turn-bridge') >= 0
+  && screensSource.indexOf('bridge.parentNode.removeChild(bridge)') >= 0);
+assert('流事件跳过 bootstrap 已覆盖序号', screensSource.indexOf('if (isFinite(seq) && liveCovered[seq]) continue;') >= 0);
+assert('表情包使用真实附件发送', screensSource.indexOf('T.sendSticker(s2.k, s2.label)') >= 0);
+assert('表情包上传入口接入原生选择器', screensSource.indexOf('data-sticker-upload') >= 0
+  && screensSource.indexOf("transport.pickAttachment('sticker')") >= 0);
+assert('历史搜索调用全历史接口', screensSource.indexOf('transport.search(value, 50)') >= 0);
 assert('处理中不创建等待头像', screensSource.indexOf('<div class="aipresence"') < 0
   && screensSource.indexOf('正在看你刚才说的话') < 0);
 assert('工具与思考均可展开', screensSource.indexOf("row.closest('.process-step')") >= 0);
+assert('代码块提供复制入口', screensSource.indexOf('data-copy-text') >= 0
+  && screensSource.indexOf('navigator.clipboard') >= 0);
+assert('AI/用户附件可按语音类型渲染', screensSource.indexOf("kind === 'voice' || kind === 'audio'") >= 0);
+assert('Skills 与 MCP 页面读取真实 Runtime', fs.readFileSync(path.join(base, 'screens-b.js'), 'utf8').indexOf('T.adminSkills') >= 0
+  && fs.readFileSync(path.join(base, 'screens-b.js'), 'utf8').indexOf('T.adminMcp') >= 0);
 
 console.log('\n示例 K.icon(home):', ic);
 console.log('示例 K.asset(FOX_HOME_CHARACTER):', a);
