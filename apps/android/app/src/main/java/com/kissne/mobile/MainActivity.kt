@@ -31,6 +31,11 @@ import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
+    companion object {
+        @Volatile
+        var isVisible: Boolean = false
+    }
+
     private lateinit var webView: WebView
     private lateinit var bridge: PrototypeBridge
     private lateinit var updateManager: UpdateManager
@@ -422,6 +427,16 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::updateManager.isInitialized) updateManager.onResume()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        isVisible = true
+    }
+
+    override fun onStop() {
+        isVisible = false
+        super.onStop()
     }
 
     @Deprecated("Deprecated in Java")

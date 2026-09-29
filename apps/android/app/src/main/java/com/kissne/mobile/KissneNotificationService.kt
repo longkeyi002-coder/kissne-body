@@ -13,7 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
-/** Keeps one quiet, actionable status notification for the chat connection. */
+/** Keeps a resident status notification and alerts when a background reply arrives. */
 class KissneNotificationService : Service() {
     override fun onCreate() {
         super.onCreate()
@@ -22,9 +22,13 @@ class KissneNotificationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val state = intent?.getStringExtra(EXTRA_STATE).orEmpty()
         val title = intent?.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Kissne 已就绪" }
         val body = intent?.getStringExtra(EXTRA_BODY).orEmpty().ifBlank { "打开人人星继续对话" }
         NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(this, title, body))
+        if (state == "done" && !MainActivity.isVisible) {
+            NotificationManagerCompat.from(this).notify(MESSAGE_NOTIFICATION_ID, messageNotification(this, title, body))
+        }
         return START_STICKY
     }
 
@@ -51,9 +55,32 @@ class KissneNotificationService : Service() {
             .build()
     }
 
+    private fun messageNotification(context: Context, title: String, body: String): Notification {
+        val open = PendingIntent.getActivity(
+            context,
+            1,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(context, MESSAGE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.kissne_app_icon)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+    }
+
     companion object {
         const val CHANNEL_ID = "kissne_status"
+        const val MESSAGE_CHANNEL_ID = "kissne_messages"
         const val NOTIFICATION_ID = 2107
+        const val MESSAGE_NOTIFICATION_ID = 2108
+        private const val EXTRA_STATE = "state"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_BODY = "body"
 
@@ -65,9 +92,10 @@ class KissneNotificationService : Service() {
             )
         }
 
-        fun update(context: Context, title: String, body: String) {
+        fun update(context: Context, state: String, title: String, body: String) {
             ensureChannel(context)
             val intent = Intent(context, KissneNotificationService::class.java)
+                .putExtra(EXTRA_STATE, state)
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_BODY, body)
             ContextCompat.startForegroundService(context, intent)
@@ -85,7 +113,16 @@ class KissneNotificationService : Service() {
                 enableVibration(false)
                 setShowBadge(false)
             }
-            context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            val messageChannel = NotificationChannel(
+                MESSAGE_CHANNEL_ID,
+                "Kissne 消息",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = "Kissne 的新回复"
+            }
+            context.getSystemService(NotificationManager::class.java).createNotificationChannels(
+                listOf(channel, messageChannel),
+            )
         }
     }
 }

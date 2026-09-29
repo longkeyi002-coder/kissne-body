@@ -283,10 +283,11 @@ class PrototypeBridge(
 
     @JavascriptInterface
     fun updateNotification(state: String?, title: String?, body: String?) {
+        val safeState = state?.trim().orEmpty().ifBlank { "ready" }
         val safeTitle = title?.trim().orEmpty().ifBlank { "Kissne 已就绪" }
         val safeBody = body?.trim().orEmpty().ifBlank { "打开人人星继续对话" }
         webView.post {
-            KissneNotificationService.update(webView.context, safeTitle, safeBody)
+            KissneNotificationService.update(webView.context, safeState, safeTitle, safeBody)
         }
     }
 

@@ -847,9 +847,12 @@
     var lastIndex = timeline.length - 1;
     return (state.timeline || []).map(function (item, index) {
       if (!item) return '';
+      var divider = index ? '<div class="activity-divider" role="separator" aria-hidden="true"><span>'
+        + esc(index % 2 ? '・꣑୧・┈・┈・꣑୧・┈・┈・꣑୧・' : '✩┈┈∘*┈୨୧┈*∘┈┈✩')
+        + '</span></div>' : '';
       if (item.kind === 'reasoning') {
         var reasoningActive = !closed && index === lastIndex;
-        return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
+        return divider + '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
           + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false" aria-label="'
           + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
           + '<span class="process-line__mark" aria-hidden="true"></span>'
@@ -868,7 +871,7 @@
       var label = tool.label || toolActivityLabel(tool.name || detail);
       if (/^使用工具$|^使用\s+[a-z0-9_.-]+$/i.test(label)) label = toolActivityLabel(tool.name || detail);
       var iconName = toolActivityIcon(label);
-      return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+      return divider + '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
         + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="false" aria-label="'
         + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
         + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
@@ -2022,7 +2025,8 @@
         stop.disabled = !on;
       }
       function liveEnsure(turnId) {
-        var id = String(turnId || '');
+        var requestedId = String(turnId || '');
+        var id = requestedId || String(liveCurrentTurn || 'pending');
         updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
@@ -2057,14 +2061,16 @@
         if (!el) return;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return;
-        host.innerHTML = activityMarkupForTurn(turnId || 'pending', !!done);
+        host.innerHTML = activityMarkupForTurn(turnId || liveCurrentTurn || 'pending', !!done);
       }
       function addActivity(el, kind, turnId, text) {
-        if (!el || !appendActivity(turnId || 'pending', kind, text)) return;
+        var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
+        if (!el || !appendActivity(resolvedTurnId, kind, text)) return;
         paintActivity(el, turnId, false);
       }
       function finishActivities(el, turnId) {
-        var state = activityForTurn(turnId || 'pending');
+        var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
+        var state = activityForTurn(resolvedTurnId);
         state.done = true;
         Object.keys(state.toolCalls || {}).forEach(function (key) {
           var tool = state.toolCalls[key];
@@ -2072,7 +2078,7 @@
         });
         state.updatedAt = Date.now();
         persistTurnActivity();
-        paintActivity(el, turnId, true);
+        paintActivity(el, resolvedTurnId, true);
       }
       function liveText(el, text, pending) {
         if (!el) return;
