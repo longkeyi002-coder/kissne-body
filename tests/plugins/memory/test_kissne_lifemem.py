@@ -169,12 +169,15 @@ def test_sync_turn_persists_episode_before_async_memory_extraction(tmp_path):
 
 def test_session_switch_flushes_pending_memory_before_new_session(tmp_path):
     import plugins.memory.lifemem as mod
-    provider=mod.LifememProvider(config=dict(mod.DEFAULTS))
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=99
+    provider=mod.LifememProvider(config=config)
     provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
-    turn_id=provider._store.add_turn("session-a","记住，我喜欢绿色","收到")
-    provider._q.put(("session-a",turn_id,"记住，我喜欢绿色","收到"))
+    provider.sync_turn("记住，我喜欢绿色","收到",session_id="session-a")
+    assert provider._store.pending_turn_count(session_id="session-a")==1
     provider.on_session_switch("session-b")
     assert provider._q.unfinished_tasks==0
+    assert provider._store.pending_turn_count(session_id="session-a")==0
     rows=provider._store.recall("绿色",limit=10,memory_spaces=["reality"])
     assert rows
     assert rows[0]["session_id"]=="session-a"
@@ -225,3 +228,26 @@ def test_episode_processing_state_survives_reopen(tmp_path):
     reopened.mark_turn_processed(turn_id)
     assert reopened.pending_turn_count(session_id="session-a")==0
     reopened.close()
+
+
+def test_failed_episode_is_not_retried_in_same_consolidation_pass(tmp_path):
+    import plugins.memory.lifemem as mod
+    config=dict(mod.DEFAULTS)
+    config["consolidation_threshold"]=99
+    provider=mod.LifememProvider(config=config)
+    provider.initialize("session-a",hermes_home=str(tmp_path),agent_context="primary")
+    provider.sync_turn("记住，这次故意失败","收到",session_id="session-a")
+    calls=[]
+    def fail_once(user,assistant=""):
+        calls.append(user)
+        raise RuntimeError("synthetic decision failure")
+    provider._decision.decide=fail_once
+    provider._consolidate_session("session-a")
+    assert calls==["记住，这次故意失败"]
+    rows=provider._store.pending_turns(session_id="session-a")
+    assert len(rows)==1
+    assert rows[0]["memory_attempts"]==1
+    assert "synthetic decision failure" in rows[0]["memory_error"]
+    # Avoid shutdown retrying the intentionally failed row.
+    provider._store.mark_turn_processed(rows[0]["id"])
+    provider.shutdown()
