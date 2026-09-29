@@ -271,10 +271,11 @@ def test_scoped_new_chat_does_not_rehydrate_legacy_device_attachments(tmp_path):
             [{"type": "file", "mime_type": "image/webp", "label": "fox-cheer.webp"}],
         )
 
-        # Explicit session scope is what the app uses after selecting/creating a chat.
+        # Explicit session scope and merged continuous history must both ignore
+        # device-only orphan metadata. Attachments are visible only when their turn
+        # exists in a real transcript.
         scoped = adapter._mobile_history_rows("phone-a", [{"id": "new-session"}])
-        # The merged timeline keeps the legacy recovery behavior for old data.
         merged = adapter._mobile_history_rows("phone-a", [])
 
     assert scoped == []
-    assert any(row.get("_turn_id") == old_turn for row in merged)
+    assert merged == []
