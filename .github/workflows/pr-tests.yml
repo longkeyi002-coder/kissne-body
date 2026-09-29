@@ -84,6 +84,7 @@ jobs:
         run: |
           source .venv/bin/activate
           scripts/run_tests.sh tests/plugins/memory/test_kissne_lifemem.py
+          scripts/run_tests.sh tests/plugins/memory/test_kissne_lifemem_ablation.py
 
       - name: Run Kissne Mobile tests
         timeout-minutes: 15
