@@ -28,6 +28,15 @@ class TransportContractTest {
         assertEquals(BridgeLane.CONTROL, bridgeLane("modelOptions"))
         assertEquals(BridgeLane.CONTROL, bridgeLane("memoryTimeline"))
     }
+    @Test fun history_request_can_be_scoped_to_current_session() {
+        val source = java.io.File("../../app/src/main/java/com/kissne/mobile/MobileTransportClient.kt").readText()
+        assertTrue(source.contains("session_id="))
+        assertTrue(source.contains("sessionId?.trim()"))
+        val bridge = java.io.File("../../app/src/main/java/com/kissne/mobile/PrototypeBridge.kt").readText()
+        assertTrue(bridge.contains("cachedBootstrapPayload()"))
+        assertTrue(bridge.contains("optString(\"session_id\")"))
+    }
+
     @Test fun attachment_kind_preserves_sticker_semantics() {
         assertEquals("photo", normalizeAttachmentKind("photo"))
         assertEquals("sticker", normalizeAttachmentKind("sticker"))
