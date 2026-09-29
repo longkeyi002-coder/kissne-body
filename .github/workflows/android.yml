@@ -7,7 +7,7 @@ on:
     paths: ["apps/android/**", "kissne-prototype/prototype/**", ".github/workflows/android.yml"]
   push:
     branches: [main, kissne-main]
-    paths: ["apps/android/**", ".github/workflows/android.yml"]
+    paths: ["apps/android/**", "kissne-prototype/prototype/**", ".github/workflows/android.yml"]
 
 jobs:
   test:
