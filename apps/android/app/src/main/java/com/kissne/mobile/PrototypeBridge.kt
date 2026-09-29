@@ -253,6 +253,9 @@ class PrototypeBridge(
                 result
             }
             "adminStatus" -> client().adminStatusPayload()
+            "layaStatus" -> LayaLocal.status(webView.context)
+            "layaDownload" -> LayaLocal.download(webView.context)
+            "layaClassify" -> LayaLocal.classify(webView.context, body.optString("text"))
             else -> throw IllegalArgumentException("unknown_native_action")
         }
 
@@ -312,7 +315,7 @@ class PrototypeBridge(
             webView.post { startAttachmentPicker(id, kind) }
             return
         }
-        val executor = when (bridgeLane(action)) {
+        val executor = if (action.startsWith("laya")) controlExecutor else when (bridgeLane(action)) {
             BridgeLane.TRANSPORT -> transportExecutor
             BridgeLane.BACKGROUND -> backgroundExecutor
             BridgeLane.CONTROL -> controlExecutor

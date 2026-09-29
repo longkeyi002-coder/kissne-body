@@ -189,6 +189,9 @@
           scope: String(scope || 'once')
         });
       },
+      layaStatus: function () { return nativeCall('layaStatus', {}); },
+      layaDownload: function () { return nativeCall('layaDownload', {}, 1800000); },
+      layaClassify: function (text) { return nativeCall('layaClassify', { text: String(text || '') }, 300000); },
       adminStatus: function () { return nativeCall('adminStatus', {}); },
       revoke: function () { return nativeCall('revoke', {}); }
     };

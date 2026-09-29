@@ -409,6 +409,7 @@
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
             + listRow({ title: '高级诊断', sub: '服务状态 / 安装标识', icon: 'plug', to: '#/device' })
             + listRow({ title: '会话列表', sub: '查看服务器上的全部对话', icon: 'chat', to: '#/sessions' })
+            + listRow({ title: '本地 Laya（实验）', sub: '在手机上判断长期记忆候选', icon: 'cpu', to: '#/laya' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
             + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
             + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })
@@ -420,6 +421,72 @@
           ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
       </div>`;
+    }
+  });
+
+
+  /* =====================================================================
+     本地 Laya 实验页
+     ===================================================================== */
+  K.registerScreen({
+    no: '09A', id: 'laya', name: '本地 Laya', route: '#/laya', tab: null,
+    purpose: 'Laya 在手机本地运行。模型只保存在本机；输入不会上传，也不会自动写入记忆。',
+    out: ['#/settings'], states: [{ key: 'default', label: '默认' }],
+    render: function () {
+      return '<div class="screen">'
+        + appbar({ title: '本地 Laya', sub: '手机端实验', back: '#/settings' })
+        + '<div class="screen__body">'
+        + card('<div class="muted">首次需要从 Hugging Face 下载约 648 MiB 模型文件，保存在手机本机。请连接 Wi-Fi 并预留约 700 MB 空间。模型和推理均在手机本地运行，不经过 Kissne 服务器。</div>')
+        + '<div class="field"><label class="field__label" for="layaInput">要判断的内容</label>'
+        + '<textarea id="layaInput" data-laya-input rows="4" maxlength="1200" placeholder="例如：我每周三晚上要去游泳"></textarea></div>'
+        + '<div class="row" style="gap:10px;margin:12px 0">'
+        + '<button class="btn btn--primary" type="button" data-laya-run>判断是否适合作为记忆</button>'
+        + '<button class="btn" type="button" data-laya-download>下载 / 安装模型</button></div>'
+        + '<div class="adminnotice" data-laya-status role="status">正在检查模型状态…</div>'
+        + '<div class="card" data-laya-result hidden style="margin-top:12px;white-space:pre-line"></div>'
+        + note('实验功能：Laya 的中文效果尚未在你的手机上验证。结果只作参考，不会保存或发送。')
+        + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport, status=root.querySelector('[data-laya-status]');
+      var input=root.querySelector('[data-laya-input]'), run=root.querySelector('[data-laya-run]');
+      var download=root.querySelector('[data-laya-download]'), result=root.querySelector('[data-laya-result]');
+      var stopped=false, timer=null, busy=false;
+      function show(p) {
+        if(!status||stopped)return;
+        if(!p||!p.supported){status.textContent='此功能需要 Kissne Android 原生 App。';return;}
+        if(p.downloading){status.textContent='正在下载模型：'+Math.round((p.progress||0)*100)+'%';return;}
+        status.textContent=p.installed?'模型已在本机安装，可离线判断。':'模型尚未下载（约 648 MiB）。';
+      }
+      async function refresh() {
+        if(!T||typeof T.layaStatus!=='function'){show({supported:false});return;}
+        try{show(await T.layaStatus());}catch(e){if(status)status.textContent='无法读取本地 Laya 状态：'+String(e.message||e);}
+      }
+      async function install() {
+        if(busy||!T||!T.layaDownload)return;
+        busy=true;download.disabled=true;
+        try{await T.layaDownload();await refresh();}
+        catch(e){if(status)status.textContent='模型下载失败：'+String(e.message||e);}
+        finally{busy=false;download.disabled=false;}
+      }
+      async function classify() {
+        var text=String(input&&input.value||'').trim();
+        if(!text){if(status)status.textContent='先输入一段内容。';return;}
+        if(busy||!T||!T.layaClassify)return;
+        busy=true;run.disabled=true;result.hidden=false;result.textContent='正在手机本地推理…';
+        try {
+          var p=await T.layaClassify(text), a=p.answer||{}, probs=a.probabilities||{};
+          var labels=Object.keys(probs);
+          result.textContent='判断：'+String(a.choice||'')+' · 置信度 '+String(a.confidence||0)+'\n'
+            +labels.map(function(k){return k+' '+probs[k];}).join(' / ')
+            +'\n推理耗时约 '+Math.round(p.elapsed_ms||0)+' ms';
+        } catch(e){result.textContent='本地判断失败：'+String(e.message||e);}
+        finally{busy=false;run.disabled=false;await refresh();}
+      }
+      if(run)run.addEventListener('click',classify);
+      if(download)download.addEventListener('click',install);
+      refresh();timer=setInterval(refresh,1500);
+      return function(){stopped=true;if(timer)clearInterval(timer);if(run)run.removeEventListener('click',classify);if(download)download.removeEventListener('click',install);};
     }
   });
 
