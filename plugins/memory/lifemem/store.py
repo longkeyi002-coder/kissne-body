@@ -34,8 +34,11 @@ class MemoryStore:
               started_at REAL,last_active_at REAL,ended_at REAL);
             CREATE TABLE IF NOT EXISTS turns(
               id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,ts REAL NOT NULL,
-              user_content TEXT DEFAULT '',assistant_content TEXT DEFAULT '');
+              user_content TEXT DEFAULT '',assistant_content TEXT DEFAULT '',
+              memory_state TEXT NOT NULL DEFAULT 'pending',memory_attempts INTEGER NOT NULL DEFAULT 0,
+              memory_error TEXT DEFAULT '',memory_processed_at REAL);
             CREATE INDEX IF NOT EXISTS idx_lifemem_turn_session ON turns(session_id,id);
+            CREATE INDEX IF NOT EXISTS idx_lifemem_turn_memory_state ON turns(memory_state,session_id,id);
             CREATE TABLE IF NOT EXISTS memories(
               id INTEGER PRIMARY KEY AUTOINCREMENT,summary TEXT NOT NULL,quote TEXT NOT NULL,
               memory_space TEXT NOT NULL DEFAULT 'reality',category TEXT DEFAULT 'general',
@@ -48,6 +51,18 @@ class MemoryStore:
               id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,digest TEXT UNIQUE,
               payload TEXT NOT NULL,created_at REAL);
             """)
+            # Existing Lifemem databases predate the durable episode processing state.
+            columns={str(row["name"]) for row in self._conn.execute("PRAGMA table_info(turns)").fetchall()}
+            migrations=(
+              ("memory_state", "TEXT NOT NULL DEFAULT 'pending'"),
+              ("memory_attempts", "INTEGER NOT NULL DEFAULT 0"),
+              ("memory_error", "TEXT DEFAULT ''"),
+              ("memory_processed_at", "REAL"),
+            )
+            for name,ddl in migrations:
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE turns ADD COLUMN {name} {ddl}")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lifemem_turn_memory_state ON turns(memory_state,session_id,id)")
             self._conn.commit()
 
     @property
@@ -76,6 +91,38 @@ class MemoryStore:
             cur=self._conn.execute("INSERT INTO turns(session_id,ts,user_content,assistant_content) VALUES(?,?,?,?)",
                                    (session_id,time.time(),user_content or "",assistant_content or ""))
             self._conn.commit(); return int(cur.lastrowid)
+
+    def pending_turns(self, *, session_id=None, limit=20):
+        sql="SELECT * FROM turns WHERE memory_state='pending'"
+        args=[]
+        if session_id:
+            sql+=" AND session_id=?"; args.append(session_id)
+        sql+=" ORDER BY id ASC LIMIT ?"; args.append(max(1,min(int(limit),200)))
+        with self._lock:
+            return [dict(row) for row in self._conn.execute(sql,args).fetchall()]
+
+    def pending_turn_count(self, *, session_id=None):
+        sql="SELECT COUNT(*) AS n FROM turns WHERE memory_state='pending'"
+        args=[]
+        if session_id:
+            sql+=" AND session_id=?"; args.append(session_id)
+        with self._lock:
+            row=self._conn.execute(sql,args).fetchone()
+            return int(row["n"] if row else 0)
+
+    def mark_turn_processed(self,turn_id):
+        with self._lock:
+            self._conn.execute("""UPDATE turns SET memory_state='processed',
+              memory_attempts=memory_attempts+1,memory_error='',memory_processed_at=? WHERE id=?""",
+              (time.time(),int(turn_id)))
+            self._conn.commit()
+
+    def mark_turn_failed(self,turn_id,error):
+        with self._lock:
+            self._conn.execute("""UPDATE turns SET memory_state='pending',
+              memory_attempts=memory_attempts+1,memory_error=? WHERE id=?""",
+              (str(error or "")[:500],int(turn_id)))
+            self._conn.commit()
 
     def add_memory(self,summary,quote,*,memory_space="reality",category="general",emotion="",
                    importance=.5,confirmed=False,source="auto",session_id="",turn_id=0,
