@@ -225,3 +225,5 @@ def test_episode_processing_state_survives_reopen(tmp_path):
     reopened.mark_turn_processed(turn_id)
     assert reopened.pending_turn_count(session_id="session-a")==0
     reopened.close()
+
+# CI probe: pending episode batch consolidation.
