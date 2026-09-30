@@ -19,6 +19,7 @@ from .admission import CATEGORIES, assess, category_for
 from .decision import build_decision_engine
 from .embeddings import Embedder
 from .store import MemoryStore
+from .review import MemoryReview
 
 NAME = "lifemem"
 DEFAULTS = {
@@ -95,6 +96,7 @@ class LifememProvider(MemoryProvider):
         self._queue_lock = threading.RLock()
         self._writer = None
         self._last_recall = None
+        self._review = None
 
     @property
     def name(self):
@@ -114,6 +116,7 @@ class LifememProvider(MemoryProvider):
             root = Path(home) / "kissne-lifemem"
             root.mkdir(parents=True, exist_ok=True)
             self._store = MemoryStore(str(root / "memory.db"))
+            self._review = MemoryReview(self._store)
             self._embedder.start_warmup_thread(spawn_context_thread)
             self._writer = spawn_context_thread(self._writer_loop, name="kissne-lifemem-writer")
             self._writer.start()
@@ -145,11 +148,16 @@ class LifememProvider(MemoryProvider):
             limit=candidate_limit,
             memory_spaces=_recall_spaces(query),
         )
+        sid=session_id or self._session_id
+        self._review.correction(sid, query)
+        excluded=self._review.excluded(sid)
+        rows=[row for row in rows if row['id'] not in excluded]
         rows = rows[: max(0, min(5, int(self._config.get("recall_memories", 4))))]
         text = _pack(rows, int(self._config.get("recall_token_budget") or 300))
         if not text:
             return ""
         # Retrieval is not confirmation: do not reward a possibly wrong match.
+        self._review.record(sid, query, rows)
         self._last_recall = RecallStatus(provider_label=NAME, count=len(rows), glyph="")
         return "Relevant long-term memory:\n" + text
 
@@ -166,6 +174,7 @@ class LifememProvider(MemoryProvider):
         sid = session_id or self._session_id
         if not sid:
             return
+        self._review.correction(sid, user_content or "")
         # Raw evidence is durable before asynchronous extraction starts. This is
         # Lifemem's episode layer; the main model never receives it wholesale.
         self._store.touch_session(sid)
@@ -307,6 +316,16 @@ class LifememProvider(MemoryProvider):
     def get_tool_schemas(self):
         return [
             {
+                "name": "lifemem_review",
+                "description": "Inspect candidates; approve only verified evidence, reject, or audit legacy memories.",
+                "parameters": {"type":"object", "properties":{
+                    "action":{"type":"string","enum":["list","approve","reject","audit"]},
+                    "id":{"type":"integer"}, "limit":{"type":"integer"},
+                    "updates":{"type":"object","properties":{
+                        "summary":{"type":"string"},"category":{"type":"string","enum":sorted(CATEGORIES)},
+                        "subject":{"type":"string"},"scope":{"type":"string"}},"additionalProperties":False}},"required":["action"]},
+            },
+            {
                 "name": "lifemem_remember",
                 "description": "Store one evidence-backed long-term memory.",
                 "parameters": {
@@ -349,6 +368,20 @@ class LifememProvider(MemoryProvider):
         from tools.registry import tool_error, tool_result
         if not self._store:
             return tool_error("lifemem not initialized")
+        if tool_name == "lifemem_review":
+            action=args.get("action")
+            if action != "list" and not self._writable:
+                return tool_error("read-only memory context")
+            try:
+                if action == "list":
+                    rows=self._review.list(args.get("limit",20))
+                    fields=("id","summary","quote","category","subject","scope","admission_reason","session_id","turn_id")
+                    return tool_result({"candidates":[{k:r.get(k) for k in fields} for r in rows]})
+                if action == "audit":
+                    return tool_result(self._review.audit_legacy(args.get("limit",100)))
+                return tool_result(self._review.review(args.get("id"), action, args.get("updates")))
+            except (ValueError,TypeError) as exc:
+                return tool_error(str(exc))
         if tool_name == "lifemem_remember":
             summary = str(args.get("summary") or "").strip()
             quote = str(args.get("quote") or "").strip()
@@ -396,6 +429,10 @@ class LifememProvider(MemoryProvider):
                 memory_space=args.get("memory_space"),
                 memory_spaces=_recall_spaces(query),
             )
+            sid=self._session_id
+            excluded=self._review.excluded(sid)
+            rows=[row for row in rows if row['id'] not in excluded]
+            self._review.record(sid, query, rows)
             return tool_result({"memories": [
                 {k: row.get(k) for k in ("id", "summary", "quote", "memory_space", "emotion",
                                          "importance", "event_time", "score")}
@@ -434,4 +471,5 @@ class LifememProvider(MemoryProvider):
 
 def register(ctx):
     ctx.register_memory_provider(LifememProvider())
+
 

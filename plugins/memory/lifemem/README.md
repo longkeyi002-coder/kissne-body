@@ -19,3 +19,9 @@ A replacement must identify an active record with the same subject, scope and me
 ## Validation and remaining work
 
 Tests cover admission, durable evidence, candidate exclusion, unrelated zero recall, expired and superseded records, old-record retrieval, and session writer lifecycle. No automatic whole-conversation LLM summarizer is introduced. Topic synthesis, reviewed candidate promotion, memory-editor UI, correction-to-recalled-ID feedback and production threshold calibration remain required before calling this a complete ChatGPT-like memory experience.
+
+## Recall feedback and review tools
+
+`lifemem_review` lists candidates, approves/rejects one candidate, or audits up to 100 legacy active records per call. Approval may repair summary/type/subject/scope but cannot replace the original quote or bypass the evidence gate. Legacy audit is explicit, bounded and repeatable; it is not run silently at startup.
+
+Automatic and explicit recalls retain query, session, memory IDs and timestamp. Explicit memory-correction language links to the most recent receipt within 30 minutes and suppresses its IDs only in that session. Generic “不对” does not classify unrelated memories as globally false. Multiple returned memories remain ambiguous: the receipt records disputed use, not proof that every item is wrong. There is no production-library audit performed by this code change, and no memory editor UI yet.
