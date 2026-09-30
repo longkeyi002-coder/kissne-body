@@ -1966,11 +1966,7 @@
               }, 'result');
               return;
             }
-            CHAT_LOG.push({
-              who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
-              time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
-              messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
-            });
+            appendActivity(historyTurnId || 'history', 'reasoning', rawText);
             return;
           }
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
