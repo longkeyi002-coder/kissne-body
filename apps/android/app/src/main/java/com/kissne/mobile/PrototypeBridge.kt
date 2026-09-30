@@ -397,6 +397,7 @@ class PrototypeBridge(
         fileName: String,
         mimeType: String,
         bytes: ByteArray,
+        preview: String? = null,
     ) {
         transportExecutor.execute {
             val messageId = "android-media-" + UUID.randomUUID().toString()
@@ -407,6 +408,7 @@ class PrototypeBridge(
                 )
                 invalidateBootstrapCache(clearPersistedMetadata = false)
                 result.put("attachment_id", attachmentId)
+                if (!preview.isNullOrEmpty()) result.put("preview", preview)
                 resolve(requestId, true, result)
             } catch (firstError: Throwable) {
                 var finalError = firstError
@@ -420,6 +422,7 @@ class PrototypeBridge(
                         )
                         invalidateBootstrapCache(clearPersistedMetadata = false)
                         retried.put("attachment_id", attachmentId)
+                        if (!preview.isNullOrEmpty()) retried.put("preview", preview)
                         resolve(requestId, true, retried)
                         return@execute
                     } catch (retryError: Throwable) {
@@ -445,12 +448,14 @@ class PrototypeBridge(
         fileName: String,
         mimeType: String,
         size: Long,
+        preview: String? = null,
     ) {
         val payload = JSONObject()
             .put("kind", kind)
             .put("file_name", fileName)
             .put("mime_type", mimeType)
             .put("size", size)
+        if (!preview.isNullOrEmpty()) payload.put("preview", preview)
         val script = "window.KissneNativeBridge && window.KissneNativeBridge.attachmentSelected(" +
             JSONObject.quote(requestId) + "," + JSONObject.quote(payload.toString()) + ");"
         webView.post { webView.evaluateJavascript(script, null) }

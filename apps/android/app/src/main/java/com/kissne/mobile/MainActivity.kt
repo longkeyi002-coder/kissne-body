@@ -232,14 +232,13 @@ class MainActivity : AppCompatActivity() {
                 val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
                     ?: "application/octet-stream"
                 val size = queryAttachmentSize(uri)
-                if (::bridge.isInitialized) {
-                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size)
-                }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
+                val preview = imagePreviewDataUrl(bytes, mime)
                 if (::bridge.isInitialized) {
+                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size, preview)
                     val attachmentId = "local-attachment-" + java.util.UUID.randomUUID().toString()
                     bridge.emitAttachmentSelected(attachmentId, kind, name, mime, bytes.size)
-                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes)
+                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes, preview)
                 }
             } catch (error: Throwable) {
                 if (::bridge.isInitialized) {
@@ -252,6 +251,40 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    /** Downscale an image to <=720px JPEG (q70) as a data URL for the WebView preview. */
+    private fun imagePreviewDataUrl(bytes: ByteArray, mime: String): String? {
+        if (!mime.startsWith("image/")) return null
+        return try {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 720 && bounds.outHeight / (sample * 2) >= 720) sample *= 2
+            val decoded = android.graphics.BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+            ) ?: return null
+            val longest = maxOf(decoded.width, decoded.height)
+            val bitmap = if (longest > 720) {
+                val scale = 720f / longest
+                android.graphics.Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * scale).toInt().coerceAtLeast(1),
+                    (decoded.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                ).also { if (it !== decoded) decoded.recycle() }
+            } else {
+                decoded
+            }
+            val out = ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+            bitmap.recycle()
+            "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (error: Throwable) {
+            null
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String {

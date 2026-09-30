@@ -367,6 +367,30 @@
       + '</div>';
   }
 
+  var ATTACH_PREVIEW_KEY = 'kissne:attachment-previews:v1';
+  function rememberAttachmentPreview(meta, preview) {
+    if (!/^data:image\//i.test(String(preview || ''))) return;
+    var key = String(meta.mime_type || meta.mime || '') + '|' + String(meta.file_name || meta.name || '');
+    if (key.replace(/\|/g, '').length < 2) return;
+    try {
+      var map = JSON.parse(localStorage.getItem(ATTACH_PREVIEW_KEY) || '{}');
+      map[key] = { p: String(preview), t: Date.now() };
+      Object.keys(map)
+        .sort(function (a, b) { return (map[b].t || 0) - (map[a].t || 0); })
+        .slice(20)
+        .forEach(function (k) { delete map[k]; });
+      localStorage.setItem(ATTACH_PREVIEW_KEY, JSON.stringify(map));
+    } catch (e) { /* quota or private mode: previews just do not survive reloads */ }
+  }
+  function lookupAttachmentPreview(meta) {
+    var key = String(meta.mime_type || meta.mime || '') + '|' + String(meta.file_name || meta.name || meta.label || '');
+    try {
+      var map = JSON.parse(localStorage.getItem(ATTACH_PREVIEW_KEY) || '{}');
+      var hit = map[key];
+      return hit && /^data:image\//i.test(hit.p) ? hit.p : '';
+    } catch (e) { return ''; }
+  }
+
   function attachmentMsg(meta, kind, status, localId) {
     meta = meta || {};
     var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : ((kind === 'voice' || kind === 'audio') ? '语音消息' : '文件')));
@@ -374,7 +398,18 @@
     var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
     var state = String(status || 'sent');
     var statusText = state === 'sending' ? '正在发送…' : (state === 'failed' ? '发送失败' : '已发送');
-    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+    var preview = String(meta.preview || lookupAttachmentPreview(meta) || '');
+    if (/^data:image\//i.test(preview) && (kind === 'photo' || kind === 'image')) {
+      rememberAttachmentPreview(meta, preview);
+      return '<span class="attachmsg attachmsg--' + esc(state) + '"'
+        + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+        + '<img class="attachmsg__img" src="' + esc(preview) + '" alt="' + esc(name) + '">'
+        + '<span class="attachmsg__body attachmsg__body--caption"><b>' + esc(name) + '</b>'
+        + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
+        + '<small class="attachmsg__status">' + esc(statusText) + '</small></span>'
+        + '</span>';
+    }
+    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
       + '<span class="attachmsg__ic">' + icon(kind === 'photo' || kind === 'sticker' ? 'image' : ((kind === 'voice' || kind === 'audio') ? 'mic' : 'file'), 19) + '</span>'
       + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
       + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
@@ -392,6 +427,8 @@
         var sticker = stickerMatch(key) || stickerMatch(meta.label || '');
         if (sticker) return '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
       }
+      var cachedPreview = lookupAttachmentPreview(meta);
+      if (cachedPreview && !meta.preview) meta = Object.assign({}, meta, { preview: cachedPreview });
       return attachmentMsg(meta, kind === 'image' ? 'photo' : (kind === 'sticker' ? 'sticker' : (kind === 'audio' || kind === 'voice' ? 'voice' : 'file')), 'sent', '');
     }).join('');
   }
@@ -2484,6 +2521,14 @@
           (boot.pending_approvals || []).forEach(showApproval);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
+          /* A turn whose assistant reply is already in history is finished server-side;
+             never resurrect it as a live (animated) turn. */
+          var finishedPendingTurn = restoredPendingTurn && (
+            (TURN_ACTIVITY[restoredPendingTurn] && TURN_ACTIVITY[restoredPendingTurn].done) ||
+            CHAT_LOG.some(function (row) {
+              return row && row.messageRef === 'turn:' + restoredPendingTurn + ':assistant';
+            }));
+          if (finishedPendingTurn) restoredPendingTurn = '';
           Object.keys(livePendingTurns).forEach(function (id) {
             if (id === restoredPendingTurn) return;
             liveClosedTurns[id] = true;
