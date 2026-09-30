@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 from agent.memory_provider import MemoryProvider, RecallStatus, is_trivial_prompt, spawn_context_thread
 
+from .admission import CATEGORIES, assess, category_for
 from .decision import build_decision_engine
 from .embeddings import Embedder
 from .store import MemoryStore
@@ -78,7 +79,8 @@ class LifememProvider(MemoryProvider):
     pre_compress_checkpoint_api_version = 2
 
     def __init__(self, config=None):
-        self._config = config or _config()
+        self._config = dict(DEFAULTS)
+        self._config.update(config if config is not None else _config())
         self._store = None
         self._embedder = Embedder(str(self._config.get("embedding_model") or ""))
         self._decision = build_decision_engine(
@@ -143,11 +145,11 @@ class LifememProvider(MemoryProvider):
             limit=candidate_limit,
             memory_spaces=_recall_spaces(query),
         )
-        rows = rows[: max(3, min(5, int(self._config.get("recall_memories") or 4)))]
+        rows = rows[: max(0, min(5, int(self._config.get("recall_memories", 4))))]
         text = _pack(rows, int(self._config.get("recall_token_budget") or 300))
         if not text:
             return ""
-        self._store.reinforce([row["id"] for row in rows])
+        # Retrieval is not confirmation: do not reward a possibly wrong match.
         self._last_recall = RecallStatus(provider_label=NAME, count=len(rows), glyph="")
         return "Relevant long-term memory:\n" + text
 
@@ -184,15 +186,38 @@ class LifememProvider(MemoryProvider):
     def _persist_turn(self, sid: str, turn_id: int, user: str, assistant: str):
         if not self._store or not sid:
             return
-        decision = self._decision.decide(user, assistant)
+        # AI output is context, never evidence. Avoid sending whole transcripts to Laya.
+        if len(user) > 1200:
+            self._store.add_memory(user[:400], user, status="candidate", source="auto",
+                                   session_id=sid, turn_id=turn_id,
+                                   admission_reason="needs_topic_extraction")
+            return
+        context=self._store.preceding_user_context(sid, turn_id)
+        contextual=getattr(self._decision, "decide_with_context", None)
+        if contextual and "decide" not in self._decision.__dict__:
+            decision=contextual(user, context)
+        else:
+            decision=self._decision.decide(user, "")
+        if not decision.remember:
+            category = category_for(user)
+            state, reason = assess(user, user, category=category, subject="user", scope="reality")
+            if state == "candidate" and reason != "future_utility_uncertain":
+                self._store.add_memory(user[:400], user, status=state, category=category,
+                                       subject="user", scope="reality", source="auto",
+                                       session_id=sid, turn_id=turn_id, admission_reason=reason)
+            return
         if decision.remember and decision.summary:
+            category = category_for(user)
+            state, reason = assess(user, decision.summary, category=category,
+                                   subject="user", scope=decision.memory_space)
             self._store.add_memory(
                 decision.summary,
                 user,
                 memory_space=decision.memory_space,
                 emotion=decision.emotion,
                 importance=decision.importance,
-                source="auto",
+                source="auto", status=state, category=category, subject="user",
+                scope=decision.memory_space, admission_reason=reason,
                 session_id=sid,
                 turn_id=turn_id,
                 embedding=self._embedder.encode(decision.summary),
@@ -235,6 +260,8 @@ class LifememProvider(MemoryProvider):
             except Exception:
                 return
             try:
+                if sid is None:
+                    return
                 self._consolidate_session(sid)
             except Exception:
                 pass
@@ -270,6 +297,9 @@ class LifememProvider(MemoryProvider):
             for row in self._store._conn.execute("SELECT DISTINCT session_id FROM turns WHERE memory_state='pending'").fetchall():
                 self._queue_consolidation(str(row["session_id"]))
         self._flush()
+        if self._writer:
+            self._q.put(None)
+            self._writer.join(timeout=5)
         if self._store:
             self._store.close()
         self._store = None
@@ -285,11 +315,15 @@ class LifememProvider(MemoryProvider):
                         "summary": {"type": "string"},
                         "quote": {"type": "string"},
                         "memory_space": {"type": "string", "enum": ["reality", "relationship", "ai_self", "ai_world"]},
-                        "category": {"type": "string"},
+                        "category": {"type": "string", "enum": sorted(CATEGORIES)},
+                        "turn_id": {"type": "integer"},
+                        "subject": {"type": "string"},
+                        "scope": {"type": "string"},
+                        "supersedes_id": {"type": "integer"},
                         "emotion": {"type": "string"},
                         "importance": {"type": "number"},
                     },
-                    "required": ["summary", "quote"],
+                    "required": ["summary", "quote", "category", "subject", "scope"],
                 },
             },
             {
@@ -320,18 +354,39 @@ class LifememProvider(MemoryProvider):
             quote = str(args.get("quote") or "").strip()
             if not summary or not quote:
                 return tool_error("summary and quote are required")
-            mid = self._store.add_memory(
-                summary,
-                quote,
-                memory_space=str(args.get("memory_space") or "reality"),
-                category=str(args.get("category") or "general"),
-                emotion=str(args.get("emotion") or ""),
-                importance=float(args.get("importance") or 0.5),
-                source="tool",
-                session_id=self._session_id,
-                embedding=self._embedder.encode(summary),
-            )
-            return tool_result({"id": mid, "stored": True})
+            if not self._writable:
+                return tool_error("read-only memory context")
+            turn_id = args.get("turn_id")
+            try:
+                evidence = (self._store.evidence_turn(self._session_id, turn_id) if turn_id is not None
+                            else self._store.evidence_for_quote(self._session_id, quote))
+            except (TypeError, ValueError):
+                evidence = None
+            if not evidence or quote not in evidence["user_content"]:
+                return tool_error("quote must match a user turn in this session")
+            turn_id = evidence["id"]
+            category = str(args.get("category") or "")
+            subject, scope = str(args.get("subject") or ""), str(args.get("scope") or "")
+            state, reason = assess(quote, summary, category=category, subject=subject, scope=scope)
+            if state == "rejected":
+                return tool_error(reason)
+            try:
+                mid = self._store.add_memory(
+                    summary,
+                    quote,
+                    memory_space=str(args.get("memory_space") or "reality"),
+                    category=category, status=state, subject=subject, scope=scope,
+                    admission_reason=reason, turn_id=int(turn_id),
+                    supersedes_id=args.get("supersedes_id"),
+                    emotion=str(args.get("emotion") or ""),
+                    importance=float(args.get("importance") or 0.5),
+                    source="tool",
+                    session_id=self._session_id,
+                    embedding=self._embedder.encode(summary),
+                )
+            except ValueError as exc:
+                return tool_error(str(exc))
+            return tool_result({"id": mid, "stored": True, "status": state, "reason": reason})
         if tool_name == "lifemem_recall":
             query = str(args.get("query") or "").strip()
             rows = self._store.recall(
@@ -339,6 +394,7 @@ class LifememProvider(MemoryProvider):
                 self._embedder.encode(query),
                 limit=10,
                 memory_space=args.get("memory_space"),
+                memory_spaces=_recall_spaces(query),
             )
             return tool_result({"memories": [
                 {k: row.get(k) for k in ("id", "summary", "quote", "memory_space", "emotion",
@@ -346,6 +402,8 @@ class LifememProvider(MemoryProvider):
                 for row in rows
             ]})
         if tool_name == "lifemem_forget":
+            if not self._writable:
+                return tool_error("read-only memory context")
             return tool_result({"archived": self._store.archive(int(args["id"]))})
         return tool_error("unknown lifemem tool")
 
@@ -376,3 +434,4 @@ class LifememProvider(MemoryProvider):
 
 def register(ctx):
     ctx.register_memory_provider(LifememProvider())
+

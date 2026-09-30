@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json, re, urllib.request
 from typing import Optional
+from .admission import assess, category_for
 
 SPACES={"reality","relationship","ai_self","ai_world"}
 
@@ -43,8 +44,9 @@ class HeuristicDecisionEngine:
         emotion=""
         if any(x in text for x in ("喜欢","开心","高兴","爱")): emotion="positive"
         elif any(x in text for x in ("讨厌","生气","难过","不喜欢")): emotion="negative"
-        summary=re.sub(r"\s+"," ",text)[:240]
-        return MemoryDecision(True,space,importance,emotion,summary)
+        summary=re.sub(r"\s+"," ",text)
+        state, _ = assess(text, summary, category=category_for(text), subject="user", scope=space)
+        return MemoryDecision(state == "active",space,importance,emotion,summary)
 
 class LayaDecisionEngine:
     """Optional local HTTP adapter. Expected response is Lifemem's tiny stable JSON contract.
@@ -58,10 +60,14 @@ class LayaDecisionEngine:
         self.fallback=fallback or HeuristicDecisionEngine()
 
     def decide(self,user_text:str,assistant_text:str="")->MemoryDecision:
+        return self.decide_with_context(user_text, [])
+
+    def decide_with_context(self,user_text:str,context)->MemoryDecision:
         if not self.endpoint:
-            return self.fallback.decide(user_text,assistant_text)
+            return self.fallback.decide(user_text, "")
         payload=json.dumps({"task":"lifemem_write_gate","user_text":user_text or "",
-                            "assistant_text":assistant_text or ""},ensure_ascii=False).encode()
+                            "assistant_text":"", "context":list(context)[-2:],
+                            "evidence_policy":"Only user_text is evidence; context resolves references, never adds facts."},ensure_ascii=False).encode()
         req=urllib.request.Request(self.endpoint+"/decide",data=payload,
             headers={"Content-Type":"application/json"},method="POST")
         try:
@@ -69,14 +75,15 @@ class LayaDecisionEngine:
                 data=json.loads(resp.read().decode("utf-8"))
             space=str(data.get("memory_space") or "reality")
             if space not in SPACES: space="reality"
-            return MemoryDecision(bool(data.get("remember")),space,
+            return MemoryDecision(data.get("remember") is True,space,
                 max(0,min(1,float(data.get("importance",.5)))),
                 str(data.get("emotion") or ""),str(data.get("summary") or "")[:240])
         except Exception:
-            return self.fallback.decide(user_text,assistant_text)
+            return self.fallback.decide(user_text, "")
 
 def build_decision_engine(kind:str="laya",endpoint:str="",timeout:float=.8):
     fallback=HeuristicDecisionEngine()
     if (kind or "").lower()=="laya":
         return LayaDecisionEngine(endpoint,timeout,fallback)
     return fallback
+

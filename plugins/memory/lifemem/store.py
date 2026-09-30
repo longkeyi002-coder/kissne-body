@@ -4,7 +4,7 @@ Session ids are references to Hermes SessionStore ids. Lifemem never creates or
 owns the conversation lifecycle.
 """
 from __future__ import annotations
-import math, sqlite3, threading, time
+import math, re, sqlite3, threading, time
 from array import array
 
 def _pack(v):
@@ -37,7 +37,6 @@ class MemoryStore:
               memory_state TEXT NOT NULL DEFAULT 'pending',memory_attempts INTEGER NOT NULL DEFAULT 0,
               memory_error TEXT DEFAULT '',memory_processed_at REAL);
             CREATE INDEX IF NOT EXISTS idx_lifemem_turn_session ON turns(session_id,id);
-            CREATE INDEX IF NOT EXISTS idx_lifemem_turn_memory_state ON turns(memory_state,session_id,id);
             CREATE TABLE IF NOT EXISTS memories(
               id INTEGER PRIMARY KEY AUTOINCREMENT,summary TEXT NOT NULL,quote TEXT NOT NULL,
               memory_space TEXT NOT NULL DEFAULT 'reality',category TEXT DEFAULT 'general',
@@ -62,6 +61,12 @@ class MemoryStore:
                 if name not in columns:
                     self._conn.execute(f"ALTER TABLE turns ADD COLUMN {name} {ddl}")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lifemem_turn_memory_state ON turns(memory_state,session_id,id)")
+            memory_columns={row["name"] for row in self._conn.execute("PRAGMA table_info(memories)")}
+            for name, ddl in (("subject", "TEXT DEFAULT ''"), ("scope", "TEXT DEFAULT ''"),
+                              ("admission_reason", "TEXT DEFAULT ''"), ("expires_at", "REAL"),
+                              ("supersedes_id", "INTEGER")):
+                if name not in memory_columns:
+                    self._conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {ddl}")
             self._conn.commit()
 
     def close(self):
@@ -120,9 +125,12 @@ class MemoryStore:
 
     def add_memory(self,summary,quote,*,memory_space="reality",category="general",emotion="",
                    importance=.5,confirmed=False,source="auto",session_id="",turn_id=0,
-                   event_time=None,embedding=None):
+                   event_time=None,embedding=None,status="active",subject="",scope="",
+                   admission_reason="",expires_at=None,supersedes_id=None):
         summary=(summary or "").strip(); quote=(quote or "").strip()
         if not summary or not quote: raise ValueError("summary and evidence quote are required")
+        if status not in {"active", "candidate", "rejected"}:
+            raise ValueError("invalid admission status")
         if memory_space not in {"reality","relationship","ai_self","ai_world"}:
             raise ValueError("invalid memory_space")
         now=time.time()
@@ -130,8 +138,8 @@ class MemoryStore:
             # Exact active duplicate: reinforce/update provenance instead of creating
             # another long-term record for the same fact.
             existing=self._conn.execute(
-                "SELECT id,importance FROM memories WHERE status='active' AND memory_space=? AND summary=? ORDER BY id DESC LIMIT 1",
-                (memory_space,summary)).fetchone()
+                "SELECT id,importance FROM memories WHERE status=? AND memory_space=? AND summary=? ORDER BY id DESC LIMIT 1",
+                (status,memory_space,summary)).fetchone()
             if existing:
                 self._conn.execute(
                     "UPDATE memories SET updated_at=?,last_recall_at=?,access_count=access_count+1,importance=? WHERE id=?",
@@ -143,9 +151,34 @@ class MemoryStore:
               session_id,turn_id,status,event_time,created_at,updated_at,embedding)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
               (summary,quote,memory_space,category,emotion,max(0,min(1,float(importance))),
-               int(bool(confirmed)),source,session_id,int(turn_id or 0),"active",
+               int(bool(confirmed)),source,session_id,int(turn_id or 0),status,
                float(event_time or now),now,now,_pack(embedding)))
-            self._conn.commit(); return int(cur.lastrowid)
+            mid=int(cur.lastrowid)
+            self._conn.execute("UPDATE memories SET subject=?,scope=?,admission_reason=?,expires_at=?,supersedes_id=? WHERE id=?",
+                               (subject,scope,admission_reason,expires_at,supersedes_id,mid))
+            if supersedes_id is not None:
+                old=self._conn.execute("SELECT * FROM memories WHERE id=?", (int(supersedes_id),)).fetchone()
+                if status != "active" or not old or old["status"] != "active" or old["memory_space"] != memory_space or old["subject"] != subject or old["scope"] != scope:
+                    self._conn.rollback()
+                    raise ValueError("replacement must match active memory subject and scope")
+                self._conn.execute("UPDATE memories SET status='superseded',updated_at=? WHERE id=?",(now,int(supersedes_id)))
+            self._conn.commit(); return mid
+
+    def preceding_user_context(self, session_id, turn_id, limit=2):
+        with self._lock:
+            rows=self._conn.execute("SELECT user_content FROM turns WHERE session_id=? AND id<? ORDER BY id DESC LIMIT ?",
+                                    (session_id,int(turn_id),max(0,min(int(limit),2)))).fetchall()
+        return [str(row["user_content"])[-400:] for row in reversed(rows)]
+
+    def evidence_turn(self, session_id, turn_id):
+        with self._lock:
+            row=self._conn.execute("SELECT * FROM turns WHERE session_id=? AND id=?",(session_id,int(turn_id))).fetchone()
+            return dict(row) if row else None
+
+    def evidence_for_quote(self, session_id, quote):
+        with self._lock:
+            rows=self._conn.execute("SELECT * FROM turns WHERE session_id=? ORDER BY id DESC", (session_id,)).fetchall()
+        return next((dict(row) for row in rows if quote in str(row["user_content"] or "")), None)
 
     def list_memories(self,limit=50,status="active",memory_space=None):
         sql="SELECT * FROM memories WHERE status=?"; args=[status]
@@ -156,7 +189,14 @@ class MemoryStore:
 
     def recall(self,query,query_embedding=None,limit=30,memory_space=None,memory_spaces=None):
         q=(query or "").strip().lower()
-        rows=self.list_memories(limit=500,status="active",memory_space=memory_space)
+        if not q or re.fullmatch(r"(?:啊|嗯|哦|不对|完全不对|好的|可以|继续|不对不对)[\s，。！.!…]*", q):
+            return []
+        sql="SELECT * FROM memories WHERE status='active' AND (expires_at IS NULL OR expires_at>?)"
+        args=[time.time()]
+        if memory_space:
+            sql+=" AND memory_space=?"; args.append(memory_space)
+        with self._lock:
+            rows=[dict(row) for row in self._conn.execute(sql,args).fetchall()]
         allowed={str(x) for x in (memory_spaces or []) if str(x)}
         if allowed:
             rows=[row for row in rows if str(row.get("memory_space") or "") in allowed]
@@ -169,11 +209,8 @@ class MemoryStore:
             age=max(0.0,(now-float(row.get("event_time") or now))/86400.0)
             recency=math.exp(-age/90.0)
             importance=float(row.get("importance") or .5)
-            reinforcement=min(1.0,float(row.get("access_count") or 0)/8.0)
-            confirmed=1.0 if row.get("confirmed") else 0.0
-            emotion=1.0 if str(row.get("emotion") or "") not in ("","平静","中性") else 0.0
-            score=.55*relevance+.15*importance+.10*recency+.10*reinforcement+.05*confirmed+.05*emotion
-            if relevance>0: ranked.append((score,row))
+            score=.85*relevance+.10*importance+.05*recency
+            if lexical >= .5 or semantic >= .65: ranked.append((score,row))
         ranked.sort(key=lambda x:x[0],reverse=True)
         return [dict(r,score=s) for s,r in ranked[:max(1,min(int(limit),100))]]
 
@@ -248,3 +285,4 @@ class MemoryStore:
         with self._lock:
             cur=self._conn.execute("INSERT OR IGNORE INTO checkpoints(session_id,digest,payload,created_at) VALUES(?,?,?,?)",
                                    (session_id,digest,payload,time.time())); self._conn.commit(); return cur.rowcount>0
+
