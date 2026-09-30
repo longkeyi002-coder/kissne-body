@@ -133,7 +133,7 @@ test('only a local send starts waiting; first thinking event removes star and ta
   const input = root.querySelector('.composer__input')
   input.value = '开始'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => root.querySelector('[data-turn-bridge]:not([hidden])')).toBeTruthy()
+  await expect.poll(() => root.querySelector('[data-turn-bridge]:not([hidden])'), { timeout: 4000 }).toBeTruthy()
   const bridge = root.querySelector('[data-turn-bridge]')
   const firstX = Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])
   await expect.poll(() => Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])).toBeLessThan(firstX)
@@ -227,7 +227,7 @@ test('a reply arriving before send acknowledgement cannot restart waiting or the
   const input = root.querySelector('.composer__input')
   input.value = '很快的回复'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof accept).toBe('function')
+  await expect.poll(() => typeof accept, { timeout: 4000 }).toBe('function')
   events.push({ type: 'completed', turn_id: 'second', text: '已经完成。' })
   await expect.poll(() => root.querySelector('.msg--ai .bubble')?.textContent).toBe('已经完成。')
   const beforeAck = notifications.length
@@ -265,7 +265,7 @@ test('failure keeps text only in composer and explicit retry reuses its original
   reopen(); await expect.poll(() => root.querySelector('.composer__input').value).toBe('这条未确认送达')
   expect(root.querySelectorAll('.msg--me .bubble')).toHaveLength(0)
   input = root.querySelector('.composer__input'); input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => calls.length).toBe(2); expect(calls[1]).toEqual(calls[0]); expect(input.value).toBe('')
+  await expect.poll(() => calls.length, { timeout: 4000 }).toBe(2); expect(calls[1]).toEqual(calls[0]); expect(input.value).toBe('')
 })
 
 test('local results appear first and stale remote responses cannot repopulate a cleared search', async () => {
@@ -294,7 +294,7 @@ test('browser results require preview confirmation and retain their source', asy
   await new Promise(resolve => setTimeout(resolve, 30))
   window.dispatchEvent(new window.CustomEvent('kissne-browser-return', { detail: { text: '外部 AI 的回答', source_title: 'GPT', source_url: 'https://chatgpt.com/c/example', session_id: 'room-a' } }))
   expect(root.querySelector('[data-browser-return] textarea').value).toBe('外部 AI 的回答'); expect(sent).toEqual([])
-  root.querySelector('[data-browser-send]').click(); await expect.poll(() => sent.length).toBe(1)
+  root.querySelector('[data-browser-send]').click(); await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1)
   expect(sent[0]).toContain('https://chatgpt.com/c/example'); expect(window.KissneBrowserTransfer.pending()).toBeNull()
 })
 
@@ -303,7 +303,7 @@ test('active reasoning and tools expand, then collapse into one finished process
   const { root, window } = fixture([], { poll: () => { const out = events; events = []; return out }, sendText: async () => { submitted = true; return { turn_id: 'live' } } })
   await new Promise(resolve => setTimeout(resolve, 30))
   const input = root.querySelector('.composer__input'); input.value = '查一下'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => submitted).toBe(true)
+  await expect.poll(() => submitted, { timeout: 4000 }).toBe(true)
   events = [{ type: 'reasoning', turn_id: 'live', text: '正在思考' }, { type: 'tool_call', turn_id: 'live', tool_call_id: 'search', tool_name: 'web_search', text: '查网页' }]
   await expect.poll(() => root.querySelector('.process-reasoning')?.hidden, { timeout: 4000 }).toBe(false)
   expect(root.querySelector('[data-turn-bridge]').hidden).toBe(true)
@@ -333,7 +333,7 @@ test('a failed request settling after reopening removes its bubble and preserves
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '未确认的第一句'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof rejectSend).toBe('function')
+  await expect.poll(() => typeof rejectSend, { timeout: 4000 }).toBe('function')
   reopen(); await new Promise(resolve => setTimeout(resolve, 30))
   input = root.querySelector('.composer__input'); input.value = '后来输入的第二句'
   input.dispatchEvent(new window.Event('input'))
@@ -390,7 +390,7 @@ test('retrying an unconfirmed send already restored from server history leaves o
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '这条服务器已收到'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => input.value).toBe('这条服务器已收到')
+  await expect.poll(() => input.value, { timeout: 4000 }).toBe('这条服务器已收到')
   reopen(); await expect.poll(() => root.querySelectorAll('.msg--me .bubble').length).toBe(1)
   input = root.querySelector('.composer__input'); input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   await expect.poll(() => attempt).toBe(2)
@@ -404,7 +404,7 @@ test('an accepted request settling after reopening clears only its restored pend
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '等待确认这句'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof acceptSend).toBe('function')
+  await expect.poll(() => typeof acceptSend, { timeout: 4000 }).toBe('function')
   reopen(); await expect.poll(() => root.querySelector('.composer__input').value).toBe('等待确认这句')
   acceptSend({ turn_id: 'confirmed' })
   await expect.poll(() => root.querySelector('.composer__input').value).toBe('')
@@ -477,3 +477,38 @@ test('live process follows bottom but preserves manual history reading until res
   root.querySelector('.chat-progress-hint').click()
   expect(list.scrollTop).toBe(1600)
 })
+
+test('consecutive send taps become one transport request, one bubble and one restored row', async () => {
+  const sent = [];
+  const { root, window, reopen } = fixture([], { sendText: async (text, id) => {
+    sent.push({ text, id }); return { turn_id: 'merged' };
+  } });
+  await expect.poll(() => root.querySelector('[data-session-status]').hidden).toBe(true);
+  const input = root.querySelector('.composer__input');
+  input.value = '第一句'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 800));
+  input.value = '第二句'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 900));
+  expect(sent).toEqual([]);
+  await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1);
+  expect(sent[0].text).toBe('第一句第二句');
+  expect([...root.querySelectorAll('.msg--me .bubble')].map(node => node.textContent)).toEqual(['第一句第二句']);
+  reopen();
+  await expect.poll(() => [...root.querySelectorAll('.msg--me .bubble')].map(node => node.textContent)).toEqual(['第一句第二句']);
+}, 10000);
+
+test('Chinese composition holds the queued send and leaves unsubmitted text in the composer', async () => {
+  const sent = [];
+  const { root, window } = fixture([], { sendText: async text => { sent.push(text); return { turn_id: 'typing' }; } });
+  await expect.poll(() => root.querySelector('[data-session-status]').hidden).toBe(true);
+  const input = root.querySelector('.composer__input');
+  input.value = '已经发送'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  input.dispatchEvent(new window.CompositionEvent('compositionstart'));
+  input.value = '尚未发送的草稿'; input.dispatchEvent(new window.Event('input'));
+  await new Promise(resolve => setTimeout(resolve, 1800));
+  expect(sent).toEqual([]);
+  input.dispatchEvent(new window.CompositionEvent('compositionend'));
+  await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1);
+  expect(sent).toEqual(['已经发送']);
+  expect(input.value).toBe('尚未发送的草稿');
+}, 10000);

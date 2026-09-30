@@ -32,6 +32,7 @@ test('sent fragments wait for the final tap and sustained typing is bounded', ()
   assert.equal(outboxWait({ items, now: 3600, updatedAt: 2000, inputAt: 0, composerText: '' }), 0);
   assert.equal(outboxWait({ items, now: 3600, updatedAt: 2000, inputAt: 3500, composerText: '尚未发送' }), 320);
   assert.equal(outboxWait({ items, now: 9000, updatedAt: 8800, inputAt: 8900, composerText: '尚未发送' }), 0);
+  assert.equal(outboxWait({ items, now: 3600, updatedAt: 2000, inputAt: 0, composerText: '组字', isComposing: true }), 420);
   assert.equal(outboxWait({ items: [], now: 1000, updatedAt: 1000, inputAt: 1000, composerText: '草稿' }), 0);
 });
 test('one accepted batch produces one user history row without touching other messages', () => {

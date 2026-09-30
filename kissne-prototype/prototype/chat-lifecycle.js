@@ -20,6 +20,7 @@
       remaining = Math.max(remaining, 420 - (state.now - state.inputAt));
     }
     // Bound sustained typing without sending any text still in the composer.
+    if (state.isComposing) remaining = Math.max(remaining, 420);
     var firstAt = state.items[0].queuedAt;
     if (typeof firstAt === 'number') remaining = Math.min(remaining, 8000 - (state.now - firstAt));
     return Math.max(0, remaining);

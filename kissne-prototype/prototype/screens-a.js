@@ -2942,7 +2942,8 @@
       function outboxWaitMs() {
         return window.KissneChatLifecycle.outboxWait({
           items: CHAT_OUTBOX, now: Date.now(), updatedAt: CHAT_OUTBOX_UPDATED_AT,
-          inputAt: CHAT_USER_INPUT_AT, composerText: String(input && input.value || '')
+          inputAt: CHAT_USER_INPUT_AT, composerText: String(input && input.value || ''),
+          isComposing: composerIsComposing
         });
       }
       function mergeUserFragments(items) {
@@ -3121,6 +3122,7 @@
         }
       }
       async function push() {
+        if (composerIsComposing) return;
         var v = (input.value || '').trim();
         if (!v) return;
         if (!live) {
@@ -3698,6 +3700,15 @@
         }
       }
       window.addEventListener('kissne-send-settled', onSendSettled);
+      var composerIsComposing = false;
+      function onCompositionStart() {
+        composerIsComposing = true;
+        onComposerInput();
+      }
+      function onCompositionEnd() {
+        composerIsComposing = false;
+        onComposerInput();
+      }
       function onComposerInput() {
         var draft = getSendDraft(CHAT_LOG_SESSION) || {};
         draft.composerText = input.value || '';
@@ -3711,6 +3722,8 @@
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') push();
       }
+      input.addEventListener('compositionstart', onCompositionStart);
+      input.addEventListener('compositionend', onCompositionEnd);
       input.addEventListener('input', onComposerInput);
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
@@ -3722,6 +3735,8 @@
         if (sessionOpen) sessionOpen.removeEventListener('click', onSessionOpen);
         if (sessionScrim) sessionScrim.removeEventListener('click', onSessionDrawerClick);
         if (sessionDrawer) sessionDrawer.removeEventListener('click', onSessionDrawerClick);
+        input.removeEventListener('compositionstart', onCompositionStart);
+        input.removeEventListener('compositionend', onCompositionEnd);
         input.removeEventListener('input', onComposerInput);
         input.removeEventListener('keydown', onKey);
         send.removeEventListener('click', push);
