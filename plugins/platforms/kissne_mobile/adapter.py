@@ -503,6 +503,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_get(HISTORY_PATH, self._handle_history)
         app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_get(MEMORY_TIMELINE_PATH, self._handle_memory_timeline)
+        from .memory_review import handle_memory_review
+        async def memory_review_handler(request):
+            return await handle_memory_review(self, request)
+        app.router.add_get('/memory/review', memory_review_handler)
+        app.router.add_post('/memory/review', memory_review_handler)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post("/approval", self._handle_approval)
         app.router.add_post("/sticker-index", self._handle_sticker_index)
@@ -3095,3 +3100,4 @@ def register(ctx) -> None:
             "The app resolves it to the user's real Kissne sticker; do not invent a sticker if no match is likely."
         ),
     )
+

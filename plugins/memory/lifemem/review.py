@@ -59,7 +59,10 @@ class MemoryReview:
             if not row or row['status'] != 'candidate':
                 raise ValueError('only candidates can be reviewed')
             row=dict(row)
+            original_summary=row["summary"]
             updates=updates or {}
+            if not isinstance(updates,dict):
+                raise ValueError("review updates must be an object")
             allowed={'summary','category','subject','scope'}
             if set(updates)-allowed:
                 raise ValueError('unsupported review fields')
@@ -75,6 +78,8 @@ class MemoryReview:
                     raise ValueError('candidate still fails admission: '+reason)
             self.store._conn.execute('UPDATE memories SET status=?,admission_reason=?,summary=?,category=?,subject=?,scope=?,updated_at=? WHERE id=?',
                                      (state,reason,row['summary'],row['category'],row['subject'],row['scope'],time.time(),int(memory_id)))
+            if row['summary'] != original_summary:
+                self.store._conn.execute('UPDATE memories SET embedding=NULL WHERE id=?',(int(memory_id),))
             self.store._conn.execute('INSERT INTO memory_review_events(memory_id,action,reason,created_at) VALUES(?,?,?,?)',
                                      (int(memory_id),action,reason,time.time()))
             self.store._conn.commit()

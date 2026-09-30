@@ -120,7 +120,7 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "history", "search", "memoryTimeline", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
+            "sessions", "history", "search", "memoryTimeline", "memoryCandidates", "reviewMemory", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
             "modelOptions", "setModel", "approval", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
             "adminStatus",
         )
@@ -162,6 +162,8 @@ class PrototypeBridge(
                 space = body.optString("space").takeIf { it.isNotBlank() },
                 queryText = body.optString("q").takeIf { it.isNotBlank() },
             )
+            "memoryCandidates" -> client().memoryCandidatesPayload()
+            "reviewMemory" -> client().reviewMemoryPayload(body)
             "adminMemory" -> client().adminMemoryPayload()
             "deleteAdminMemory" -> client().deleteAdminMemoryPayload(body.optString("memory_id"))
             "adminSkills" -> client().adminSkillsPayload()
@@ -495,3 +497,4 @@ class PrototypeBridge(
         controlExecutor.shutdownNow()
     }
 }
+

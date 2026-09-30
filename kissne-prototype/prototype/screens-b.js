@@ -14,7 +14,7 @@
      07 记忆库页 — Lifemem external provider journal projection
      ===================================================================== */
   var MEMORY_STATES = [{ key: 'list', label: '时间线' }, { key: 'detail', label: '记忆详情' }];
-  var MEMORY_INDEX = { items: [], builtin: [], loaded: false, error: '', space: '', query: '' };
+  var MEMORY_INDEX = { items: [], builtin: [], loaded: false, error: '', space: '', query: '', mode: 'active' };
   var MEMORY_SPACES = [
     { k: '', v: '全部' }, { k: 'reality', v: '现实' }, { k: 'relationship', v: '关系' },
     { k: 'ai_self', v: '叶青栩' }, { k: 'ai_world', v: '小机星' }
@@ -56,13 +56,21 @@
         var detail=item
           ? '<div class="memdetail"><h2 class="memdetail__t">'+esc(memoryTitle(item))+'</h2>'
             +'<div class="memdetail__meta">'+chip(memorySpaceLabel(item.memory_space))+'<span class="muted">'+esc(memoryTime(item.occurred_at))+'</span></div>'
+            +'<p class="muted">'+esc(item.status==='candidate'?'待审核 · '+(item.admission_reason||''):'已生效')+'</p>'
             +'<p class="memdetail__body">'+esc(item.body||item.text||'')+'</p>'
             +(item.source_ref&&item.source_ref.session_id?'<div class="muted">来源会话 '+esc(item.source_ref.session_id)+' · turn '+esc(item.source_ref.turn_id||0)+'</div>':'')
             +(item.source?'<div class="muted">来源：'+esc(item.source)+'</div>':'')
+            +(item.status==='candidate'?'<div class="memreviewform">'
+              +'<label>记忆内容<input data-review-summary value="'+esc(item.title||'')+'"></label>'
+              +'<label>归属主体<input data-review-subject value="'+esc(item.subject||'')+'" placeholder="例如：用户、Kissne"></label>'
+              +'<label>适用范围<input data-review-scope value="'+esc(item.scope||'')+'" placeholder="例如：Kissne界面约定"></label>'
+              +'<label>类型<select data-review-category>'+['fact','preference','agreement','event','project','relationship','temporary'].map(function(c){return '<option value="'+c+'"'+(item.category===c?' selected':'')+'>'+({fact:'事实',preference:'偏好',agreement:'约定',event:'经历',project:'项目',relationship:'关系',temporary:'临时'})[c]+'</option>';}).join('')+'</select></label>'
+              +'<button class="btn" data-memory-review="approve" data-id="'+esc(item.id)+'">确认记住</button>'
+              +'<button class="btn btn--ghost" data-memory-review="reject" data-id="'+esc(item.id)+'">不记住</button></div>':'')
             +(item.deletable?'<button type="button" class="btn btn--ghost is-small" data-memory-delete="'+esc(item.id)+'" style="margin-top:12px">删除这条记忆</button>':'')
             +'</div>'
           : '<div class="mempty"><div class="mempty__t">这条记忆不在当前时间线中</div></div>';
-        return '<div class="screen">'+appbar({title:'记忆详情',back:'#/memory'})+'<div class="screen__body">'+detail+'</div></div>';
+        return '<div class="screen">'+appbar({title:'记忆详情',back:'#/memory'})+'<div class="screen__body"><div data-memory-notice hidden></div>'+detail+'</div></div>';
       }
       var filters='<div class="chips">'+MEMORY_SPACES.map(function(row){
         return '<button class="chip'+(MEMORY_INDEX.space===row.k?' is-on':'')+'" data-memory-space="'+esc(row.k)+'">'+esc(row.v)+'</button>';
@@ -71,30 +79,29 @@
         right:'<button class="iconbtn" data-memory-refresh aria-label="刷新">'+icon('sync')+'</button>'})
         +'<div class="screen__body"><div class="searchbar"><span>'+icon('search',16)+'</span>'
         +'<input class="memorysearch" data-memory-search placeholder="搜索时间线" value="'+esc(MEMORY_INDEX.query)+'"></div>'
-        +filters+'<div class="adminnotice" data-memory-notice hidden></div><div data-memory-list>'+memoryTimelineHtml()+'</div></div></div>';
+        +'<div class="chips"><button class="chip" data-memory-mode="active">已记住</button><button class="chip" data-memory-mode="candidate">待审核</button></div>'+filters+'<div class="adminnotice" data-memory-notice hidden></div><div data-memory-list>'+memoryTimelineHtml()+'</div></div></div>';
     },
     mount:function(root,ctx){
       var T=window.KissneTransport, host=root.querySelector('[data-memory-list]'), refresh=root.querySelector('[data-memory-refresh]');
-      var search=root.querySelector('[data-memory-search]'), notice=root.querySelector('[data-memory-notice]'), stopped=false, timer=0;
+      var search=root.querySelector('[data-memory-search]'), notice=root.querySelector('[data-memory-notice]'), stopped=false, timer=0, requestSeq=0;
       function show(text){if(notice){notice.hidden=!text;notice.textContent=text||'';}}
       function paint(){if(host&&!stopped)host.innerHTML=memoryTimelineHtml();}
       async function reload(){
         if(!T||typeof T.memoryTimeline!=='function'){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error='transport_unavailable';paint();return;}
+        var seq=++requestSeq, mode=MEMORY_INDEX.mode;
         show('正在读取 Lifemem…');
         try{
           if(typeof T.ensureToken==='function') await T.ensureToken(false);
-          var payload=await T.memoryTimeline({limit:100,space:MEMORY_INDEX.space,q:MEMORY_INDEX.query});
-          MEMORY_INDEX.items=Array.isArray(payload&&payload.items)?payload.items:[];
-          if (T.adminMemory) {
-            try {
-              var builtin=await T.adminMemory();
-              MEMORY_INDEX.builtin=(Array.isArray(builtin&&builtin.items)?builtin.items:[]).map(function(item){
-                return Object.assign({}, item, { title: '内置记忆', body: item.text, occurred_at: 0, memory_space: item.target||'memory' });
-              });
-            } catch (ignore) { MEMORY_INDEX.builtin=[]; }
-          }
+          var payload=mode==='candidate'
+            ? await T.memoryCandidates()
+            : await T.memoryTimeline({limit:100,space:MEMORY_INDEX.space,q:MEMORY_INDEX.query});
+          if(stopped||seq!==requestSeq)return;
+          MEMORY_INDEX.items=(Array.isArray(payload&&payload.items)?payload.items:[]).map(function(item){
+            return mode==='candidate'?Object.assign({},item,{title:item.summary,body:item.quote,source_ref:{session_id:item.session_id,turn_id:item.turn_id}}):item;
+          }).filter(function(item){return MEMORY_INDEX.mode!=='candidate'||((!MEMORY_INDEX.space||item.memory_space===MEMORY_INDEX.space)&&(!MEMORY_INDEX.query||String(item.title+' '+item.body).indexOf(MEMORY_INDEX.query)>=0));});
+          MEMORY_INDEX.builtin=[];
           MEMORY_INDEX.loaded=true; MEMORY_INDEX.error=''; if(!stopped){show('');paint();}
-        }catch(err){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error=String(err&&err.message||'memory_unavailable');if(!stopped){show('记忆库读取失败');paint();}}
+        }catch(err){if(stopped||seq!==requestSeq)return;MEMORY_INDEX.loaded=false;MEMORY_INDEX.error=String(err&&err.message||'memory_unavailable');if(!stopped){show('记忆库读取失败');paint();}}
       }
       function onRefresh(e){e.preventDefault();reload();}
       function onSpace(e){var b=e.target.closest('[data-memory-space]');if(!b)return;MEMORY_INDEX.space=String(b.getAttribute('data-memory-space')||'');location.hash='#/memory';reload();}
@@ -105,12 +112,26 @@
         try { await T.deleteAdminMemory(b.getAttribute('data-memory-delete')); await reload(); location.hash='#/memory'; }
         catch (err) { show('删除记忆失败'); b.disabled=false; }
       }
+      async function onReview(e){
+        var mode=e.target.closest('[data-memory-mode]');
+        if(mode){MEMORY_INDEX.mode=mode.getAttribute('data-memory-mode');reload();return;}
+        var b=e.target.closest('[data-memory-review]');if(!b||!T||!T.reviewMemory)return;
+        e.preventDefault();b.disabled=true;
+        var payload={action:b.getAttribute('data-memory-review'),id:Number(b.getAttribute('data-id'))};
+        if(payload.action==='approve'){
+          payload.updates={};
+          ['summary','subject','scope','category'].forEach(function(k){var el=root.querySelector('[data-review-'+k+']');payload.updates[k]=el?el.value:'';});
+        }
+        try{await T.reviewMemory(payload);MEMORY_INDEX.loaded=false;location.hash='#/memory';}
+        catch(err){show('审核未完成：'+String(err&&err.message||err));b.disabled=false;}
+      }
+      root.addEventListener('click',onReview);
       if(refresh)refresh.addEventListener('click',onRefresh);
       root.addEventListener('click',onSpace);
       root.addEventListener('click',onDelete);
       if(search)search.addEventListener('input',onSearch);
       if((ctx&&ctx.state||'list')==='list')reload();
-      return function(){stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);root.removeEventListener('click',onDelete);if(search)search.removeEventListener('input',onSearch);};
+      return function(){root.removeEventListener('click',onReview);stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);root.removeEventListener('click',onDelete);if(search)search.removeEventListener('input',onSearch);};
     }
   });
 
@@ -868,3 +889,4 @@
   });
 
 })();
+

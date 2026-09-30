@@ -88,6 +88,10 @@ class MobileTransportClient(
         request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
             "&limit=" + limit.coerceIn(1, 500))
 
+    fun memoryCandidatesPayload(): JSONObject = request("GET", "/memory/review")
+
+    fun reviewMemoryPayload(body: JSONObject): JSONObject = request("POST", "/memory/review", body)
+
     fun memoryTimelinePayload(
         limit: Int = 50,
         before: String? = null,
@@ -258,3 +262,4 @@ internal fun normalizeAttachmentKind(kind: String): String = when (kind.trim().l
     "audio", "voice" -> "audio"
     else -> "file"
 }
+

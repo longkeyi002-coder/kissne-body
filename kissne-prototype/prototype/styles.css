@@ -1996,3 +1996,8 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
 .attachmsg__img { display: block; width: 170px; max-width: 54vw; max-height: 44vh;
   border-radius: 12px; object-fit: cover; margin-bottom: 4px; }
 .attachmsg__body--caption b { font-weight: 600; }
+
+
+.memreviewform{display:grid;gap:12px;margin-top:20px}
+.memreviewform label{display:grid;gap:6px;font-size:12px;color:var(--ink-3)}
+.memreviewform input,.memreviewform select{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--paper,#fff);color:var(--ink);font:inherit}

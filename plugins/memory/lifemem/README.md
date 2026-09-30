@@ -25,3 +25,9 @@ Tests cover admission, durable evidence, candidate exclusion, unrelated zero rec
 `lifemem_review` lists candidates, approves/rejects one candidate, or audits up to 100 legacy active records per call. Approval may repair summary/type/subject/scope but cannot replace the original quote or bypass the evidence gate. Legacy audit is explicit, bounded and repeatable; it is not run silently at startup.
 
 Automatic and explicit recalls retain query, session, memory IDs and timestamp. Explicit memory-correction language links to the most recent receipt within 30 minutes and suppresses its IDs only in that session. Generic “不对” does not classify unrelated memories as globally false. Multiple returned memories remain ambiguous: the receipt records disputed use, not proof that every item is wrong. There is no production-library audit performed by this code change, and no memory editor UI yet.
+
+## Mobile candidate review
+
+Paired devices can GET `/memory/review` to list candidates and POST approve/reject with the record ID and optional repaired metadata. The mobile route does not expose bulk legacy audit. Web and Android native transport share the same endpoint; the memory page has active/candidate tabs and edits summary, subject, scope and category before approval. Builtin MEMORY.md/USER.md entries are no longer mixed into this Lifemem page. Changing an approved summary clears its stale embedding, so it falls back to lexical retrieval.
+
+Validation includes a real aiohttp listener for the route helper with a simulated device-auth boundary, and executed JavaScript page rendering/event handlers. This is not a production GatewayRunner startup E2E, browser visual inspection or Android build verification. Topic synthesis remains unfinished.

@@ -125,6 +125,8 @@
           q: String(options.q || '')
         });
       },
+      memoryCandidates: function () { return nativeCall('memoryCandidates', {}); },
+      reviewMemory: function (payload) { return nativeCall('reviewMemory', payload); },
       adminMemory: function () { return nativeCall('adminMemory', {}); },
       deleteAdminMemory: function (id) { return nativeCall('deleteAdminMemory', { memory_id: String(id || '') }); },
       adminSkills: function () { return nativeCall('adminSkills', {}); },
@@ -469,6 +471,8 @@
     history: history,
     search: searchHistory,
     memoryTimeline: memoryTimeline,
+    memoryCandidates: function () { return request('/mobile/memory/review', {method:'GET'}); },
+    reviewMemory: function (payload) { return request('/mobile/memory/review', {method:'POST',body:payload}); },
     adminMemory: adminMemory,
     deleteAdminMemory: deleteAdminMemory,
     adminSkills: adminSkills,
@@ -488,3 +492,4 @@
     adminStatus: adminStatus
   };
 })();
+
