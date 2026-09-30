@@ -593,7 +593,7 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
    停着不动时，最后一条消息能停在输入框上方，而不是被它盖住。
    注意：**打字时这里不再追加高度** —— 那等于把消息往上推。
    打字时只有输入框自己抬起来，聊天记录一动不动。 */
-.chatbody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;
+.chatbody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
   padding:16px;
   -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .chatdivider{
@@ -728,7 +728,7 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
 .tlog__line,.tlog__kv,.tlog__kv > b{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
 /* 必须让 body 撑满剩余宽度：否则它是 shrink-to-fit，
    和气泡自己的 max-width:80% 互相打架，气泡会被挤成一条竖条 */
-.msg__body{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.msg__body{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}
 .msg--ai .msg__body{align-items:flex-start;width:100%}
 .msg--me .msg__body{align-items:flex-end}
 .msg__text{font-size:13px;color:var(--ink);line-height:1.6}
@@ -1695,7 +1695,7 @@ html.is-native-shell .screen--home .motifrow{display:none}
 html.is-native-shell .screen--chat{--composer-h:62px;--kbd-lift:150px}
 html.is-native-shell .chathead,
 html.is-native-shell .chathead--ghost{height:48px}
-html.is-native-shell .chatbody{gap:10px;padding:11px 14px}
+html.is-native-shell .chatbody{gap:6px;padding:11px 14px}
 html.is-native-shell .msg{gap:7px}
 html.is-native-shell .msg--ai .msg__body{flex:1;max-width:calc(100% - 41px)}
 html.is-native-shell .msg--ai .activity-history,
@@ -2019,7 +2019,7 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
 /* Shared blue/white theme, additive to existing layout and turn geometry. */
 :root { --g1:#f7fbff; --g2:#eef5fb; --g3:#e1edf7; --g4:#cedfed; --g5:#adc5da; --g8:#35536d; --g9:#436c91; --line:#dae7f1; --line-2:#b8cfe1; --ink:#294257; --ink-2:#6b8296; }
 .btn--primary,.chip.is-active,.tabbar__item.is-active { background:var(--blue-ink); color:white; }
-.msg { position:relative; margin-bottom:10px; min-height:52px; }
+.msg { position:relative; margin-bottom:0; min-height:48px; }
 .msg__time--avatar { position:absolute; top:37px; left:0; width:34px; text-align:center; margin:0!important; font-size:9px; }
 .msg--me .msg__time--avatar { left:auto; right:0; text-align:center; }
 .activity-stream__steps .process-step { margin:0 0 12px; }

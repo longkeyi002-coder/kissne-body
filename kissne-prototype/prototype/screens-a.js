@@ -2917,9 +2917,6 @@
         }
       }
 
-      var OUTBOX_BATCH_DELAY_MS = 1600;
-      var FRAGMENT_JOIN_WINDOW_MS = 600;
-      var USER_TYPING_IDLE_MS = 420;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
@@ -2943,25 +2940,10 @@
       }
       restoreSendDraft();
       function outboxWaitMs() {
-        var now = Date.now();
-        var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
-        var sinceTyping = now - CHAT_USER_INPUT_AT;
-        /* If the composer is still non-empty, typing is authoritative: wait for a short idle
-           edge, capped by the 1.6s coalescing guard. Once the composer is empty, do not make
-           every ordinary message pay the full 1.6s latency. */
-        if (String(input && input.value || '').trim() && CHAT_USER_INPUT_AT) {
-          return Math.max(0, Math.min(
-            OUTBOX_BATCH_DELAY_MS - sinceBubble,
-            USER_TYPING_IDLE_MS - sinceTyping
-          ));
-        }
-        /* A second quick tap may finish the sentence that the first tap started. Keep a
-           short join window even after the composer is empty; this is not the long typing
-           debounce above, so an ordinary message still feels immediate. */
-        if (CHAT_OUTBOX.length && CHAT_OUTBOX_UPDATED_AT) {
-          return Math.max(0, FRAGMENT_JOIN_WINDOW_MS - sinceBubble);
-        }
-        return 0;
+        return window.KissneChatLifecycle.outboxWait({
+          items: CHAT_OUTBOX, now: Date.now(), updatedAt: CHAT_OUTBOX_UPDATED_AT,
+          inputAt: CHAT_USER_INPUT_AT, composerText: String(input && input.value || '')
+        });
       }
       function mergeUserFragments(items) {
         var result = '';
@@ -2986,7 +2968,7 @@
         var quote = PENDING_QUOTE;
         if (logEntry) { logEntry.pendingSend = true; localOutboundRows.push(logEntry); persistChatLog(); }
         CHAT_OUTBOX.push({
-          text: value, log: logEntry || null,
+          text: value, log: logEntry || null, queuedAt: Date.now(),
           replyTo: quote && quote.message_ref ? String(quote.message_ref) : ''
         });
         PENDING_QUOTE = null;
@@ -3079,6 +3061,20 @@
               window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: {
                 sessionId: batch.sessionId, messageIds: batch.logs.map(function (row) { return row.messageId; })
               } }));
+            } else if (batch.logs.length > 1) {
+              var mergedRow = window.KissneChatLifecycle.coalesceUserRows(
+                batch.logs, esc(batch.text), CHAT_LOG, localOutboundRows
+              );
+              var mergedNode = mergedRow && mergedRow.pendingNode;
+              if (mergedNode && mergedNode.isConnected) {
+                var mergedBubble = mergedNode.querySelector('.bubble');
+                if (mergedBubble) mergedBubble.textContent = batch.text;
+                mergedNode.setAttribute('data-message-text', batch.text);
+                mergedNode.setAttribute('data-message-ref', mergedRow.messageRef);
+              }
+              batch.logs.slice(1).forEach(function (row) {
+                if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+              });
             }
             if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
               livePendingTurns[acceptedTurn] = true;
