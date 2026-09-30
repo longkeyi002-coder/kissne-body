@@ -1536,7 +1536,7 @@ body.no-annot .ph__code,body.no-annot .ph__label{opacity:0}
    （由 core.js 的 tabbar('entry') 输出） */
 .tabbar--home{border-top-color:var(--blue-soft)}
 .tabbar--home .tabbar__item{color:#9FB0C1}
-.tabbar--home .tabbar__item.is-active{color:var(--blue-ink)}
+.tabbar--home .tabbar__item.is-active{color:#fff}
 
 /* 爪印 / 蹄印 分隔装饰 */
 .motifrow{display:flex;align-items:center;justify-content:center;gap:14px;
