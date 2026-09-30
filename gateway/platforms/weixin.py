@@ -340,7 +340,9 @@ async def _upload_ciphertext(session: "aiohttp.ClientSession", *, ciphertext: by
                 return encrypted_param
             raw = (await response.text())[:200]
             raise RuntimeError(f"CDN upload missing x-encrypted-param header: {raw}" if response.status == 200 else f"CDN upload HTTP {response.status}: {raw}")
-    return await asyncio.wait_for(_do(), timeout=120)
+    # WeChat CDN upload of a 35 MB APK needs far more than 120 s on a slow link;
+    # asyncio.TimeoutError stringifies to '', which used to surface as a blank error.
+    return await asyncio.wait_for(_do(), timeout=600)
 
 
 async def _download_bytes(session: "aiohttp.ClientSession", *, url: str, timeout_seconds: float = 60.0) -> bytes:
