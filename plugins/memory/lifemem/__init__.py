@@ -20,6 +20,7 @@ from .decision import build_decision_engine
 from .embeddings import Embedder
 from .store import MemoryStore
 from .review import MemoryReview
+from .topics import topic_candidates
 
 NAME = "lifemem"
 DEFAULTS = {
@@ -197,9 +198,21 @@ class LifememProvider(MemoryProvider):
             return
         # AI output is context, never evidence. Avoid sending whole transcripts to Laya.
         if len(user) > 1200:
-            self._store.add_memory(user[:400], user, status="candidate", source="auto",
-                                   session_id=sid, turn_id=turn_id,
-                                   admission_reason="needs_topic_extraction")
+            packets=topic_candidates(user)
+            if not packets:
+                self._store.add_memory("长会话待整理", user, status="candidate", source="auto",
+                                       session_id=sid, turn_id=turn_id,
+                                       admission_reason="needs_topic_extraction")
+            for packet in packets:
+                quote=packet['quote']
+                # Long-input extraction is review-only: it does not assert independent facts.
+                category=category_for(quote)
+                state,reason=assess(quote,quote,category=category,subject="user",scope="reality")
+                if state == "rejected":continue
+                self._store.add_memory(quote if len(quote)<=400 else "长句待整理",quote,
+                    status="candidate",category=category,subject="user",scope="reality",
+                    source="auto",session_id=sid,turn_id=turn_id,
+                    admission_reason="topic_review_required" if state=="active" else reason)
             return
         context=self._store.preceding_user_context(sid, turn_id)
         contextual=getattr(self._decision, "decide_with_context", None)
@@ -375,7 +388,7 @@ class LifememProvider(MemoryProvider):
             try:
                 if action == "list":
                     rows=self._review.list(args.get("limit",20))
-                    fields=("id","summary","quote","category","subject","scope","admission_reason","session_id","turn_id")
+                    fields=("id","summary","quote","category","subject","scope","admission_reason","session_id","turn_id","evidence_context")
                     return tool_result({"candidates":[{k:r.get(k) for k in fields} for r in rows]})
                 if action == "audit":
                     return tool_result(self._review.audit_legacy(args.get("limit",100)))
@@ -471,5 +484,6 @@ class LifememProvider(MemoryProvider):
 
 def register(ctx):
     ctx.register_memory_provider(LifememProvider())
+
 
 

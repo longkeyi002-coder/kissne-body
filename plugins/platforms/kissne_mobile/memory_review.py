@@ -34,8 +34,9 @@ def review_at_path(path, payload):
     try:
         review=MemoryReview(store)
         if payload['action'] == 'list':
-            fields=('id','summary','quote','category','subject','scope','memory_space','admission_reason','session_id','turn_id','status')
+            fields=('id','summary','quote','category','subject','scope','memory_space','admission_reason','session_id','turn_id','status','evidence_context')
             return {'items':[{k:row.get(k) for k in fields} for row in review.list(payload.get('limit',100))]}
         return review.review(payload['id'],payload['action'],payload.get('updates'))
     finally:
         store.close()
+

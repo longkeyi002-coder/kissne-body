@@ -58,6 +58,7 @@
             +'<div class="memdetail__meta">'+chip(memorySpaceLabel(item.memory_space))+'<span class="muted">'+esc(memoryTime(item.occurred_at))+'</span></div>'
             +'<p class="muted">'+esc(item.status==='candidate'?'待审核 · '+(item.admission_reason||''):'已生效')+'</p>'
             +'<p class="memdetail__body">'+esc(item.body||item.text||'')+'</p>'
+            +(item.evidence_context?'<details><summary>查看原话附近语境</summary><p>'+esc(item.evidence_context)+'</p></details>':'')
             +(item.source_ref&&item.source_ref.session_id?'<div class="muted">来源会话 '+esc(item.source_ref.session_id)+' · turn '+esc(item.source_ref.turn_id||0)+'</div>':'')
             +(item.source?'<div class="muted">来源：'+esc(item.source)+'</div>':'')
             +(item.status==='candidate'?'<div class="memreviewform">'
@@ -889,4 +890,5 @@
   });
 
 })();
+
 

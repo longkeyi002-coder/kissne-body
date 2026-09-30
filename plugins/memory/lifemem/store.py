@@ -138,8 +138,8 @@ class MemoryStore:
             # Exact active duplicate: reinforce/update provenance instead of creating
             # another long-term record for the same fact.
             existing=self._conn.execute(
-                "SELECT id,importance FROM memories WHERE status=? AND memory_space=? AND summary=? ORDER BY id DESC LIMIT 1",
-                (status,memory_space,summary)).fetchone()
+                "SELECT id,importance FROM memories WHERE status=? AND memory_space=? AND summary=? AND subject=? AND scope=? ORDER BY id DESC LIMIT 1",
+                (status,memory_space,summary,subject,scope)).fetchone()
             if existing:
                 self._conn.execute(
                     "UPDATE memories SET updated_at=?,last_recall_at=?,access_count=access_count+1,importance=? WHERE id=?",
@@ -285,4 +285,5 @@ class MemoryStore:
         with self._lock:
             cur=self._conn.execute("INSERT OR IGNORE INTO checkpoints(session_id,digest,payload,created_at) VALUES(?,?,?,?)",
                                    (session_id,digest,payload,time.time())); self._conn.commit(); return cur.rowcount>0
+
 

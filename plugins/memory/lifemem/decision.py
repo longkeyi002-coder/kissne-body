@@ -36,14 +36,14 @@ class HeuristicDecisionEngine:
         space="reality"
         if any(x in text for x in ("小机星","AI World","ai world","世界观","剧情","设定里")):
             space="ai_world"
-        elif any(x in text for x in ("我们之间","叶青栩","哥哥","关系","相处")):
-            space="relationship"
         elif any(x in text for x in ("你自己","叶青栩自己","你的习惯","你的性格")):
             space="ai_self"
+        elif any(x in text for x in ("我们之间","叶青栩","哥哥","关系","相处")):
+            space="relationship"
         importance=.85 if any(x in text for x in ("记住","固定","永远","不要再","决定")) else .65
         emotion=""
-        if any(x in text for x in ("喜欢","开心","高兴","爱")): emotion="positive"
-        elif any(x in text for x in ("讨厌","生气","难过","不喜欢")): emotion="negative"
+        if any(x in text for x in ("讨厌","生气","难过","不喜欢")): emotion="negative"
+        elif any(x in text for x in ("喜欢","开心","高兴","爱")): emotion="positive"
         summary=re.sub(r"\s+"," ",text)
         state, _ = assess(text, summary, category=category_for(text), subject="user", scope=space)
         return MemoryDecision(state == "active",space,importance,emotion,summary)
@@ -86,4 +86,5 @@ def build_decision_engine(kind:str="laya",endpoint:str="",timeout:float=.8):
     if (kind or "").lower()=="laya":
         return LayaDecisionEngine(endpoint,timeout,fallback)
     return fallback
+
 

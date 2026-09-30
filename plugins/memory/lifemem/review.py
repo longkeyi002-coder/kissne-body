@@ -49,7 +49,14 @@ class MemoryReview:
         return {mid for row in rows for mid in json.loads(row['memory_ids'])}
 
     def list(self, limit=20):
-        return self.store.list_memories(limit=limit,status='candidate')
+        rows=self.store.list_memories(limit=limit,status='candidate')
+        for row in rows:
+            evidence=self.store.evidence_turn(row['session_id'],row['turn_id'])
+            if evidence:
+                text=evidence['user_content']
+                offset=text.find(row['quote'])
+                row['evidence_context']=text[max(0,offset-200):offset+len(row['quote'])+200] if offset>=0 and len(row['quote'])<=1200 else ''
+        return rows
 
     def review(self, memory_id, action, updates=None):
         if action not in {'approve','reject'}:
@@ -105,3 +112,4 @@ class MemoryReview:
                                          (row['id'],'audit',reason,time.time()))
             self.store._conn.commit()
         return {'checked':checked,'quarantined':quarantined}
+
