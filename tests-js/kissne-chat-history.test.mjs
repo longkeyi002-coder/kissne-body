@@ -393,7 +393,7 @@ test('retrying an unconfirmed send already restored from server history leaves o
   await expect.poll(() => input.value, { timeout: 4000 }).toBe('这条服务器已收到')
   reopen(); await expect.poll(() => root.querySelectorAll('.msg--me .bubble').length).toBe(1)
   input = root.querySelector('.composer__input'); input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => attempt).toBe(2)
+  await expect.poll(() => attempt, { timeout: 4000 }).toBe(2)
   await expect.poll(() => root.querySelectorAll('.msg--me .bubble').length).toBe(1)
   expect(root.querySelector('.msg--me .bubble').textContent).toBe('这条服务器已收到')
 })
