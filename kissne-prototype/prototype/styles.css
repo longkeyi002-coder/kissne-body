@@ -1868,6 +1868,17 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   background:transparent!important;box-shadow:none!important
 }
 .screen--chat .screen__foot{background:transparent;border-top-color:transparent}
+.screen--chat{--composer-height:100px}
+.screen--chat .composerwrap{
+  position:absolute;left:0;right:0;bottom:0;pointer-events:none;
+  border:0;backdrop-filter:none
+}
+.screen--chat .composerwrap > *{pointer-events:auto}
+.screen--chat .chatbody{
+  padding-bottom:calc(var(--composer-height) + var(--keyboard-lift, 0px) + 12px)!important
+}
+.turn-bridge[hidden]{display:none}
+
 
 
 /* Admin / real device status */

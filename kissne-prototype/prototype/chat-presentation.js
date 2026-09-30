@@ -34,7 +34,18 @@
       }
     };
   }
-  var api = { channels: channels, delivery: delivery };
+  // Elapsed waiting time is not a prediction of the server's completion time.
+  function waitingFrame(elapsed) {
+    var t = .94 * Math.max(0, elapsed) / (Math.max(0, elapsed) + 8000);
+    function point(at) { return { x: 312 - 304 * at, y: 62 - 204 * at * (1 - at) }; }
+    var start = Math.max(0, t - .15), path = '';
+    for (var i = 0; i <= 18; i++) {
+      var p = point(start + (t - start) * i / 18);
+      path += (i ? ' L' : 'M') + p.x.toFixed(2) + ' ' + p.y.toFixed(2);
+    }
+    return { star: point(t), tailStart: point(start), tail: path };
+  }
+  var api = { channels: channels, delivery: delivery, waitingFrame: waitingFrame };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.KissneChatPresentation = api;
 })(typeof window !== 'undefined' ? window : globalThis);

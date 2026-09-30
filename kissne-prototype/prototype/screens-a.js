@@ -1402,7 +1402,7 @@
         ${topBanner}
         <div class="chatbody">${emptyBlock}${base}</div>
         <div class="chatstatus" data-session-status hidden></div>
-        <!-- 输入区位于聊天页 flex 文档流底部；真机键盘由浏览器 viewport 自然处理。 -->
+        <!-- 输入区悬浮在聊天内容上，框外透明；底部留白随实际高度同步。 -->
         <div class="composerwrap">
           <!-- 未读胶囊：浮在输入区上方，点了跳到**最早**那条未读 -->
           <button class="unread" data-unread type="button"${UNREAD.n ? '' : ' hidden'}>
@@ -1603,6 +1603,9 @@
       var lastSystemNotification = '';
       function updateSystemNotification(state, title, body) {
         if (!T || typeof T.updateNotification !== 'function') return;
+        if (state === 'ready' && livePendingTurns && Object.keys(livePendingTurns).length) {
+          state = 'working'; title = 'Kissne 正在工作'; body = '正在处理你的消息';
+        }
         var key = String(state || '') + '|' + String(title || '') + '|' + String(body || '');
         if (key === lastSystemNotification) return;
         lastSystemNotification = key;
@@ -1610,6 +1613,7 @@
       }
       var live = !!(T && T.hasToken());
       var liveStopped = false;
+      var localOutboundRows = [];
       var liveEpoch = 0;
       var liveSwitching = false;
       var livePollBusy = false;
@@ -2193,10 +2197,11 @@
         var id = requestedId || String(liveCurrentTurn || 'pending');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
-          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><svg viewBox="0 0 320 70" class="turn-bridge__art">'
-          + '<path d="M8 62 Q160 -40 312 62" fill="none" stroke="currentColor" stroke-width=".8" opacity=".55"/>'
-          + '<g><path d="M0 -7 Q1 -1 7 0 Q1 1 0 7 Q-1 1 -7 0 Q-1 -1 0 -7" fill="white" stroke="currentColor" stroke-width=".8"/>'
-          + '<animateMotion dur="2.6s" repeatCount="indefinite" path="M8 62 Q160 -40 312 62"/></g></svg></div>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true" hidden><svg viewBox="0 0 320 70" class="turn-bridge__art">'
+          + '<defs><linearGradient data-wait-fade gradientUnits="userSpaceOnUse"><stop stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor" stop-opacity=".7"/></linearGradient></defs>'
+          + '<path data-wait-tail fill="none" stroke="currentColor" stroke-width=".8" stroke-linecap="round" opacity=".45"/>'
+          + '<g data-wait-star><path d="M0 -7 Q1 -1 7 0 Q1 1 0 7 Q-1 1 -7 0 Q-1 -1 0 -7" fill="white" stroke="currentColor" stroke-width=".8"/>'
+          + '</g></svg></div>'
           + '<div class="activity-history" data-live-activity></div>'
           + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
           + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
@@ -2215,15 +2220,38 @@
         if (message && !el.querySelector('[data-live-answer]:not([hidden])')) message.hidden = true;
         el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
       }
+      var waitBridgeSequence = 0;
+      function startTurnBridge(el) {
+        if (!el || liveStopped) return;
+        var state = activityForTurn(el.getAttribute('data-turn-id'));
+        // A processing event may have arrived before the send acknowledgement.
+        if (state.done || (state.timeline && state.timeline.length) || el.dataset.processing === 'true') return;
+        var bridge = el.querySelector('[data-turn-bridge]');
+        if (!bridge || bridge._waitFrame != null) return;
+        bridge.hidden = false;
+        var fade = bridge.querySelector('[data-wait-fade]');
+        fade.id = 'wait-tail-' + (++waitBridgeSequence);
+        bridge.querySelector('[data-wait-tail]').setAttribute('stroke', 'url(#' + fade.id + ')');
+        var started = performance.now();
+        function frame() {
+          if (liveStopped || !bridge.isConnected || bridge.hidden) return;
+          var pose = window.KissneChatPresentation.waitingFrame(performance.now() - started);
+          fade.setAttribute('x1', pose.tailStart.x); fade.setAttribute('y1', pose.tailStart.y);
+          fade.setAttribute('x2', pose.star.x); fade.setAttribute('y2', pose.star.y);
+          bridge.querySelector('[data-wait-tail]').setAttribute('d', pose.tail);
+          bridge.querySelector('[data-wait-star]').setAttribute('transform', 'translate(' + pose.star.x + ' ' + pose.star.y + ')');
+          bridge._waitFrame = requestAnimationFrame(frame);
+        }
+        frame();
+      }
       function dismissTurnBridge(el) {
         if (!el) return;
+        el.dataset.processing = 'true';
         var bridge = el.querySelector('[data-turn-bridge]');
         if (!bridge) return;
-        bridge.classList.add('is-delivered');
+        if (bridge._waitFrame != null) cancelAnimationFrame(bridge._waitFrame);
+        bridge._waitFrame = null;
         bridge.hidden = true;
-        setTimeout(function () {
-          if (bridge.parentNode) bridge.parentNode.removeChild(bridge);
-        }, 220);
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -2237,6 +2265,8 @@
       function addActivity(el, kind, turnId, text) {
         var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
         if (!el || !appendActivity(resolvedTurnId, kind, text)) return;
+        dismissTurnBridge(el);
+        if (!liveClosedTurns[resolvedTurnId]) updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         paintActivity(el, turnId, false);
       }
       function finishActivities(el, turnId) {
@@ -2255,6 +2285,7 @@
       function liveText(el, text, pending) {
         if (!el) return;
         if (text) {
+          dismissTurnBridge(el);
           deliverBubbles(el.getAttribute('data-turn-id') || liveCurrentTurn, text, pending);
           return;
         }
@@ -2337,6 +2368,7 @@
       }
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
+        if (event.session_id && CURRENT_SESSION_ID && String(event.session_id) !== CURRENT_SESSION_ID) return;
         var eventKey = String(event.event_id || event.message_id || '');
         if (eventKey) {
           if (liveSeenEvents[eventKey]) return;
@@ -2464,6 +2496,7 @@
           if (turnId) {
             livePendingTurns[turnId] = true;
             liveCurrentTurn = turnId;
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
             var pendingEl = liveEnsure(turnId);
             livePresence(pendingEl, false);
             liveAvatar(pendingEl, 'read');
@@ -2630,6 +2663,13 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           /* bootstrap 确认会话身份后，才把该会话的本地缓存装进内存（namespace 对齐） */
           bindChatLogSession(chatLogSessionId());
+          // Preserve only messages actually sent in this mount before its first session binding.
+          localOutboundRows.forEach(function (row) {
+            if (!row.sid && CHAT_LOG.indexOf(row) < 0) {
+              row.sid = CHAT_LOG_SESSION;
+              CHAT_LOG.push(row);
+            }
+          });
           bindTurnActivitySession(chatLogSessionId());
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
@@ -2659,6 +2699,7 @@
           liveSetCancel(!!restoredPendingTurn);
           if (restoredPendingTurn) {
             livePendingTurns[restoredPendingTurn] = true;
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
             var pendingEl = liveEnsure(restoredPendingTurn);
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
             if (pendingState && pendingState.timeline && pendingState.timeline.length) {
@@ -2798,6 +2839,7 @@
         var value = String(text || '').trim();
         if (!value) return;
         var quote = PENDING_QUOTE;
+        if (logEntry) localOutboundRows.push(logEntry);
         CHAT_OUTBOX.push({
           text: value, log: logEntry || null,
           replyTo: quote && quote.message_ref ? String(quote.message_ref) : ''
@@ -2867,13 +2909,18 @@
               logEntry.turnId = acceptedTurn;
               logEntry.replyTo = batch.replyTo || '';
             });
-            livePendingTurns[acceptedTurn] = true;
-            liveCurrentTurn = acceptedTurn;
-            liveSetCancel(true);
-            var acceptedEl = liveEnsure(acceptedTurn);
-            liveAvatar(acceptedEl, 'read');
-            livePresence(acceptedEl, false);
+            if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
+              livePendingTurns[acceptedTurn] = true;
+              liveCurrentTurn = acceptedTurn;
+              liveSetCancel(true);
+              var acceptedEl = liveEnsure(acceptedTurn);
+              liveAvatar(acceptedEl, 'read');
+              startTurnBridge(acceptedEl);
+              updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
+              livePresence(acceptedEl, false);
+            }
           }
+          persistChatLog();
           scheduleLivePoll(0);
         } catch (err) {
           setSessionStatus('消息暂未送达，服务恢复后会继续发送。');
@@ -2960,8 +3007,10 @@
       var plusToggle = root.querySelector('[data-plus-toggle]');
       var plusPanel = root.querySelector('[data-plus-panel]');
       function setPlusPanel(open) {
+        if (open) setStickerPanel(false);
         if (plusPanel) plusPanel.hidden = !open;
         if (plusToggle) plusToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        syncComposerHeight();
       }
       function onPlusToggle(e) {
         e.preventDefault();
@@ -3029,13 +3078,15 @@
           persistChatLog();
           setPlusPanel(false);
           setSessionStatus('');
-          if (turn) {
+          if (turn && !liveClosedTurns[turn] && !liveCompleted[turn]) {
             livePendingTurns[turn] = true;
             liveCurrentTurn = turn;
             liveSetCancel(true);
             var attachmentEl = liveEnsure(turn);
             livePresence(attachmentEl, false);
             liveAvatar(attachmentEl, 'read');
+            startTurnBridge(attachmentEl);
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
           }
           scheduleLivePoll(0);
         } catch (err) {
@@ -3058,11 +3109,13 @@
       var stickerToggle = root.querySelector('[data-sticker-toggle]');
       var stickerPanel = root.querySelector('.stkpanel');
       function setStickerPanel(open) {
+        if (open) setPlusPanel(false);
         if (stickerPanel) stickerPanel.hidden = !open;
         if (stickerToggle) {
           stickerToggle.classList.toggle('is-on', !!open);
           stickerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         }
+        syncComposerHeight();
       }
       function onStickerToggle(e) {
         e.preventDefault();
@@ -3084,6 +3137,7 @@
           who: 'me', html: html, time: clockNow(), messageId: nextMessageId(),
           stickerKey: s2.k, stickerLabel: s2.label
         });
+        localOutboundRows.push(stickerLog);
         setSessionStatus('正在发送表情包…');
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
@@ -3094,12 +3148,16 @@
           if (acceptedTurn) {
             stickerLog.messageRef = 'turn:' + acceptedTurn + ':user';
             stickerLog.turnId = acceptedTurn;
-            livePendingTurns[acceptedTurn] = true;
-            liveCurrentTurn = acceptedTurn;
-            liveSetCancel(true);
-            var stickerEl = liveEnsure(acceptedTurn);
-            livePresence(stickerEl, false);
-            liveAvatar(stickerEl, 'read');
+            if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
+              livePendingTurns[acceptedTurn] = true;
+              liveCurrentTurn = acceptedTurn;
+              liveSetCancel(true);
+              var stickerEl = liveEnsure(acceptedTurn);
+              livePresence(stickerEl, false);
+              liveAvatar(stickerEl, 'read');
+              startTurnBridge(stickerEl);
+              updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
+            }
           }
           persistChatLog();
           setSessionStatus('');
@@ -3110,6 +3168,13 @@
         }
         try { history.replaceState(null, '', '#/chat?state=' + stkState); } catch (ignore) {}
       }
+      function closeComposerPanelsOutside(e) {
+        var target = e.target;
+        if (!target || !target.closest) return;
+        if (!target.closest('[data-plus-panel], [data-plus-toggle]')) setPlusPanel(false);
+        if (!target.closest('.stkpanel, [data-sticker-toggle]')) setStickerPanel(false);
+      }
+      document.addEventListener('pointerdown', closeComposerPanelsOutside, true);
       if (stickerToggle) stickerToggle.addEventListener('click', onStickerToggle);
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
@@ -3118,6 +3183,15 @@
          就把输入区按实际遮挡高度抬起。这样不会写死 150/180px。 */
       var scr = root.querySelector('.screen--chat');
       var cwrap = root.querySelector('.composerwrap');
+      function syncComposerHeight() {
+        if (!scr || !cwrap) return;
+        var height = cwrap.getBoundingClientRect().height;
+        if (height) scr.style.setProperty('--composer-height', height + 'px');
+      }
+      var composerObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(syncComposerHeight) : null;
+      if (composerObserver && cwrap) composerObserver.observe(cwrap);
+      syncComposerHeight();
+
       var vv = window.visualViewport || null;
       var keyboardT = null;
       function syncKeyboardLift() {
@@ -3424,7 +3498,10 @@
           vv.removeEventListener('scroll', syncKeyboardLift);
         }
         clearTimeout(keyboardT);
+        if (composerObserver) composerObserver.disconnect();
 
+        document.removeEventListener('pointerdown', closeComposerPanelsOutside, true);
+        Object.keys(liveTurns).forEach(function (id) { dismissTurnBridge(liveTurns[id]); });
         if (plusToggle) plusToggle.removeEventListener('click', onPlusToggle);
         root.removeEventListener('click', onAttachmentPick);
         if (stickerToggle) stickerToggle.removeEventListener('click', onStickerToggle);

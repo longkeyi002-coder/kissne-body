@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { expect, test } from 'vitest'
 const require = createRequire(import.meta.url)
-const { channels, delivery } = require('../kissne-prototype/prototype/chat-presentation.js')
+const { channels, delivery, waitingFrame } = require('../kissne-prototype/prototype/chat-presentation.js')
 
 test('explicit thinking tags never become answer text, including an unfinished thought', () => {
   expect(channels('<think>内部过程</think>正文')).toEqual({ reasoning: '内部过程', answer: '正文' })
@@ -27,4 +27,18 @@ test('delivery preserves arrived bubbles, cancels queued bubbles, and flushes on
   resumed.stop(true)
   expect(emitted).toEqual(['第一句', '第二句', '第三句'])
   expect(timers.size).toBe(0)
+})
+
+test('waiting moves right to left on a curved path without looping or claiming completion', () => {
+  const times = [0, 1000, 8000, 60000, 3600000]
+  const frames = times.map(waitingFrame)
+  expect(frames[0].star.x).toBeGreaterThan(300)
+  frames.slice(1).forEach((frame, i) => {
+    expect(frame.star.x).toBeLessThan(frames[i].star.x)
+    expect(frame.star.x).toBeGreaterThan(8)
+    const tailStartX = Number(frame.tail.match(/^M([^ ]+)/)[1])
+    expect(tailStartX).toBeGreaterThan(frame.star.x)
+  })
+  expect(frames[2].star.y).toBeLessThan(frames[0].star.y - 35)
+  expect(waitingFrame(-100).star).toEqual(frames[0].star)
 })

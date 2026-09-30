@@ -15,72 +15,35 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Keeps a resident status notification and alerts when a background reply arrives. */
+/** Observes an active task; idle message checks use the system job scheduler. */
 class KissneNotificationService : Service() {
     private val reader = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var stopped = false
     private var lastStatus = ""
-    private var lastLegacyCheck = 0L
-    private var legacyPending = false
     private val sessionStore by lazy { MobileSessionStore(this) }
 
     override fun onCreate() {
         super.onCreate()
         ensureChannel(this)
-        startForeground(NOTIFICATION_ID, notification(this, "Kissne 已就绪", "打开人人星继续对话"))
+        startForeground(NOTIFICATION_ID, notification(this, "Kissne 正在工作", "正在处理你的消息"))
         reader.scheduleWithFixedDelay({ readReplies() }, 0, 3, TimeUnit.SECONDS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // WebView activity hints are not evidence that the server is still working.
-        // The independent, read-only observer owns the resident status.
-        return START_STICKY
+        // An interrupted task must not resurrect an idle foreground service.
+        return START_NOT_STICKY
     }
 
     private fun readReplies() {
         if (stopped) return
         try {
-            val store = sessionStore
-            if (store.deviceToken.isNullOrBlank()) {
-                setStatus("Kissne 未连接", "打开 Kissne 恢复连接")
-                return
-            }
-            val prefs = getSharedPreferences("kissne_notifications", MODE_PRIVATE)
-            val key = "cursor:" + store.installationId()
-            val cursor = prefs.getLong(key, store.cursor)
-            val client = MobileTransportClient(BuildConfig.MOBILE_BASE_URL, { store.deviceToken }, 5000, 10000)
-            val payload = client.pollPayload(cursor)
+            val pending = NotificationReplyObserver.poll(this, sessionStore)
             if (stopped) return
-            val events = payload.optJSONArray("events")
-            for (index in 0 until (events?.length() ?: 0)) {
-                val event = events?.optJSONObject(index) ?: continue
-                if (event.optString("type") != "completed") continue
-                if (event.optString("presentation") in listOf("hidden", "internal_notification", "tool_progress", "tool_call", "tool_result")) continue
-                val text = event.optString("text").trim()
-                if (text.isBlank()) continue
-                val id = event.optString("turn_id").ifBlank {
-                    event.optString("event_id").ifBlank { event.optString("message_id") }
-                }
-                notifyReply(this, id, "Kissne 回复完成", text.replace(Regex("\\s+"), " ").take(64))
-            }
-            // Never acknowledge or change the UI cursor: it still needs these events.
-            prefs.edit().putLong(key, payload.optLong("next_cursor", cursor)).apply()
-            val pending = if (payload.has("pending_turn_id")) {
-                !payload.isNull("pending_turn_id") && payload.optString("pending_turn_id").isNotBlank()
-            } else {
-                // Compatibility with the deployed older adapter. Bootstrap is non-destructive.
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (lastLegacyCheck == 0L || now - lastLegacyCheck >= 15000) {
-                    val boot = client.bootstrapPayload(cursor)
-                    legacyPending = !boot.isNull("pending_turn_id") && boot.optString("pending_turn_id").isNotBlank()
-                    lastLegacyCheck = now
-                }
-                legacyPending
-            }
             if (pending) setStatus("Kissne 正在工作", "正在处理你的消息")
-            else setStatus("Kissne 已就绪", "打开人人星继续对话")
+            else stopSelf()
         } catch (_: Exception) {
-            if (!stopped) setStatus("Kissne 连接暂不可用", "正在等待恢复连接")
+            // No stale work notification after an unreachable task. A later hint can resume it.
+            stopSelf()
         }
     }
 
@@ -98,6 +61,7 @@ class KissneNotificationService : Service() {
     override fun onDestroy() {
         stopped = true
         reader.shutdownNow()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
@@ -176,7 +140,14 @@ class KissneNotificationService : Service() {
         fun update(context: Context, state: String, title: String, body: String) {
             // Status hints may wake an observer only while the app is foregrounded.
             // Background service starts are restricted after Android ends dataSync.
-            if (MainActivity.isVisible) start(context)
+            when (notificationAction(state, MainActivity.isVisible)) {
+                NotificationAction.START -> start(context)
+                NotificationAction.STOP -> {
+                    context.stopService(Intent(context, KissneNotificationService::class.java))
+                    NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+                }
+                NotificationAction.IGNORE -> Unit
+            }
         }
 
         private fun ensureChannel(context: Context) {

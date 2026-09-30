@@ -20,7 +20,9 @@ function fixture(history, options = {}) {
     bootstrap: async () => options.bootstrap?.() || ({ bound: true, conversation: { session_id: 'room-a' }, history }),
     poll: async () => ({ events: options.poll?.() || [] }),
     modelOptions: async () => ({ providers: [], models: [], efforts: [] }),
-    sendText: async () => ({ turn_id: 'second' }),
+    sendText: options.sendText || (async () => ({ turn_id: 'second' })),
+    ack: async () => {},
+    updateNotification: options.updateNotification || (() => {}),
   }
   // Execute the production screen and its dependencies; assertions target the rendered DOM.
   for (const file of ['core.js', 'assets.js', 'chat-lifecycle.js', 'chat-presentation.js', 'screens-a.js']) {
@@ -106,22 +108,66 @@ test('individual answer bubbles interleave with a new user message and retain th
   await expect.poll(spoken).toEqual(order)
 })
 
-test('waiting uses one continuous path, stops at completion, and process details have no frame', async () => {
-  let events = [{ type: 'pending', turn_id: 'first' }]
+test('idle and restored pending chats do not start a waiting animation', async () => {
+  const { root, reopen } = fixture([], {
+    bootstrap: () => ({ bound: true, conversation: { session_id: 'room-a' }, history: [], pending_turn_id: 'first' }),
+  })
+  for (let opening = 0; opening < 2; opening++) {
+    if (opening) reopen()
+    await expect.poll(() => root.querySelector('[data-turn-bridge]')).toBeTruthy()
+    expect(root.querySelector('[data-turn-bridge]').hidden).toBe(true)
+  }
+})
+
+test('only a local send starts waiting; first thinking event removes star and tail', async () => {
+  const events = []
   const { root, window } = fixture([], { poll: () => events.splice(0) })
-  await expect.poll(() => root.querySelector('animateMotion')).toBeTruthy()
+  await expect.poll(() => root.querySelector('[data-session-status]').hidden).toBe(true)
+  expect(root.querySelector('[data-turn-bridge]:not([hidden])')).toBeNull()
+  const input = root.querySelector('.composer__input')
+  input.value = '开始'
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  await expect.poll(() => root.querySelector('[data-turn-bridge]:not([hidden])')).toBeTruthy()
   const bridge = root.querySelector('[data-turn-bridge]')
-  const motion = bridge.querySelector('animateMotion')
-  expect(motion.getAttribute('repeatCount')).toBe('indefinite')
-  expect(motion.getAttribute('path')).toBe(bridge.querySelector('path').getAttribute('d'))
-  expect(window.getComputedStyle(bridge).opacity).toBe('1')
-  events.push({ type: 'completed', turn_id: 'first', text: '<think>内部过程。</think>回答。' })
+  const firstX = Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])
+  await expect.poll(() => Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])).toBeLessThan(firstX)
+  expect(bridge.querySelector('animateMotion')).toBeNull()
+  events.push({ type: 'delta', presentation: 'reasoning', turn_id: 'second', text: '内部过程。' })
+  await expect.poll(() => root.querySelector('.process-reasoning')?.textContent).toContain('内部过程。')
+  expect(bridge.hidden).toBe(true)
+  const stoppedPose = bridge.querySelector('[data-wait-star]').getAttribute('transform')
+  events.push({ type: 'completed', turn_id: 'second', text: '<think>内部过程。</think>回答。' })
   await expect.poll(() => root.querySelector('.msg--ai .bubble')?.textContent).toBe('回答。')
-  expect(bridge.hidden || !bridge.isConnected).toBe(true)
-  expect(root.querySelector('.msg--ai .bubble').textContent).not.toContain('内部过程')
+  expect(bridge.querySelector('[data-wait-star]').getAttribute('transform')).toBe(stoppedPose)
   const process = root.querySelector('.process-reasoning')
-  expect(process.textContent).toContain('内部过程')
   expect(window.getComputedStyle(process).borderLeftWidth).toBe('0px')
+})
+
+test('composer panels keep inside taps, close on outside taps and exclude each other', async () => {
+  const { root, window } = fixture([])
+  const plus = root.querySelector('[data-plus-toggle]')
+  const plusPanel = root.querySelector('[data-plus-panel]')
+  const sticker = root.querySelector('[data-sticker-toggle]')
+  const stickerPanel = root.querySelector('.stkpanel')
+  const tap = node => node.dispatchEvent(new window.Event('pointerdown', { bubbles: true }))
+  plus.click()
+  expect(plusPanel.hidden).toBe(false)
+  tap(plusPanel)
+  expect(plusPanel.hidden).toBe(false)
+  sticker.click()
+  expect(plusPanel.hidden).toBe(true)
+  expect(stickerPanel.hidden).toBe(false)
+  tap(stickerPanel)
+  expect(stickerPanel.hidden).toBe(false)
+  tap(root.querySelector('.chatbody'))
+  expect(stickerPanel.hidden).toBe(true)
+  plus.click()
+  tap(window.document.body)
+  expect(plusPanel.hidden).toBe(true)
+  for (const selector of ['.composerwrap', '.quickbar']) {
+    expect(window.getComputedStyle(root.querySelector(selector)).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+  }
+  expect(window.getComputedStyle(root.querySelector('.composerwrap')).position).toBe('absolute')
 })
 
 test('a different room with identical answer text cannot inherit the previous room process', async () => {
@@ -161,4 +207,38 @@ test('sticker tool transcripts stay out of spoken bubbles and ordinary emoji rem
   expect(root.querySelectorAll('.process-step--reasoning')).toHaveLength(0)
   expect([...root.querySelectorAll('.msg--ai .bubble')].map(node => node.textContent)).toEqual(['早上好😊'])
   expect(root.querySelector('.activity-detail')?.textContent).not.toContain('🎨')
+})
+
+test('a reply arriving before send acknowledgement cannot restart waiting or the work notification', async () => {
+  let accept
+  const events = [], notifications = []
+  const { root, window } = fixture([], {
+    sendText: () => new Promise(resolve => { accept = resolve }),
+    poll: () => events.splice(0),
+    updateNotification: state => notifications.push(state),
+  })
+  const input = root.querySelector('.composer__input')
+  input.value = '很快的回复'
+  input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  await expect.poll(() => typeof accept).toBe('function')
+  events.push({ type: 'completed', turn_id: 'second', text: '已经完成。' })
+  await expect.poll(() => root.querySelector('.msg--ai .bubble')?.textContent).toBe('已经完成。')
+  const beforeAck = notifications.length
+  accept({ turn_id: 'second' })
+  await expect.poll(() => Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.getItem(window.localStorage.key(i))).join('')).toContain('turn:second:user')
+  expect(root.querySelector('.msg--me .bubble')?.textContent).toBe('很快的回复')
+  expect(root.querySelector('[data-turn-bridge]:not([hidden])')).toBeNull()
+  expect(root.querySelector('[data-live-stop]').hidden).toBe(true)
+  expect(notifications.slice(beforeAck)).not.toContain('working')
+})
+
+test('events explicitly belonging to another session never appear in this chat', async () => {
+  const events = [
+    { type: 'delta', presentation: 'reasoning', session_id: 'room-b', turn_id: 'foreign', text: '别的会话过程' },
+    { type: 'completed', session_id: 'room-b', turn_id: 'foreign', text: '别的会话回复' },
+    { type: 'completed', session_id: 'room-a', turn_id: 'here', text: '本会话回复' },
+  ]
+  const { root } = fixture([], { poll: () => events.splice(0) })
+  await expect.poll(() => root.querySelector('.msg--ai .bubble')?.textContent).toBe('本会话回复')
+  expect(root.textContent).not.toContain('别的会话')
 })

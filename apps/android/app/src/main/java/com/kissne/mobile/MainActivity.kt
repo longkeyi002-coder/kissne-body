@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) KissneNotificationService.start(this)
+            if (granted) KissneMessageJob.schedule(this)
         }
 
     private val attachmentPicker =
@@ -188,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            KissneNotificationService.start(this)
+            KissneMessageJob.schedule(this)
         }
     }
 
