@@ -36,9 +36,9 @@ jobs:
       - name: Chat history and presentation regressions
         working-directory: tests-js
         run: |
-          npm install --prefix "$RUNNER_TEMP/kissne-chat-tests" --ignore-scripts jsdom@29.1.1 vitest@4.1.10
+          npm install --prefix "$RUNNER_TEMP/kissne-chat-tests" --ignore-scripts jsdom@29.1.1 vitest@4.1.10 fake-indexeddb@6.2.5
           ln -s "$RUNNER_TEMP/kissne-chat-tests/node_modules" node_modules
-          "$RUNNER_TEMP/kissne-chat-tests/node_modules/.bin/vitest" run kissne-chat-history.test.mjs kissne-chat-presentation.test.mjs
+          "$RUNNER_TEMP/kissne-chat-tests/node_modules/.bin/vitest" run kissne-chat-history.test.mjs kissne-chat-presentation.test.mjs kissne-chat-store.test.mjs kissne-transport.test.mjs
       - run: gradle test
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4

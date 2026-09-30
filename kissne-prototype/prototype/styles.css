@@ -2001,3 +2001,17 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
 .memreviewform{display:grid;gap:12px;margin-top:20px}
 .memreviewform label{display:grid;gap:6px;font-size:12px;color:var(--ink-3)}
 .memreviewform input,.memreviewform select{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--paper,#fff);color:var(--ink);font:inherit}
+
+.activity-stream__steps > .activity-divider{display:none}
+.activity-stream__steps .process-line::before,.activity-stream__steps .process-line::after{display:none}
+.activity-stream__steps[hidden]{display:none}
+
+.browser-return,.choicecard{margin:16px 12px}
+.browser-return textarea,.choicecard textarea{width:100%;min-height:100px;padding:10px;border:1px solid var(--line);border-radius:12px;font:inherit}
+.browser-return p{margin:8px 0;overflow-wrap:anywhere}
+.browser-return a{text-decoration:underline}
+.choicecard [data-clarify-options]{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.choicecard label{display:flex;align-items:center;gap:6px}
+
+.expression-setting{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 16px}
+.expression-setting .muted{flex-basis:100%}

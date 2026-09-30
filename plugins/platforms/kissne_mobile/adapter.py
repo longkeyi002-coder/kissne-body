@@ -244,7 +244,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not target:
             return SendResult(success=False, error="missing target installation")
         draft_id = abs(hash(str(turn_id or "mobile"))) % 2147483647 or 1
-        return await self.send_draft(target, draft_id, text, metadata=metadata)
+        frame_metadata = dict(metadata or {})
+        if reply_to:
+            frame_metadata["_mobile_turn_id"] = str(reply_to)
+        return await self.send_draft(target, draft_id, text, metadata=frame_metadata)
 
     def __init__(self, config: PlatformConfig, platform: Optional[Platform] = None) -> None:
         super().__init__(config, platform or Platform(PLATFORM_NAME))
@@ -273,6 +276,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         # A concurrent ordinary turn must never be mislabeled as a session reset.
         self._session_reset_turns: Dict[str, str] = {}
         self._draft_text_last: Dict[Tuple[str, int], str] = {}
+        self._draft_origins: Dict[Tuple[str, int], str] = {}
         self._draft_activity_seen: Dict[Tuple[str, int], set[str]] = {}
         self._draft_tool_labels: Dict[Tuple[str, int], Dict[str, str]] = {}
         # Turns admitted through the HTTP inbound path; direct store turns remain auxiliary notices.
@@ -510,6 +514,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post('/memory/review', memory_review_handler)
         app.router.add_post(CANCEL_PATH, self._handle_cancel)
         app.router.add_post("/approval", self._handle_approval)
+        app.router.add_post("/clarify", self._handle_clarify)
         app.router.add_post("/sticker-index", self._handle_sticker_index)
         app.router.add_post(REVOKE_PATH, self._handle_revoke)
         app.router.add_get(HEALTH_PATH, self._handle_health)
@@ -578,6 +583,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             await asyncio.to_thread(store.close)
         self._pair_attempts.clear()
         self._draft_text_last.clear()
+        self._draft_origins.clear()
         self._draft_activity_seen.clear()
         self._mark_disconnected()
         logger.info("[kissne_mobile] disconnected")
@@ -725,10 +731,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
             text = re.sub(r"\n*---\s*$", "", text).rstrip()
         return text, activities
 
-    def _clear_draft_state(self, installation_id: str) -> None:
+    def _clear_draft_state(self, installation_id: str, turn_id: Optional[str] = None) -> None:
         installation = str(installation_id or "")
         keys = set(self._draft_text_last) | set(self._draft_activity_seen) | set(self._draft_tool_labels)
-        for key in [key for key in keys if key[0] == installation]:
+        for key in [key for key in keys if key[0] == installation
+                    and (turn_id is None or self._draft_origins.get(key) == turn_id)]:
+            self._draft_origins.pop(key, None)
             self._draft_text_last.pop(key, None)
             self._draft_activity_seen.pop(key, None)
             self._draft_tool_labels.pop(key, None)
@@ -761,6 +769,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
             logger.error("[kissne_mobile] device store unavailable; cannot queue outbound", exc_info=True)
             return None
         turn_id = str(target_turn_id or "").strip()
+        if not turn_id and reply_to:
+            origin = await asyncio.to_thread(store.turn, str(reply_to))
+            if origin is not None or str(reply_to).startswith("kbm_turn_"):
+                turn_id = str(reply_to)
         if turn_id:
             target = await asyncio.to_thread(store.turn, turn_id)
             if not target or str(target.get("installation_id") or "") != installation:
@@ -769,6 +781,10 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 return None
         else:
             turn_id = await asyncio.to_thread(store.pending_turn_id, installation) or ""
+        from .delivery_scope import turn_session
+        origin_session = await asyncio.to_thread(turn_session, self, installation, turn_id)
+        if origin_session:
+            payload["session_id"] = origin_session
         try:
             seq = await asyncio.to_thread(
                 store.enqueue_event, installation, event_type, payload, turn_id or None,
@@ -821,7 +837,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     installation, "notice", content=content, reply_to=None,
                     extra={"presentation": "notice"})
             else:
-                self._clear_draft_state(installation)
+                self._clear_draft_state(installation, reply_to)
                 final_extra = {"presentation": "assistant_text"} if reply_to is None else None
                 message_id = await self._queue_event(
                     installation, EVENT_COMPLETED, content=content, reply_to=reply_to,
@@ -829,6 +845,27 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if message_id is None:
             return SendResult(success=False, error="missing target installation")
         return SendResult(success=True, message_id=message_id)
+
+    async def send_clarify(self, chat_id: str, question: str, choices: Optional[list],
+                           clarify_id: str, session_key: str,
+                           metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        from tools import clarify_gateway
+        entry = clarify_gateway.get_pending_for_session(session_key, include_choice_prompts=True)
+        if session_key != self.mobile_session_key(chat_id) or entry is None or entry.clarify_id != clarify_id:
+            return SendResult(success=False, error="unknown_clarify")
+        if not hasattr(self, "_mobile_clarify_owners"):
+            self._mobile_clarify_owners = {}
+        self._mobile_clarify_owners[clarify_id] = chat_id
+        message_id = await self._queue_event(chat_id, "clarify_required", extra={
+            "clarify_id": clarify_id, "question": question, "choices": list(choices or []),
+            "multi_select": bool(entry.multi_select), "status": "pending"})
+        return SendResult(success=message_id is not None, message_id=message_id)
+
+    async def retire_clarify_card(self, clarify_id: str, notice: str) -> None:
+        owner = getattr(self, "_mobile_clarify_owners", {}).pop(clarify_id, None)
+        if owner:
+            await self._queue_event(owner, "clarify_resolved", extra={
+                "clarify_id": clarify_id, "status": "expired", "notice": notice})
 
     async def send_reasoning(self, chat_id: str, content: str, *,
                              draft_id: int = 0) -> SendResult:
@@ -857,6 +894,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         """Separate cumulative assistant text from semantic tool Activity before delivery."""
         installation = str(chat_id or "").strip()
         key = (installation, int(draft_id))
+        origin_turn = str((metadata or {}).get("_mobile_turn_id") or "")
+        if origin_turn:
+            self._draft_origins[key] = origin_turn
         visible, activities = self._split_draft_frame(content)
         seen = self._draft_activity_seen.setdefault(key, set())
         labels = self._draft_tool_labels.setdefault(key, {})
@@ -879,7 +919,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                     str(activity.get("tool_name") or ""), None, None)
             presentation = "tool_result" if kind == "tool_result" else "tool_call"
             last_message_id = await self._queue_event(
-                installation, EVENT_DELTA, content="",
+                installation, EVENT_DELTA, content="", target_turn_id=origin_turn or None,
                 extra={
                     "draft_id": int(draft_id),
                     "presentation": presentation,
@@ -890,7 +930,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if visible.strip() and self._draft_text_last.get(key) != visible:
             self._draft_text_last[key] = visible
             last_message_id = await self._queue_event(
-                installation, EVENT_DELTA, content=visible,
+                installation, EVENT_DELTA, content=visible, target_turn_id=origin_turn or None,
                 extra={"draft_id": int(draft_id), "presentation": "assistant_text"})
 
         if last_message_id is None:
@@ -1374,9 +1414,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
+        from .delivery_scope import remember_turn
+        delivery_scope = await asyncio.to_thread(remember_turn, self, installation, turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
-            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
+            {"message_id": message_id, **delivery_scope}, turn_id, cap=max(1, self._outbound_cap))
 
         is_photo = kind == "photo"
         is_audio = kind == "audio"
@@ -1463,6 +1505,16 @@ class KissneMobileAdapter(BasePlatformAdapter):
         row = get_session(session_id) if callable(get_session) else None
         return [row if isinstance(row, dict) else {"id": session_id}]
 
+    def _mobile_display_transcript(self, session_id: str) -> List[Dict[str, Any]]:
+        """Read canonical display rows without model-replay alternation repair."""
+        store = getattr(self, "_session_store", None)
+        resolve_db = getattr(store, "_db_for_session_id", None)
+        db = resolve_db(session_id) if callable(resolve_db) else None
+        if db is None or not callable(getattr(db, "get_messages", None)):
+            return store.load_transcript(session_id) or [] if store is not None else []
+        tip = db.get_compression_tip(session_id) or session_id
+        return db.get_messages(tip, include_compacted=True)
+
     def _mobile_history_rows(self, installation: str,
                              sessions: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Flatten /new-separated transcripts into one Mobile-visible timeline.
@@ -1501,7 +1553,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             if not session_id:
                 continue
             try:
-                transcript = store.load_transcript(session_id) or []
+                transcript = self._mobile_display_transcript(session_id)
             except Exception:
                 logger.warning("[kissne_mobile] history read failed for %s", session_id, exc_info=True)
                 continue
@@ -1513,9 +1565,13 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 role = str(row.get("role") or "").strip().lower()
                 if role not in {"user", "assistant"}:
                     continue
+                if not self._mobile_visible_transcript_row(row):
+                    if role == "user":
+                        active_mobile_turn = ""
+                    continue
                 mobile_turn = ""
                 if role == "user":
-                    candidate = str(row.get("message_id") or "").strip()
+                    candidate = str(row.get("platform_message_id") or row.get("message_id") or "").strip()
                     active_mobile_turn = candidate if candidate.startswith("kbm_turn_") else ""
                     mobile_turn = active_mobile_turn
                 else:
@@ -1530,7 +1586,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
                 stamp = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else 0.0
                 message_ref = f"turn:{mobile_turn}:{role}" if mobile_turn else f"{session_id}:{index}"
-                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp}
+                item: Dict[str, Any] = {"message_ref": message_ref, "role": role, "text": text, "created_at": stamp, "session_id": session_id}
                 if mobile_turn:
                     item["_turn_id"] = mobile_turn
                 if attachments:
@@ -1826,9 +1882,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
         row = materialized[0]
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
+        from .delivery_scope import remember_turn
+        delivery_scope = await asyncio.to_thread(remember_turn, self, installation, turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
-            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap)
+            {"message_id": message_id, **delivery_scope}, turn_id, cap=max(1, self._outbound_cap)
         )
         message_type = (
             MessageType.STICKER if kind == "sticker"
@@ -1974,9 +2032,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
 
         await asyncio.to_thread(store.open_turn, turn_id, installation, state=TURN_PENDING)
         self._inbound_turns.add(turn_id)
+        from .delivery_scope import remember_turn
+        delivery_scope = await asyncio.to_thread(remember_turn, self, installation, turn_id)
         await asyncio.to_thread(
             store.enqueue_event, installation, EVENT_PENDING,
-            {"message_id": message_id}, turn_id, cap=max(1, self._outbound_cap))
+            {"message_id": message_id, **delivery_scope}, turn_id, cap=max(1, self._outbound_cap))
 
         source = self.source_for_installation(installation)
         command_name = text.lstrip().split(maxsplit=1)[0].lower() if text.lstrip().startswith("/") else ""
@@ -2088,6 +2148,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         limit = max(1, self._read_limit)
         events = await asyncio.to_thread(
             self.device_store().events_after, installation, cursor, limit=limit)
+        from .delivery_scope import turn_session
+        for event in events:
+            if event.get("turn_id") and not event.get("session_id"):
+                origin_session = await asyncio.to_thread(turn_session, self, installation, str(event["turn_id"]))
+                if origin_session:
+                    event["session_id"] = origin_session
         next_cursor = int(events[-1]["seq"]) if events else cursor
         return _json_response({
             "ok": True,
@@ -2374,7 +2440,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if role not in {"user", "assistant"}:
             return False
         display_kind = str(row.get("display_kind") or "").strip().lower()
-        if display_kind in {"hidden", "internal_notification", "tool_progress", "reasoning"}:
+        if display_kind in {"hidden", "internal_notification", "tool_progress", "reasoning", "thinking", "analysis", "commentary"}:
             return False
         if role == "assistant" and (
             row.get("tool_name")
@@ -2397,7 +2463,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if store is None or not session_id:
             return [], False, set()
         try:
-            rows = store.load_transcript(session_id) or []
+            rows = self._mobile_display_transcript(session_id)
         except Exception:
             logger.warning("[kissne_mobile] could not read history for a bootstrap", exc_info=True)
             return [], False, set()
@@ -2445,21 +2511,22 @@ class KissneMobileAdapter(BasePlatformAdapter):
             text_value = row.get("content", row.get("text"))
             text = text_value if isinstance(text_value, str) else ""
             stamp = row.get("created_at", row.get("timestamp", row.get("ts")))
+            presentation = str(row.get("display_kind") or row.get("presentation") or "")
 
             if role == "user":
                 if current is not None:
                     groups.append(current)
-                turn_id = str(row.get("message_id") or "").strip()
+                turn_id = str(row.get("platform_message_id") or row.get("message_id") or "").strip()
                 item: Dict[str, Any] = {"role": "user", "text": text}
                 if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
                     item["created_at"] = float(stamp)
                 if turn_id:
                     item["message_ref"] = f"turn:{turn_id}:user"
-                current = {"turn_id": turn_id, "items": [item]}
+                current = {"turn_id": turn_id, "items": [] if presentation in {"hidden", "internal_notification"} else [item]}
                 continue
 
             # Never expose orphan assistant/tool rows from before the bounded user-led turn.
-            if current is None:
+            if current is None or presentation in {"hidden", "internal_notification"}:
                 continue
 
             if role == "assistant":
@@ -2467,6 +2534,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 if not text.strip() and not calls:
                     continue
                 item = {"role": "assistant", "text": text}
+                if presentation in {"reasoning", "thinking", "analysis", "commentary", "tool_progress", "tool_call", "tool_result"}:
+                    item["presentation"] = "reasoning" if presentation == "analysis" else presentation
                 if calls:
                     item["tool_calls"] = calls
                     item["activity_only"] = not bool(text.strip())
@@ -2527,7 +2596,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
             # of assistant(tool_calls)/tool rows sit between them. Preserve reconciliation semantics.
             final_assistant: Optional[Dict[str, Any]] = None
             for item in group_items:
-                if item.get("role") == "assistant" and str(item.get("text") or "").strip():
+                if (item.get("role") == "assistant" and str(item.get("text") or "").strip()
+                        and not item.get("presentation") and not item.get("tool_calls")):
                     final_assistant = item
             if turn_id:
                 for item in group_items:
@@ -2649,6 +2719,11 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "allow_permanent": bool(item.get("allow_permanent", False)),
             "status": "pending",
         } for item in live_approvals]
+        from tools import clarify_gateway
+        clarify = clarify_gateway.get_pending_for_session(self.mobile_session_key(installation), include_choice_prompts=True)
+        clarifies = [{"clarify_id": clarify.clarify_id, "question": clarify.question,
+                      "choices": clarify.choices or [], "multi_select": clarify.multi_select,
+                      "awaiting_text": clarify.awaiting_text}] if clarify and not clarify.event.is_set() else []
         covered = await self._bootstrap_covered_event_seqs(
             installation, cursor, represented_turn_ids)
         return _json_response({
@@ -2659,8 +2734,38 @@ class KissneMobileAdapter(BasePlatformAdapter):
             "history_truncated": truncated,
             "pending_turn_id": pending,
             "pending_approvals": approvals,
+            "pending_clarifies": clarifies,
             "covered_event_seqs": covered,
         })
+
+    async def _handle_clarify(self, request: web.Request) -> web.Response:
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        body, error = await self._payload(request)
+        if error is not None:
+            return error
+        body = body or {}
+        clarify_id = str(body.get("clarify_id") or "")
+        response = str(body.get("response") or "").strip()
+        from tools import clarify_gateway
+        with clarify_gateway._lock:
+            entry = clarify_gateway.get_pending_for_session(self.mobile_session_key(installation), include_choice_prompts=True)
+            if entry is None or entry.clarify_id != clarify_id or entry.event.is_set():
+                return _error_response("unknown_clarify", 404)
+            if body.get("other"):
+                clarify_gateway.mark_awaiting_text(clarify_id)
+                return _json_response({"ok": True, "clarify_id": clarify_id, "status": "awaiting_text"})
+            if not response:
+                return _error_response("response_required", 400)
+            value, reason = clarify_gateway._coerce_text_response_detailed(entry, response)
+            if reason or value is None:
+                return _error_response("invalid_selection", 400)
+            if not clarify_gateway.resolve_gateway_clarify(clarify_id, value):
+                return _error_response("clarify_no_longer_pending", 409)
+        getattr(self, "_mobile_clarify_owners", {}).pop(clarify_id, None)
+        await self._queue_event(installation, "clarify_resolved", extra={"clarify_id": clarify_id, "status": "answered"})
+        return _json_response({"ok": True, "clarify_id": clarify_id, "status": "answered"})
 
     async def _handle_approval(self, request: web.Request) -> web.Response:
         """Resolve one real, currently-pending Hermes approval by its opaque request id."""
@@ -2741,7 +2846,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         if not moved:
             return _error_response("turn_not_cancellable", 409)
         self._inbound_turns.discard(turn_id)
-        self._clear_draft_state(installation)
+        self._clear_draft_state(installation, turn_id)
         # A cancelled pending turn must not reappear as a synthetic attachment-only
         # history row on the next bootstrap.
         await asyncio.to_thread(store.delete_attachment_message, installation, turn_id)

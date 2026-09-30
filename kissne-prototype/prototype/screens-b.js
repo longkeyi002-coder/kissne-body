@@ -433,6 +433,7 @@
             + listRow({ title: '会话列表', sub: '查看服务器上的全部对话', icon: 'chat', to: '#/sessions' })
             + listRow({ title: '本地 Laya（实验）', sub: '在手机上判断长期记忆候选', icon: 'cpu', to: '#/laya' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
+            + '<label class="expression-setting"><input type="checkbox" data-expression-filter' + (!window.KissneExpressionFilter || window.KissneExpressionFilter.enabled() ? ' checked' : '') + '> 简化模板套话<span class="muted">仅调整聊天显示，不增加模型请求</span></label>'
             + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
             + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })
           , { tight: true })}
@@ -443,6 +444,12 @@
           ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
       </div>`;
+    },
+    mount: function (root) {
+      var control = root.querySelector('[data-expression-filter]');
+      function change() { if (window.KissneExpressionFilter) window.KissneExpressionFilter.setEnabled(control.checked); }
+      if (control) control.addEventListener('change', change);
+      return function () { if (control) control.removeEventListener('change', change); };
     }
   });
 

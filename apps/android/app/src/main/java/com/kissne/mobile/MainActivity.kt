@@ -45,6 +45,16 @@ class MainActivity : AppCompatActivity() {
     private var pendingAttachmentRequestId: String? = null
     private var pendingAttachmentKind: String? = null
 
+    private val browserResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        val text = data?.getStringExtra(BrowserActivity.EXTRA_TEXT)?.trim().orEmpty()
+        if (result.resultCode == RESULT_OK && text.isNotEmpty() && ::webView.isInitialized) {
+            val payload = JSONObject().put("text", text).put("source_url", data?.getStringExtra(BrowserActivity.EXTRA_URL).orEmpty())
+                .put("source_title", data?.getStringExtra(BrowserActivity.EXTRA_TITLE).orEmpty()).put("session_id", data?.getStringExtra(BrowserActivity.EXTRA_SESSION).orEmpty())
+            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('kissne-browser-return',{detail:$payload}));", null)
+        }
+    }
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) KissneMessageJob.schedule(this)
@@ -193,7 +203,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openBrowser(url: String?, text: String? = null) {
-        startActivity(Intent(this, BrowserActivity::class.java).apply {
+        browserResult.launch(Intent(this, BrowserActivity::class.java).apply {
+            putExtra(BrowserActivity.EXTRA_SESSION, MobileSessionStore(this@MainActivity).cachedSessionId)
             url?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_URL, it) }
             text?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_TEXT, it) }
         })

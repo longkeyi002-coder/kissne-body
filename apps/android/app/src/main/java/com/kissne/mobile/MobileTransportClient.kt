@@ -149,6 +149,9 @@ class MobileTransportClient(
     fun pollPayload(cursor: Long): JSONObject = request("GET", "/messages?cursor=$cursor")
 
 
+    fun clarifyPayload(clarifyId: String, response: String, other: Boolean): JSONObject =
+        request("POST", "/clarify", JSONObject().put("clarify_id", clarifyId).put("response", response).put("other", other))
+
     fun ack(cursor: Long) {
         request("POST", "/messages", JSONObject().put("ack", JSONObject().put("cursor", cursor)))
     }

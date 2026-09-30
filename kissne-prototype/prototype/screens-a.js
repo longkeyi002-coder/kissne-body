@@ -453,16 +453,19 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
+  function hasChatPayload(html) {
+    return /<(?:img|svg|video|audio|canvas)\b/i.test(String(html || '')) || !!String(html || '').replace(/<[^>]*>/g, '').replace(/&(?:nbsp|#160);/gi, ' ').replace(/[\s\u200b]/g, '');
+  }
   function assistantBubbleHtml(html, cls) {
-    var parts = splitAssistantBubbleParts(html);
-    if (!parts.length) parts = [''];
+    var parts = splitAssistantBubbleParts(window.KissneExpressionFilter ? window.KissneExpressionFilter.html(html) : html);
+    if (!parts.length) return '';
     return parts.map(function (part) {
       return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
     }).join('');
   }
   function splitAssistantBubbleParts(html) {
     var raw = String(html == null ? '' : html).replace(/\r\n?/g, '\n').trim();
-    if (!raw) return [];
+    if (!raw || !hasChatPayload(raw)) return [];
     var blocks = raw.split(/\n\s*\n+/).filter(function (part) { return !!String(part || '').trim(); });
     var out = [];
     blocks.forEach(function (block) {
@@ -484,6 +487,10 @@
           || block.indexOf(fence) >= 0
           || /class="stkmsg/.test(block)) {
         out.push(block);
+        return;
+      }
+      if (/<(?:strong|em|b|i|a|code)\b/i.test(block)) {
+        block.split(/\n+/).filter(function (line) { return hasChatPayload(line); }).forEach(function (line) { out.push(line); });
         return;
       }
       block = block.replace(/&quot;/g, '"');
@@ -526,7 +533,7 @@
     var merged = [];
     out.forEach(function (part) {
       var piece = String(part || '').trim();
-      if (!piece) return;
+      if (!piece || !hasChatPayload(piece)) return;
       var prev = merged.length ? merged[merged.length - 1] : '';
       var lonely = punctOnly.test(piece)
         || (piece.length <= 2 && /[（）()【】「」《》]/.test(piece));
@@ -555,6 +562,7 @@
        or visible reasoning is not spoken content, so it must not borrow the fox
        avatar that identifies an actual reply. */
     var process = activity ? '<div class="activity-history">' + activity + '</div>' : '';
+    if (!hasChatPayload(html)) return process;
     return process + '<div class="msg msg--ai" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">'
       + assistantBubbleHtml(html, cls)
@@ -719,7 +727,7 @@
       var sid = String(CHAT_LOG_SESSION || '');
       var key = chatLogStorageKeyFor(sid);
       if (!key) return; /* 未绑定会话时不落盘，避免写进错误会话 */
-      var safe = CHAT_LOG.slice(-240).map(function (m) {
+      var safe = CHAT_LOG.filter(function (m) { return !m.pendingSend; }).slice(-240).map(function (m) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
@@ -933,15 +941,18 @@
         + '<span class="activity-divider__line"></span>'
         + '<span class="activity-divider__star">✦</span>'
         + '<span class="activity-divider__line"></span></div>' : '';
+      var expanded = item.expanded === undefined ? !closed : !!item.expanded;
+      var detailHidden = expanded ? '' : ' hidden';
+      var expandedAttr = expanded ? 'true' : 'false';
       if (item.kind === 'reasoning') {
         var reasoningActive = !closed && index === lastIndex;
-        return divider + '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
-          + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false" aria-label="'
+        return divider + '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '">'
+          + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="' + expandedAttr + '" aria-label="'
           + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
           + '<span class="process-line__mark" aria-hidden="true"></span>'
           + (reasoningActive ? '<span class="process-line__label">正在处理</span>' + dots() : '')
           + '</button>'
-          + '<div class="activity-detail process-reasoning" hidden>' + reasoningHtml(item.text) + '</div></section>';
+          + '<div class="activity-detail process-reasoning"' + detailHidden + '>' + reasoningHtml(item.text) + '</div></section>';
       }
       if (item.kind !== 'tool') return '';
       var key = String(item.key || '');
@@ -954,25 +965,28 @@
       var label = tool.label || toolActivityLabel(tool.name || detail);
       if (/^使用工具$|^使用\s+[a-z0-9_.-]+$/i.test(label)) label = toolActivityLabel(tool.name || detail);
       var iconName = toolActivityIcon(label);
-      return divider + '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + '" data-tool-call-id="' + esc(tool.id || key) + '">'
-        + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="false" aria-label="'
+      return divider + '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+        + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="' + expandedAttr + '" aria-label="'
         + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
         + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
         + '<span class="process-line__label process-line__label--tool">' + esc(label) + '</span>'
         + (toolActive ? dots() : '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>')
         + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></section>';
+        + '<div class="activity-detail"' + detailHidden + '>' + esc(detail) + '</div></section>';
     }).join('');
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
     var state = activityForTurn(id);
-    var closed = done === true || state.done === true;
+    var closed = done === true || state.done === true || state.answerStarted === true;
     var rows = activityRows(state, closed);
     if (!rows) return '';
+    var expanded = state.expanded === undefined ? !closed : !!state.expanded;
     return '<div class="activity-stream' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
-      + rows
-      + '</div>';
+      + '<button type="button" class="process-line activity-summary" data-activity-summary aria-expanded="' + (expanded ? 'true' : 'false') + '">'
+      + '<span class="process-line__mark" aria-hidden="true"></span><span class="process-line__label">' + (closed ? '处理完成' : '正在处理') + '</span>'
+      + (closed ? '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>' : dots())
+      + '</button><div class="activity-stream__steps" data-activity-steps' + (expanded ? '' : ' hidden') + '>' + rows + '</div></div>';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
@@ -1220,7 +1234,7 @@
       var row = m.who === 'sys' ? sysMsg(m.html, m.time)
         : (m.who === 'ai'
           ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '', m.messageRef || '')
-          : meMsg(m.html, m.meta || '', m.time, MY_AVA, m.messageRef || ''));
+          : meMsg(m.html, m.meta || '', m.time, MY_AVA, m.messageRef || m.messageId || ''));
       return divider + row;
     }).join('');
   }
@@ -1265,7 +1279,8 @@
                 /* 点一条 → 回人人星并**定位到那条消息**（find=关键词），和微信一样 */
                 var ref = String(it.message_ref || '');
                 var jump = '#/chat?state=normal&find=' + encodeURIComponent(SEARCH_QUERY || it.k)
-                  + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '');
+                  + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '')
+                  + (it.session_id ? '&jump_session=' + encodeURIComponent(it.session_id) : '');
                 return '<div class="srch__row" data-kw="' + esc(it.k) + '"'
                   + ' data-nav="' + esc(jump) + '">'
                   + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
@@ -1431,7 +1446,7 @@
       if (sIn) {
         var listEl = root.querySelector('[data-srchlist]');
         var searchTimer = null;
-        var searchSeq = 0;
+        var searchSeq = 0, searchInFlight = false, pendingSearch = null, localMatches = [];
         function paintRemoteResults(rows) {
           if (!listEl) return;
           if (!rows.length) {
@@ -1451,7 +1466,8 @@
               var ref = String(it.message_ref || '');
               var q = String(sIn.value || '').trim();
               var jump = '#/chat?state=normal&find=' + encodeURIComponent(q)
-                + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '');
+                + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '')
+                  + (it.session_id ? '&jump_session=' + encodeURIComponent(it.session_id) : '');
               var sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
               return '<div class="srch__row" data-kw="' + esc(String(it.text || '')) + '" data-message-ref="' + esc(ref) + '" data-nav="' + esc(jump) + '">'
                 + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
@@ -1462,31 +1478,40 @@
             }).join('');
           }).join('');
         }
+        function runPendingSearch() {
+          if (searchInFlight || !pendingSearch) return;
+          var task = pendingSearch; pendingSearch = null;
+          var transport = window.KissneTransport;
+          if (!transport || !transport.search) return;
+          searchInFlight = true;
+          transport.search(task.value, 500).then(function (payload) {
+            if (task.seq !== searchSeq) return;
+            var seen = Object.create(null);
+            SEARCH_RESULTS = (Array.isArray(payload && payload.results) ? payload.results : []).concat(localMatches).filter(function (row) {
+              var key = row.message_ref || (row.role + ':' + row.text + ':' + row.created_at);
+              if (seen[key]) return false; seen[key] = true; return true;
+            }); paintRemoteResults(SEARCH_RESULTS);
+          }).catch(function () { if (task.seq === searchSeq && !localMatches.length) listEl.innerHTML = '<div class="srch__empty">本地暂无匹配记录，远端搜索失败，请重试</div>'; })
+            .finally(function () { searchInFlight = false; runPendingSearch(); });
+        }
         function remoteSearch() {
-          var value = (sIn.value || '').trim();
-          SEARCH_QUERY = value;
-          SEARCH_RESULTS = [];
-          clearTimeout(searchTimer);
-          if (!value) {
-            listEl.innerHTML = SEARCH_LOG.length ? listEl.innerHTML : '<div class="srch__empty">输入关键词，搜索全部聊天记录</div>';
-            return;
-          }
-          var seq = ++searchSeq;
-          listEl.innerHTML = '<div class="srch__empty">正在搜索全部聊天记录…</div>';
-          searchTimer = setTimeout(function () {
-            var transport = window.KissneTransport;
-            if (!transport || typeof transport.search !== 'function') {
-              listEl.innerHTML = '<div class="srch__empty">当前连接不支持历史搜索</div>';
-              return;
+          var value = (sIn.value || '').trim(), seq = ++searchSeq;
+          SEARCH_QUERY = value; SEARCH_RESULTS = []; localMatches = []; pendingSearch = null; clearTimeout(searchTimer);
+          if (!value) { listEl.innerHTML = '<div class="srch__empty">输入关键词，搜索全部聊天记录</div>'; return; }
+          listEl.innerHTML = '<div class="srch__empty">正在搜索聊天记录…</div>';
+          var transport = window.KissneTransport;
+          if (transport && transport.searchLocal) transport.searchLocal(value, 500).then(function (payload) {
+            if (seq !== searchSeq) return;
+            localMatches = Array.isArray(payload && payload.results) ? payload.results : [];
+            if (localMatches.length) {
+              var seenLocal = Object.create(null);
+              SEARCH_RESULTS = SEARCH_RESULTS.concat(localMatches).filter(function (row) {
+                var key = row.message_ref || (row.role + ':' + row.text + ':' + row.created_at);
+                if (seenLocal[key]) return false; seenLocal[key] = true; return true;
+              }); paintRemoteResults(SEARCH_RESULTS);
             }
-            transport.search(value, 500).then(function (payload) {
-              if (seq !== searchSeq) return;
-              SEARCH_RESULTS = Array.isArray(payload && payload.results) ? payload.results : [];
-              paintRemoteResults(SEARCH_RESULTS);
-            }).catch(function () {
-              if (seq === searchSeq) listEl.innerHTML = '<div class="srch__empty">搜索失败，请稍后重试</div>';
-            });
-          }, 180);
+          }).catch(function () {});
+          searchTimer = setTimeout(function () { if (seq === searchSeq) { pendingSearch = { value: value, seq: seq }; runPendingSearch(); } }, 300);
         }
         function sweep() {
           if (!listEl) return;
@@ -1524,6 +1549,7 @@
           sweep();
         }
         function onClear() {
+          searchSeq++; pendingSearch = null; clearTimeout(searchTimer);
           SEARCH_LOG.length = 0;
           SEARCH_RESULTS = [];
           SEARCH_QUERY = '';
@@ -1549,6 +1575,7 @@
         var clr = root.querySelector('[data-clearsrch]');
         if (clr) clr.addEventListener('click', onClear);
         return function () {
+          searchSeq++; pendingSearch = null; clearTimeout(searchTimer);
           sIn.removeEventListener('input', filter);
           sIn.removeEventListener('input', remoteSearch);
           root.removeEventListener('click', onQuote);
@@ -1645,7 +1672,8 @@
             if (!liveStopped && !liveSwitching) append(aiMsg(part, '', clockNow(), '', 'talk', '', ref));
           }, setTimeout, clearTimeout, count);
         }
-        var parts = splitAssistantBubbleParts(chatHtmlFromWire(text));
+        var answerHtml = chatHtmlFromWire(text);
+        var parts = splitAssistantBubbleParts(window.KissneExpressionFilter ? window.KissneExpressionFilter.html(answerHtml) : answerHtml);
         if (pending && parts.length) parts.pop();
         bubbleDeliveries[id].update(parts);
         persistChatLog();
@@ -2221,6 +2249,30 @@
         el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
       }
       var waitBridgeSequence = 0;
+      function paintWaitingPose(bridge, pose) {
+        bridge._waitProgress = pose.progress;
+        var fade = bridge.querySelector('[data-wait-fade]');
+        fade.setAttribute('x1', pose.tailStart.x); fade.setAttribute('y1', pose.tailStart.y);
+        fade.setAttribute('x2', pose.star.x); fade.setAttribute('y2', pose.star.y);
+        bridge.querySelector('[data-wait-tail]').setAttribute('d', pose.tail);
+        bridge.querySelector('[data-wait-star]').setAttribute('transform', 'translate(' + pose.star.x + ' ' + pose.star.y + ')');
+      }
+      function arriveTurnBridge(el, event) {
+        var bridge = el.querySelector('[data-turn-bridge]');
+        bridge._waitEvents = bridge._waitEvents || []; bridge._waitEvents.push(event);
+        if (bridge._waitArriving) return;
+        bridge._waitArriving = true;
+        if (bridge._waitFrame != null) cancelAnimationFrame(bridge._waitFrame);
+        var from = bridge._waitProgress || 0, started = performance.now(), duration = 80 + 100 * (1 - from);
+        function frame() {
+          if (liveStopped || !bridge.isConnected || bridge.hidden) return;
+          var progress = Math.min(1, (performance.now() - started) / duration);
+          paintWaitingPose(bridge, window.KissneChatPresentation.waitingPose(from + (1 - from) * progress));
+          if (progress < 1) bridge._waitFrame = requestAnimationFrame(frame);
+          else dismissTurnBridge(el);
+        }
+        bridge._waitFrame = requestAnimationFrame(frame);
+      }
       function startTurnBridge(el) {
         if (!el || liveStopped) return;
         var state = activityForTurn(el.getAttribute('data-turn-id'));
@@ -2228,7 +2280,8 @@
         if (state.done || (state.timeline && state.timeline.length) || el.dataset.processing === 'true') return;
         var bridge = el.querySelector('[data-turn-bridge]');
         if (!bridge || bridge._waitFrame != null) return;
-        bridge.hidden = false;
+        Object.keys(liveTurns).forEach(function (id) { if (liveTurns[id] !== el) dismissTurnBridge(liveTurns[id]); });
+        el.hidden = false; bridge.hidden = false;
         var fade = bridge.querySelector('[data-wait-fade]');
         fade.id = 'wait-tail-' + (++waitBridgeSequence);
         bridge.querySelector('[data-wait-tail]').setAttribute('stroke', 'url(#' + fade.id + ')');
@@ -2236,15 +2289,12 @@
         function frame() {
           if (liveStopped || !bridge.isConnected || bridge.hidden) return;
           var pose = window.KissneChatPresentation.waitingFrame(performance.now() - started);
-          fade.setAttribute('x1', pose.tailStart.x); fade.setAttribute('y1', pose.tailStart.y);
-          fade.setAttribute('x2', pose.star.x); fade.setAttribute('y2', pose.star.y);
-          bridge.querySelector('[data-wait-tail]').setAttribute('d', pose.tail);
-          bridge.querySelector('[data-wait-star]').setAttribute('transform', 'translate(' + pose.star.x + ' ' + pose.star.y + ')');
+          paintWaitingPose(bridge, pose);
           bridge._waitFrame = requestAnimationFrame(frame);
         }
         frame();
       }
-      function dismissTurnBridge(el) {
+      function dismissTurnBridge(el, drop) {
         if (!el) return;
         el.dataset.processing = 'true';
         var bridge = el.querySelector('[data-turn-bridge]');
@@ -2252,6 +2302,10 @@
         if (bridge._waitFrame != null) cancelAnimationFrame(bridge._waitFrame);
         bridge._waitFrame = null;
         bridge.hidden = true;
+        bridge._waitArriving = false;
+        var events = bridge._waitEvents || []; bridge._waitEvents = [];
+        if (!el.querySelector('[data-live-activity]').textContent && !el.querySelector('[data-live-answer]').textContent) el.hidden = true;
+        if (!drop && !liveStopped) events.forEach(function (event) { event._waitDelivered = true; applyLiveEvent(event); });
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -2260,11 +2314,13 @@
         if (!el) return;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return;
+        el.hidden = false;
         host.innerHTML = activityMarkupForTurn(turnId || liveCurrentTurn || 'pending', !!done);
       }
       function addActivity(el, kind, turnId, text) {
         var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
         if (!el || !appendActivity(resolvedTurnId, kind, text)) return;
+        if (kind !== 'tool_result' && !liveClosedTurns[resolvedTurnId]) activityForTurn(resolvedTurnId).answerStarted = false;
         dismissTurnBridge(el);
         if (!liveClosedTurns[resolvedTurnId]) updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         paintActivity(el, turnId, false);
@@ -2285,6 +2341,9 @@
       function liveText(el, text, pending) {
         if (!el) return;
         if (text) {
+          var id = el.getAttribute('data-turn-id') || liveCurrentTurn;
+          activityForTurn(id).answerStarted = true;
+          paintActivity(el, id, true);
           dismissTurnBridge(el);
           deliverBubbles(el.getAttribute('data-turn-id') || liveCurrentTurn, text, pending);
           return;
@@ -2324,6 +2383,47 @@
         if (message) message.hidden = true;
         el.classList.add('is-process-only');
         return el;
+      }
+      var liveClarifies = Object.create(null);
+      function resolveClarifyCard(id, status) {
+        var card = liveClarifies[id]; if (!card) return;
+        card.querySelectorAll('button,input,textarea').forEach(function (control) { control.disabled = true; });
+        card.querySelector('[data-clarify-status]').textContent = status === 'answered' ? '已选择' : '请求已结束';
+      }
+      function showClarify(request) {
+        var id = String(request.clarify_id || ''); if (!id || (liveClarifies[id] && liveClarifies[id].isConnected)) return;
+        var card = document.createElement('section'); card.className = 'choicecard card'; card.setAttribute('data-clarify-id', id);
+        card.innerHTML = '<b>' + esc(request.question || '请选择') + '</b><div data-clarify-options></div><textarea aria-label="其他回答" hidden></textarea><button class="btn btn--primary" data-clarify-submit hidden>提交</button><p class="muted" data-clarify-status></p>';
+        var choices = Array.isArray(request.choices) ? request.choices : [], host = card.querySelector('[data-clarify-options]');
+        var editor = card.querySelector('textarea'), submit = card.querySelector('[data-clarify-submit]'), busy = false;
+        async function respond(response, other) {
+          if (busy || !T || !T.respondClarify) return;
+          busy = true; card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+          try {
+            var result = await T.respondClarify(id, response, other);
+            if (result.status === 'awaiting_text') { editor.hidden = false; submit.hidden = false; submit.disabled = false; editor.focus(); }
+            else resolveClarifyCard(id, 'answered');
+          } catch (err) {
+            if (err && (err.status === 404 || err.status === 409)) resolveClarifyCard(id, 'expired');
+            else { card.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); card.querySelector('[data-clarify-status]').textContent = '提交失败，请重试'; }
+          } finally { busy = false; }
+        }
+        choices.forEach(function (label, index) {
+          if (request.multi_select) {
+            var option = document.createElement('label'), box = document.createElement('input'); box.type = 'checkbox'; box.value = String(index + 1);
+            option.appendChild(box); option.appendChild(document.createTextNode(String(label))); host.appendChild(option);
+          } else {
+            var button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn--ghost'; button.textContent = String(label);
+            button.addEventListener('click', function () { respond(String(index + 1), false); }); host.appendChild(button);
+          }
+        });
+        if (choices.length) {
+          var other = document.createElement('button'); other.type = 'button'; other.className = 'btn btn--ghost'; other.textContent = '其他回答'; other.addEventListener('click', function () { respond('', true); }); host.appendChild(other);
+          if (request.multi_select) submit.hidden = false;
+        } else { editor.hidden = false; submit.hidden = false; }
+        if (request.awaiting_text) { editor.hidden = false; submit.hidden = false; }
+        submit.addEventListener('click', function () { var value = editor.hidden ? Array.from(host.querySelectorAll('input:checked')).map(function (box) { return box.value; }).join(',') : editor.value.trim(); if (value) respond(value, false); });
+        liveClarifies[id] = card; list.appendChild(card); jumpTo(list.scrollHeight);
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -2369,14 +2469,22 @@
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
         if (event.session_id && CURRENT_SESSION_ID && String(event.session_id) !== CURRENT_SESSION_ID) return;
+        var waitingEl = liveTurns[String(event.turn_id || '')], bridge = waitingEl && waitingEl.querySelector('[data-turn-bridge]');
+        if (event.type === 'cancelled' && waitingEl) dismissTurnBridge(waitingEl, true);
+        var processing = event.type === 'completed' || (event.type === 'delta' && String(event.text || '').trim())
+          || /^(?:reasoning|thinking|analysis|commentary|tool_progress|tool_call|tool_result)$/.test(String(event.presentation || event.channel || event.type || ''));
+        var noise = /^(?:hidden|internal_notification)$/.test(String(event.presentation || event.channel || event.display_kind || '')) || looksLikeRuntimeControl(String(event.text || ''));
+        if (!event._waitDelivered && processing && !noise && bridge && !bridge.hidden) { arriveTurnBridge(waitingEl, event); return; }
         var eventKey = String(event.event_id || event.message_id || '');
         if (eventKey) {
           if (liveSeenEvents[eventKey]) return;
           liveSeenEvents[eventKey] = true;
         }
+        if (event.type === 'clarify_required') { dismissTurnBridge(waitingEl, true); showClarify(event); return; }
+        if (event.type === 'clarify_resolved') { resolveClarifyCard(String(event.clarify_id || ''), event.status); return; }
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
-        var presentation = String(event.presentation || event.channel || event.display_kind || '');
+        var presentation = String(event.presentation || event.channel || event.display_kind || (/^(?:reasoning|tool_progress|tool_call|tool_result)$/.test(type) ? type : ''));
         if (presentation === 'analysis' || presentation === 'thinking') presentation = 'reasoning';
 
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
@@ -2676,8 +2784,12 @@
             s.active = sessionIsCurrent(s);
           });
           paintSessionList();
-          hydrateHistory(boot.history || []);
+          hydrateHistory(searchJumpHistory.concat(boot.history || []));
+          focusSearchJump();
+          restoreSendDraft();
+          paintBrowserReturn();
           (boot.pending_approvals || []).forEach(showApproval);
+          (boot.pending_clarifies || []).forEach(showClarify);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
           /* A turn whose assistant reply is already in history is finished server-side;
@@ -2797,6 +2909,22 @@
         if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
         return 'android-web-batch-' + r;
       }
+      function saveSendDraft(sid, draft) {
+        if (!sid) return;
+        try { localStorage.setItem('kissne.chat.draft.v1:' + sid, JSON.stringify(draft)); } catch (ignore) {}
+      }
+      function getSendDraft(sid) {
+        try { return JSON.parse(localStorage.getItem('kissne.chat.draft.v1:' + sid) || 'null'); } catch (ignore) { return null; }
+      }
+      var restoredDraftSession = '';
+      function restoreSendDraft() {
+        var sid = CHAT_LOG_SESSION;
+        if (!sid || restoredDraftSession === sid) return;
+        restoredDraftSession = sid;
+        var draft = getSendDraft(sid);
+        if (draft && draft.text && !input.value) input.value = draft.text;
+      }
+      restoreSendDraft();
       function outboxWaitMs() {
         var now = Date.now();
         var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
@@ -2839,13 +2967,17 @@
         var value = String(text || '').trim();
         if (!value) return;
         var quote = PENDING_QUOTE;
-        if (logEntry) localOutboundRows.push(logEntry);
+        if (logEntry) { logEntry.pendingSend = true; localOutboundRows.push(logEntry); persistChatLog(); }
         CHAT_OUTBOX.push({
           text: value, log: logEntry || null,
           replyTo: quote && quote.message_ref ? String(quote.message_ref) : ''
         });
         PENDING_QUOTE = null;
         CHAT_OUTBOX_UPDATED_AT = Date.now();
+        var queuedDraft = getSendDraft(CHAT_LOG_SESSION) || {};
+        queuedDraft.composerText = input.value || '';
+        queuedDraft.text = mergeUserFragments(CHAT_OUTBOX) + (queuedDraft.composerText ? ' ' + queuedDraft.composerText : '');
+        saveSendDraft(CHAT_LOG_SESSION, queuedDraft);
         scheduleOutboxDrain();
       }
       async function interruptForSteer() {
@@ -2861,6 +2993,8 @@
             applyLiveEvent({ type: 'cancelled', turn_id: id, reason: 'steer' });
           } catch (err) {
             if (err && (err.status === 404 || err.status === 409)) {
+              dismissTurnBridge(liveTurns[id], true);
+              activityForTurn(id).answerStarted = true; paintActivity(liveTurns[id], id, true);
               delete livePendingTurns[id];
               if (liveCurrentTurn === id) liveCurrentTurn = '';
               delete liveSteeredTurns[id];
@@ -2885,16 +3019,20 @@
           }
           var count = CHAT_OUTBOX.length;
           var pendingItems = CHAT_OUTBOX.slice(0, count);
+          var mergedText = mergeUserFragments(pendingItems), retryDraft = getSendDraft(CHAT_LOG_SESSION);
+          var retryMatches = retryDraft && retryDraft.retryText === mergedText;
           CHAT_OUTBOX_RETRY = {
             count: count,
-            text: mergeUserFragments(pendingItems),
-            messageId: nextMessageId(),
-            replyTo: pendingItems.length ? String(pendingItems[0].replyTo || '') : '',
+            text: mergedText,
+            messageId: (retryMatches && retryDraft.messageId) || nextMessageId(),
+            sessionId: CHAT_LOG_SESSION,
+            replyTo: retryMatches ? String(retryDraft.replyTo || '') : (pendingItems.length ? String(pendingItems[0].replyTo || '') : ''),
             logs: pendingItems.map(function (item) { return item.log; }).filter(Boolean)
           };
         }
 
         var batch = CHAT_OUTBOX_RETRY;
+        saveSendDraft(batch.sessionId, { text: mergeUserFragments(CHAT_OUTBOX) + (input.value ? ' ' + input.value : ''), composerText: input.value || '', retryText: batch.text, messageId: batch.messageId, replyTo: batch.replyTo });
         CHAT_OUTBOX_BUSY = true;
         liveSendInFlight += 1;
         try {
@@ -2902,6 +3040,10 @@
           CHAT_OUTBOX.splice(0, batch.count);
           CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
+          (batch.logs || []).forEach(function (row) { row.pendingSend = false; });
+          var acceptedDraft = getSendDraft(batch.sessionId) || {};
+          var acceptedComposer = acceptedDraft.composerText !== undefined ? acceptedDraft.composerText : (input.value || '');
+          saveSendDraft(batch.sessionId, { text: mergeUserFragments(CHAT_OUTBOX) + (acceptedComposer ? ' ' + acceptedComposer : ''), composerText: acceptedComposer });
           if (acceptedTurn) {
             (batch.logs || []).forEach(function (logEntry) {
               if (!logEntry) return;
@@ -2909,6 +3051,18 @@
               logEntry.turnId = acceptedTurn;
               logEntry.replyTo = batch.replyTo || '';
             });
+            if (accepted.duplicate && CHAT_LOG.some(function (row) {
+              return row.messageRef === 'turn:' + acceptedTurn + ':user' && batch.logs.indexOf(row) < 0;
+            })) {
+              batch.logs.forEach(function (row) {
+                var at = CHAT_LOG.indexOf(row); if (at >= 0) CHAT_LOG.splice(at, 1);
+                var localAt = localOutboundRows.indexOf(row); if (localAt >= 0) localOutboundRows.splice(localAt, 1);
+                if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+              });
+              window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: {
+                sessionId: batch.sessionId, messageIds: batch.logs.map(function (row) { return row.messageId; })
+              } }));
+            }
             if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
               livePendingTurns[acceptedTurn] = true;
               liveCurrentTurn = acceptedTurn;
@@ -2921,9 +3075,23 @@
             }
           }
           persistChatLog();
+          window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: { sessionId: batch.sessionId, accepted: true } }));
           scheduleLivePoll(0);
         } catch (err) {
-          setSessionStatus('消息暂未送达，服务恢复后会继续发送。');
+          var unsent = CHAT_OUTBOX.splice(0); CHAT_OUTBOX_RETRY = null;
+          unsent.forEach(function (item) {
+            var row = item.log; if (!row) return;
+            var at = CHAT_LOG.indexOf(row); if (at >= 0) CHAT_LOG.splice(at, 1);
+            var localAt = localOutboundRows.indexOf(row); if (localAt >= 0) localOutboundRows.splice(localAt, 1);
+            if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+            list.querySelectorAll('[data-message-ref]').forEach(function (node) { if (row.messageId && node.getAttribute('data-message-ref') === row.messageId) node.remove(); });
+          });
+          var failedDraft = getSendDraft(batch.sessionId) || {};
+          var failedComposer = failedDraft.composerText !== undefined ? failedDraft.composerText : (input.value || '');
+          var draftText = mergeUserFragments(unsent) + (failedComposer ? ' ' + failedComposer : '');
+          saveSendDraft(batch.sessionId, { text: draftText, composerText: draftText, retryText: batch.text, messageId: batch.messageId, replyTo: batch.replyTo });
+          window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: { failed: true, sessionId: batch.sessionId, messageIds: unsent.map(function (item) { return item.log && item.log.messageId; }).filter(Boolean) } }));
+          persistChatLog(); setSessionStatus('未确认送达，内容已保留在输入框。');
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) setSessionStatus('');
@@ -2934,7 +3102,7 @@
         }
 
         /* New bubbles typed after this batch started remain in CHAT_OUTBOX and are grouped separately.
-           On failure CHAT_OUTBOX_RETRY preserves the exact same payload + id for idempotent retry. */
+           A failed batch becomes a composer draft; only the user can retry it. */
         if (live && (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY)) {
           scheduleOutboxDrain();
         }
@@ -2952,13 +3120,16 @@
         CHAT_USER_INPUT_AT = 0;
         var frozenTurn = freezeVisibleAnswerBeforeUser();
         append(meMsg(esc(v), '', clockNow()));
+        var pendingUserNode = list.lastElementChild;
         /* Whatever this turn is still saying goes on below the new message,
            so the two conversations interleave like two people talking. */
         if (frozenTurn && frozenTurn.isConnected) {
           list.appendChild(frozenTurn);
           jumpTo(list.scrollHeight);
         }
-        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow(), pendingSend: true, messageId: nextMessageId() });
+        localLog.pendingNode = pendingUserNode;
+        if (pendingUserNode) pendingUserNode.setAttribute('data-message-ref', localLog.messageId);
         queueOutboundText(v, localLog);
       }
 
@@ -2966,42 +3137,24 @@
       var findKw = (p && p.get('find')) || '';
       var jumpRef = (p && p.get('jump_ref')) || '';
       var hitT = null;
-      if (jumpRef && !CHAT_LOG.some(function (row) { return String(row.messageRef || '') === String(jumpRef); })) {
-        var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0]
-          || SEARCH_RESULT_CACHE[String(jumpRef)];
-        if (jumpItem) {
-          CHAT_LOG.push({
-            who: String(jumpItem.role || '') === 'assistant' ? 'ai' : 'me',
-            html: chatHtmlFromWire(String(jumpItem.text || '')) + historyAttachmentHtml(jumpItem),
-            attachments: Array.isArray(jumpItem.attachments) ? jumpItem.attachments : [],
-            time: searchResultTime(jumpItem.created_at),
-            day: chatDayKey(jumpItem.created_at), sortAt: jumpItem.created_at,
-            messageRef: jumpRef, localOwned: false, optimistic: false, sid: CHAT_LOG_SESSION
-          });
-          sortChatLogChronologically();
-          persistChatLog();
-          list.innerHTML = logRender();
+      var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0]
+        || SEARCH_RESULT_CACHE[String(jumpRef)];
+      var jumpSession = String((p && p.get('jump_session')) || (jumpItem && jumpItem.session_id) || '');
+      var searchJumpHistory = [];
+      function focusSearchJump() {
+        if (!findKw && !jumpRef) return;
+        var messages = list.querySelectorAll('.msg'), hit = null;
+        for (var mi = 0; mi < messages.length; mi++) {
+          if ((jumpRef && messages[mi].getAttribute('data-message-ref') === jumpRef)
+              || (!jumpRef && findKw && messages[mi].textContent.indexOf(findKw) >= 0)) { hit = messages[mi]; break; }
         }
+        if (!hit) return;
+        var top = 0, node = hit;
+        while (node && node !== list) { top += node.offsetTop; node = node.offsetParent; }
+        jumpTo(Math.max(0, top - 56)); hit.classList.add('is-hit');
+        clearTimeout(hitT); hitT = setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
       }
-      if (findKw || jumpRef) {
-        var msgs2 = list.querySelectorAll('.msg');
-        var hit = null;
-        for (var mi = 0; mi < msgs2.length; mi++) {
-          var matchesRef = jumpRef && msgs2[mi].getAttribute('data-message-ref') === jumpRef;
-          var matchesText = findKw && (msgs2[mi].textContent || '').indexOf(findKw) >= 0;
-          if (matchesRef || (!jumpRef && matchesText)) { hit = msgs2[mi]; break; }
-        }
-        if (hit) {
-          var top = 0, node = hit;
-          while (node && node !== list) { top += node.offsetTop; node = node.offsetParent; }
-          list.scrollTop = Math.max(0, top - 56);
-          hit.classList.add('is-hit');
-          hitT = setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
-        } else {
-          list.insertAdjacentHTML('afterbegin',
-            '<div class="srchmiss">没有找到「' + esc(findKw || jumpRef) + '」，可能已被清理。</div>');
-        }
-      }
+      focusSearchJump();
 
       /* 「+」里的照片 / 文件使用 Android 系统选择器并真正上传给当前 Hermes turn。 */
       var plusToggle = root.querySelector('[data-plus-toggle]');
@@ -3259,6 +3412,14 @@
       list.addEventListener('scroll', onScroll);
       /* GPT 风格 Activity：默认只是浅灰动作行；点某一行，只展开这一项的详情。 */
       function onActivityTap(e) {
+        var summary = e.target && e.target.closest ? e.target.closest('[data-activity-summary]') : null;
+        if (summary && list.contains(summary)) {
+          e.preventDefault();
+          var stream = summary.closest('[data-activity-turn]'), steps = stream.querySelector('[data-activity-steps]');
+          var expanded = steps.hidden; steps.hidden = !expanded;
+          activityForTurn(stream.getAttribute('data-activity-turn')).expanded = expanded;
+          summary.setAttribute('aria-expanded', String(expanded)); persistTurnActivity(); return;
+        }
         var row = e.target && e.target.closest ? e.target.closest('[data-activity-toggle]') : null;
         if (!row || !list.contains(row)) return;
         e.preventDefault();
@@ -3269,6 +3430,10 @@
         detail.hidden = !open;
         row.setAttribute('aria-expanded', open ? 'true' : 'false');
         item.classList.toggle('is-open', open);
+        var stream = item.closest('[data-activity-turn]');
+        var state = stream && activityForTurn(stream.getAttribute('data-activity-turn'));
+        var step = state && state.timeline[Number(item.getAttribute('data-activity-index'))];
+        if (step) { step.expanded = open; state.expanded = true; persistTurnActivity(); }
       }
       list.addEventListener('click', onActivityTap);
       function copyText(value) {
@@ -3296,6 +3461,24 @@
         setTimeout(function () { if (button.isConnected) button.textContent = original; }, 1200);
       }
       list.addEventListener('click', onCopyTap);
+      function paintBrowserReturn() {
+        var old = list.querySelector('[data-browser-return]'); if (old) old.remove();
+        var transfer = window.KissneBrowserTransfer && window.KissneBrowserTransfer.pending(); if (!transfer) return;
+        var card = document.createElement('section'); card.className = 'browser-return card'; card.setAttribute('data-browser-return', '');
+        var wrongSession = transfer.session_id && CURRENT_SESSION_ID && transfer.session_id !== CURRENT_SESSION_ID;
+        var url = /^https:\/\//i.test(transfer.source_url || '') ? transfer.source_url : '';
+        card.innerHTML = '<b>外部网页回传预览</b><p>' + esc(transfer.source_title || '网页资料') + (url ? ' · <a target="_blank" rel="noopener noreferrer" href="' + esc(url) + '">来源</a>' : '') + '</p><textarea aria-label="回传内容"></textarea><p class="muted">' + (wrongSession ? '请回到发起回传的聊天后发送。' : '确认后作为你的消息发送给叶青栩。') + '</p><button class="btn btn--primary" data-browser-send>发送</button> <button class="btn btn--ghost" data-browser-discard>取消</button>';
+        var editor = card.querySelector('textarea'); editor.value = transfer.text;
+        card.querySelector('[data-browser-send]').disabled = !!wrongSession;
+        card.querySelector('[data-browser-send]').addEventListener('click', function () {
+          if (!live || wrongSession || !editor.value.trim()) return;
+          input.value = '【外部网页资料：' + (transfer.source_title || '网页') + '】\n' + editor.value.trim() + (url ? '\n来源：' + url : '');
+          push(); window.KissneBrowserTransfer.clear(); card.remove();
+        });
+        card.querySelector('[data-browser-discard]').addEventListener('click', function () { window.KissneBrowserTransfer.clear(); card.remove(); });
+        list.appendChild(card);
+      }
+      window.addEventListener('kissne-browser-transfer-ready', paintBrowserReturn); paintBrowserReturn();
       async function onApprovalTap(e) {
         var control = e.target.closest && e.target.closest('[data-approval-decision]');
         if (!control || !list.contains(control)) return;
@@ -3457,6 +3640,25 @@
         }
         try {
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          if (jumpSession) {
+            live = false;
+            var jumpBoot = await T.bootstrap(true);
+            var currentJumpSession = String(jumpBoot && jumpBoot.conversation && jumpBoot.conversation.session_id || '');
+            if (currentJumpSession !== jumpSession) {
+              if (jumpBoot.pending_turn_id || CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY || CHAT_OUTBOX_BUSY) {
+                setSessionStatus('当前回复尚未结束，请先完成或停止，再打开搜索结果的会话。');
+                live = true; liveBootstrap(); return;
+              }
+              await T.selectSession('', jumpSession);
+              CURRENT_SESSION_ID = ''; CURRENT_SESSION_KEY = '';
+              bindChatLogSession(''); bindTurnActivitySession('');
+            }
+            if (jumpItem && String(jumpItem.session_id || '') === jumpSession) {
+              var page = T.history ? await T.history(100, jumpRef, jumpSession) : {};
+              searchJumpHistory = (page.messages || []).filter(function (row) { return row.session_id === jumpSession; }).concat([jumpItem]);
+            }
+          }
+          if (liveStopped) return;
           live = true;
           refreshHermesModelControls(true);
           liveBootstrap();
@@ -3467,7 +3669,28 @@
       }
       startLiveTransport();
 
+      function onSendSettled(e) {
+        var detail = e.detail || {};
+        if (liveStopped || detail.sessionId !== CHAT_LOG_SESSION) return;
+        list.querySelectorAll('[data-message-ref]').forEach(function (node) {
+          if ((detail.messageIds || []).indexOf(node.getAttribute('data-message-ref')) >= 0) node.remove();
+        });
+        if (detail.failed) {
+          var draft = getSendDraft(CHAT_LOG_SESSION);
+          if (draft) input.value = draft.text || '';
+          setSessionStatus('未确认送达，内容已保留在输入框。');
+        } else if (detail.accepted) {
+          var acceptedDraft = getSendDraft(CHAT_LOG_SESSION);
+          if (acceptedDraft) input.value = acceptedDraft.composerText || '';
+        }
+      }
+      window.addEventListener('kissne-send-settled', onSendSettled);
       function onComposerInput() {
+        var draft = getSendDraft(CHAT_LOG_SESSION) || {};
+        draft.composerText = input.value || '';
+        draft.text = mergeUserFragments(CHAT_OUTBOX) + (draft.composerText ? ' ' + draft.composerText : '');
+        draft.text = draft.text.trim();
+        saveSendDraft(CHAT_LOG_SESSION, draft);
         CHAT_USER_INPUT_AT = Date.now();
         if (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY) scheduleOutboxDrain();
       }
@@ -3501,13 +3724,15 @@
         if (composerObserver) composerObserver.disconnect();
 
         document.removeEventListener('pointerdown', closeComposerPanelsOutside, true);
-        Object.keys(liveTurns).forEach(function (id) { dismissTurnBridge(liveTurns[id]); });
+        Object.keys(liveTurns).forEach(function (id) { dismissTurnBridge(liveTurns[id], true); });
         if (plusToggle) plusToggle.removeEventListener('click', onPlusToggle);
         root.removeEventListener('click', onAttachmentPick);
         if (stickerToggle) stickerToggle.removeEventListener('click', onStickerToggle);
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
+        window.removeEventListener('kissne-browser-transfer-ready', paintBrowserReturn);
+        window.removeEventListener('kissne-send-settled', onSendSettled);
         list.removeEventListener('click', onApprovalTap);
         list.removeEventListener('click', onActivityTap);
         send.removeEventListener('click', push);

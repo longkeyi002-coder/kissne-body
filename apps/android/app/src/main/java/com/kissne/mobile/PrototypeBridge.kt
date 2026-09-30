@@ -44,6 +44,10 @@ class PrototypeBridge(
         return baseUrl()
     }
 
+    @JavascriptInterface fun cacheIdentity(): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest((baseUrl() + "|" + store.deviceToken.orEmpty()).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 255) }
+
     @JavascriptInterface fun installationId(): String = store.installationId()
     @JavascriptInterface fun hasToken(): Boolean = !store.deviceToken.isNullOrBlank()
     @JavascriptInterface fun hasBootstrapCache(): Boolean =
@@ -121,7 +125,7 @@ class PrototypeBridge(
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
             "sessions", "history", "search", "memoryTimeline", "memoryCandidates", "reviewMemory", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
-            "modelOptions", "setModel", "approval", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
+            "modelOptions", "setModel", "approval", "clarify", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
             "adminStatus",
         )
 
@@ -232,8 +236,10 @@ class PrototypeBridge(
             "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
             "ack" -> {
                 val cursor = body.optLong("cursor", store.cursor)
-                client().ack(cursor)
-                store.cursor = cursor
+                if (cursor > store.cursor) {
+                    client().ack(cursor)
+                    store.cursor = maxOf(cursor, store.cursor)
+                }
                 JSONObject().put("ok", true).put("cursor", cursor)
             }
             "cancel" -> client().cancelPayload(body.optString("turn_id")).also {
@@ -245,6 +251,7 @@ class PrototypeBridge(
                 effort = body.optString("effort").takeIf { it.isNotBlank() },
                 provider = body.optString("provider").takeIf { it.isNotBlank() },
             )
+            "clarify" -> client().clarifyPayload(body.optString("clarify_id"), body.optString("response"), body.optBoolean("other", false))
             "approval" -> client().approvalPayload(
                 approvalId = body.optString("approval_id"),
                 decision = body.optString("decision"),

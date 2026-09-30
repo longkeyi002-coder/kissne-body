@@ -86,6 +86,7 @@
       ApiError: NativeApiError,
       base: function () { return nativeBase(''); },
       setBase: function (value) { return String(Native.setBase(nativeBase(value)) || nativeBase(value)); },
+      cacheIdentity: function () { return String(Native.cacheIdentity() || ''); },
       installationId: function () { return String(Native.installationId() || ''); },
       token: function () { return Native.hasToken() ? 'native-secure' : ''; },
       hasToken: function () { return !!Native.hasToken(); },
@@ -114,7 +115,7 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
-      history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
+      history: function (limit, before, sessionId) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || ''), session_id: String(sessionId || '') }); },
       search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 500 }); },
       memoryTimeline: function (options) {
         options = options || {};
@@ -149,10 +150,10 @@
           text: String(text || ''),
           message_id: messageId || nativeMessageId(),
           reply_to: String(replyTo || '')
-        });
+        }, 65000);
       },
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
-      ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
+      ack: function (nextCursor) { var n = Number(nextCursor); return !isFinite(n) || n <= Number(Native.getCursor()) ? Promise.resolve({ ok: true, unchanged: true }) : nativeCall('ack', { cursor: n }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
       pickAttachment: function (kind, hooks) {
@@ -187,6 +188,7 @@
           provider: String(provider || '')
         });
       },
+      respondClarify: function (id, response, other) { return nativeCall('clarify', { clarify_id: String(id || ''), response: String(response || ''), other: !!other }); },
       respondApproval: function (approvalId, decision, scope) {
         return nativeCall('approval', {
           approval_id: String(approvalId || ''),
@@ -200,6 +202,7 @@
       adminStatus: function () { return nativeCall('adminStatus', {}); },
       revoke: function () { return nativeCall('revoke', {}); }
     };
+    if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
     return;
   }
   var KEY = {
@@ -322,9 +325,10 @@
       base: adminBase()
     });
   }
-  function history(limit, before) {
+  function history(limit, before, sessionId) {
     var path = '/mobile/history?limit=' + encodeURIComponent(Number(limit) || 50);
     if (before) path += '&before=' + encodeURIComponent(String(before));
+    if (sessionId) path += '&session_id=' + encodeURIComponent(String(sessionId));
     return request(path, { method: 'GET' });
   }
   function searchHistory(q, limit) {
@@ -418,8 +422,9 @@
   async function ack(nextCursor) {
     var n = Number(nextCursor);
     if (!isFinite(n) || n < 0) return { ok: false };
+    if (n <= cursor()) return { ok: true, unchanged: true };
     var out = await request('/mobile/messages', { method: 'POST', body: { ack: { cursor: n } } });
-    set(KEY.cursor, String(n));
+    set(KEY.cursor, String(Math.max(n, cursor())));
     return out;
   }
   function cancel(turnId) {
@@ -488,8 +493,10 @@
     cancel: cancel,
     modelOptions: modelOptions,
     setModel: setModel,
+    respondClarify: function (id, response, other) { return request('/mobile/clarify', { method: 'POST', body: { clarify_id: String(id || ''), response: String(response || ''), other: !!other } }); },
     respondApproval: respondApproval,
     adminStatus: adminStatus
   };
+  if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
 })();
 
