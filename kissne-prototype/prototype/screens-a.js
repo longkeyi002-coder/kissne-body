@@ -486,26 +486,32 @@
         out.push(block);
         return;
       }
+      block = block.replace(/&quot;/g, '"');
       var lines = block.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
       /* A few providers persist the streamed answer with one token per line.
          Treat that transport artifact as one sentence before making human-sized
          bubbles; otherwise the final answer becomes a column of one-word cards. */
       var tokenLikeLines = lines.length > 2
         && lines.every(function (line) {
-          return line.length <= 32 && !/^(?:[-*•]|\d+[.)])\s+/.test(line);
+          return line.length <= 8 && !/[（）()\[\]【】「」『』“”"]/.test(line) && !/^(?:[-*•]|\d+[.)])\s+/.test(line);
         })
         && lines.filter(function (line) { return /[。！？!?；;:]$/.test(line); }).length < Math.ceil(lines.length / 2);
       if (tokenLikeLines) lines = [joinReasoningLines(lines)];
+      var closing = [], quoted = false;
+      var pairs = { '(': ')', '（': '）', '[': ']', '【': '】', '“': '”', '「': '」', '『': '』' };
       lines.forEach(function (line) {
         var current = '';
         var chars = Array.from(line);
         for (var i = 0; i < chars.length; i++) {
           var ch = chars[i];
+          if (pairs[ch]) closing.push(pairs[ch]);
+          else if (ch === closing[closing.length - 1]) closing.pop();
+          if (ch === '"' && chars[i - 1] !== '\\') quoted = !quoted;
           current += ch;
           var next = chars[i + 1] || '';
           var cjkEnd = /[。！？!?]/.test(ch);
           var englishEnd = /[.!?]/.test(ch) && /\s/.test(next);
-          if (cjkEnd || englishEnd) {
+          if ((cjkEnd || englishEnd) && !closing.length && !quoted && !/[。！？!?）)\]】」』”"]/.test(next)) {
             if (current.trim()) out.push(current.trim());
             current = '';
             while (i + 1 < chars.length && /\s/.test(chars[i + 1])) i++;
@@ -626,6 +632,8 @@
     var text = cleanActivityText(value, '');
     var low = text.toLowerCase();
     if (!low) return '使用工具';
+    if (/kissne_sticker_search\b/.test(low)) return '搜索表情包';
+    if (/kissne_sticker_send\b/.test(low)) return '发送表情包';
     if (/sticker|表情包/.test(low) && /grep|rg|find|search|terminal/.test(low)) return '查找表情包发送逻辑';
     if (/search[_-]?files?|find[_-]?files?|grep|ripgrep|\brg\b/.test(low)) return '查找相关文件';
     if (/execute[_-]?code|running\s+code|hermes[_\s-]?tools/.test(low)) return '运行代码';
@@ -660,6 +668,7 @@
   }
   function activityDetailText(value) {
     var text = cleanActivityText(value, '');
+    text = text.replace(/^[\s\p{Extended_Pictographic}\uFE0F\u200D]+/u, '');
     text = text.replace(/```[a-z0-9_-]*\s*/gi, '').replace(/```/g, '').trim();
     text = text.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s'"]+/gi, '$1[已隐藏]');
     text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s'"]+/gi, '$1[已隐藏]');
@@ -669,7 +678,9 @@
 
   function looksLikeToolTranscript(value) {
     var text = cleanActivityText(value, '').trim();
-    return /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
+    var toolText = text.replace(/^[\s\p{Extended_Pictographic}\uFE0F\u200D]+/u, '');
+    return /^kissne_[\w.-]+\s*(?:[:：]|\.{3}|…)/i.test(toolText)
+      || /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
       || /^(terminal|tool)\s*[:：]?/i.test(text)
       || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
@@ -682,6 +693,8 @@
   function looksLikeRuntimeControl(value) {
     var text = cleanActivityText(value, '').trim();
     return /^\s*Interrupting current task\b/i.test(text)
+      || /^\s*(?:↪\s*)?Redirected current run\b/i.test(text)
+      || /^\s*(?:Steered into current run|Subagent working|Compressing context|Queued for the next turn)\b/i.test(text)
       || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text)
       || /^(?:回复)?已(?:暂停|停止)回复[。.!！]?\s*$/.test(text)
       || /^(?:回复)?(?:暂停|停止)回复[。.!！]?\s*$/.test(text);
@@ -710,6 +723,7 @@
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
+          segmentKey: m.segmentKey || '', answerText: m.answerText || '',
           messageId: m.messageId || '', attachments: Array.isArray(m.attachments) ? m.attachments : [],
           replyTo: m.replyTo || '', replyPreview: m.replyPreview || null,
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
@@ -766,6 +780,7 @@
     var sid = String(sessionId || '');
     if (sid === TURN_ACTIVITY_SESSION) return;
     TURN_ACTIVITY_SESSION = sid;
+    FINAL_ACTIVITY_BY_TEXT = Object.create(null);
     TURN_ACTIVITY = Object.create(null);
     loadTurnActivity(sid);
   }
@@ -971,8 +986,9 @@
     state.updatedAt = Date.now();
     persistTurnActivity();
     var html = activityMarkupForTurn(turnId, true);
-    if (html) FINAL_ACTIVITY_BY_TEXT[raw] = html;
-    else delete FINAL_ACTIVITY_BY_TEXT[raw];
+    var finalKey = String(turnId || '') + '\u0000' + raw;
+    if (html) FINAL_ACTIVITY_BY_TEXT[finalKey] = html;
+    else delete FINAL_ACTIVITY_BY_TEXT[finalKey];
     return html;
   }
 
@@ -1147,9 +1163,9 @@
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
-    var ref = String(m && (m.messageRef || m.messageId) || '');
+    var ref = String(m && (m.segmentKey || m.messageRef || m.messageId) || '');
     var existing = ref && CHAT_LOG.filter(function (row) {
-      return String(row && (row.messageRef || row.messageId) || '') === ref;
+      return String(row && (row.segmentKey || row.messageRef || row.messageId) || '') === ref;
     })[0];
     if (existing) {
       Object.keys(m || {}).forEach(function (key) { if (m[key] !== undefined) existing[key] = m[key]; });
@@ -1602,6 +1618,34 @@
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
       var liveTurnStartMs = Object.create(null);
+      var bubbleDeliveries = Object.create(null);
+      var deliveryAnswers = Object.create(null);
+      function stopBubbleDeliveries(flush) {
+        Object.keys(bubbleDeliveries).forEach(function (id) { bubbleDeliveries[id].stop(flush); });
+        bubbleDeliveries = Object.create(null);
+      }
+      function deliverBubbles(turnId, text, pending) {
+        var id = String(turnId || 'pending');
+        deliveryAnswers[id] = String(text || '');
+        CHAT_LOG.forEach(function (row) {
+          if (row.segmentKey === id + ':part:0') row.answerText = deliveryAnswers[id];
+        });
+        if (!bubbleDeliveries[id]) {
+          var count = CHAT_LOG.filter(function (row) { return row.segmentKey && row.turnId === id; }).length;
+          bubbleDeliveries[id] = window.KissneChatPresentation.delivery(function (part, index) {
+            var ref = 'turn:' + id + ':assistant';
+            pushLog({ who: 'ai', html: part, time: clockNow(), turnId: id, messageRef: ref,
+              segmentKey: id + ':part:' + index, answerText: index === 0 ? deliveryAnswers[id] : '',
+              sortAt: Math.max(Date.now(), liveTurnStartMs[id] || 0),
+              localOwned: true, optimistic: !liveClosedTurns[id] });
+            if (!liveStopped && !liveSwitching) append(aiMsg(part, '', clockNow(), '', 'talk', '', ref));
+          }, setTimeout, clearTimeout, count);
+        }
+        var parts = splitAssistantBubbleParts(chatHtmlFromWire(text));
+        if (pending && parts.length) parts.pop();
+        bubbleDeliveries[id].update(parts);
+        persistChatLog();
+      }
       var liveCovered = Object.create(null);
       var liveSeenEvents = Object.create(null);
       var liveCurrentTurn = '';
@@ -1893,6 +1937,7 @@
         return match ? match[1] : '';
       }
       function hydrateHistory(history) {
+        stopBubbleDeliveries(true);
         /* Never use role+text equality to reconcile fresh local messages. Repeated identical
            messages are valid, and stale bootstrap history can otherwise swallow the newest one.
            Local rows that have received a Hermes turn ref are matched by message_ref; rows still
@@ -1929,11 +1974,18 @@
           var attachments = Array.isArray(item.attachments) ? item.attachments : [];
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
           if (role === 'user') rawText = visibleAttachmentText(rawText, attachments);
-          var historyPresentation = String(item.presentation || '');
+          var historyPresentation = String(item.presentation || item.channel || item.display_kind || '');
+          if (historyPresentation === 'analysis') historyPresentation = 'reasoning';
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
-          if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
+          if (role === 'user') historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
+          if (role === 'assistant' && !historyPresentation) {
+            var taggedHistory = window.KissneChatPresentation.channels(rawText);
+            if (taggedHistory.reasoning) appendActivity(historyTurnId || 'history', 'reasoning', taggedHistory.reasoning);
+            rawText = taggedHistory.answer;
+            if (!rawText.trim() && taggedHistory.reasoning) return;
+          }
           /* Prefer the transport's semantic presentation. Do not let persisted
              commentary/tool frames fall through to generic assistant/system rows. */
           if (historyPresentation === 'hidden' || historyPresentation === 'internal_notification') return;
@@ -2020,6 +2072,15 @@
           }
 
           var localRows = messageRef && localByRef[messageRef];
+          if (role === 'assistant' && localRows && localRows.every(function (row) { return !!row.segmentKey; })) {
+            if (localRows[0].answerText === rawText) {
+              localRows.forEach(function (row) { row.optimistic = false; CHAT_LOG.push(row); });
+              delete localByRef[messageRef];
+              return;
+            }
+            localRows = [localRows[0]];
+            delete localRows[0].segmentKey;
+          }
           if ((!localRows || !localRows.length) && unboundLocal.length) {
             var legacyText = String(rawText || '').replace(/\s+/g, ' ').trim();
             var legacyIndex = -1;
@@ -2053,7 +2114,7 @@
             return;
           }
 
-          var turnId = turnIdFromMessageRef(messageRef);
+          var turnId = historyTurnId;
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
@@ -2062,7 +2123,7 @@
               activity = activityMarkupForTurn(turnId, true);
             }
           }
-          if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
+          if (!activity && role === 'assistant' && historyTurnId) activity = FINAL_ACTIVITY_BY_TEXT[historyTurnId + '\u0000' + rawText] || '';
           var historyHtml = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
           if (messageRef && CHAT_LOG.some(function (row) { return row.messageRef === messageRef; })) return;
           CHAT_LOG.push({
@@ -2085,12 +2146,15 @@
         /* Tool/reasoning frames can arrive after the assistant history row. Reattach the
            completed activity to its own assistant turn after the whole history is read,
            instead of leaving it as a late item at the bottom of the chat. */
+        var restoredActivityTurns = Object.create(null);
         CHAT_LOG.forEach(function (m) {
           if (!m || m.who !== 'ai' || !m.turnId) return;
+          if (restoredActivityTurns[m.turnId]) { m.activity = ''; return; }
           var recoveredState = TURN_ACTIVITY[String(m.turnId)];
           if (!recoveredState || !recoveredState.timeline || !recoveredState.timeline.length) return;
           recoveredState.done = true;
           m.activity = activityMarkupForTurn(String(m.turnId), true);
+          restoredActivityTurns[m.turnId] = true;
         });
 
         function keepRecoveredLocal(m) {
@@ -2129,13 +2193,17 @@
         var id = requestedId || String(liveCurrentTurn || 'pending');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
         append('<div class="live-turn" data-live-turn>'
-          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><span class="turn-bridge__star"></span></div>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true"><svg viewBox="0 0 320 70" class="turn-bridge__art">'
+          + '<path d="M8 62 Q160 -40 312 62" fill="none" stroke="currentColor" stroke-width=".8" opacity=".55"/>'
+          + '<g><path d="M0 -7 Q1 -1 7 0 Q1 1 0 7 Q-1 1 -7 0 Q-1 -1 0 -7" fill="white" stroke="currentColor" stroke-width=".8"/>'
+          + '<animateMotion dur="2.6s" repeatCount="indefinite" path="M8 62 Q160 -40 312 62"/></g></svg></div>'
           + '<div class="activity-history" data-live-activity></div>'
           + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
           + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
         var el = list.lastElementChild;
         if (id) {
+          el.setAttribute('data-turn-id', id);
           liveTurns[id] = el;
           if (!liveTurnStartMs[id]) liveTurnStartMs[id] = Date.now();
         }
@@ -2152,6 +2220,7 @@
         var bridge = el.querySelector('[data-turn-bridge]');
         if (!bridge) return;
         bridge.classList.add('is-delivered');
+        bridge.hidden = true;
         setTimeout(function () {
           if (bridge.parentNode) bridge.parentNode.removeChild(bridge);
         }, 220);
@@ -2171,6 +2240,7 @@
         paintActivity(el, turnId, false);
       }
       function finishActivities(el, turnId) {
+        dismissTurnBridge(el);
         var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
         var state = activityForTurn(resolvedTurnId);
         state.done = true;
@@ -2184,6 +2254,10 @@
       }
       function liveText(el, text, pending) {
         if (!el) return;
+        if (text) {
+          deliverBubbles(el.getAttribute('data-turn-id') || liveCurrentTurn, text, pending);
+          return;
+        }
         var box = el.querySelector('[data-live-answer]') || el.querySelector('.msg__text');
         if (!box) return;
         var value = String(text || '');
@@ -2270,14 +2344,15 @@
         }
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
-        var presentation = String(event.presentation || '');
+        var presentation = String(event.presentation || event.channel || event.display_kind || '');
+        if (presentation === 'analysis' || presentation === 'thinking') presentation = 'reasoning';
 
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
         if (presentation === 'hidden' || presentation === 'internal_notification') return;
         var terminal = !!(turnId && (liveClosedTurns[turnId] || liveCompleted[turnId]
           || (TURN_ACTIVITY[turnId] && TURN_ACTIVITY[turnId].done)));
-        var action = window.KissneChatLifecycle.eventAction(event, terminal);
+        var action = window.KissneChatLifecycle.eventAction({ type: type, presentation: presentation }, terminal);
         if (action === 'ignore') return;
         if (action === 'late_activity') {
           var lateValue = event.activity && typeof event.activity === 'object'
@@ -2400,6 +2475,10 @@
         var el = liveEnsure(turnId);
         if (type === 'delta') {
           var deltaText = String(event.text || '');
+          var taggedDelta = window.KissneChatPresentation.channels(deltaText);
+          if (taggedDelta.reasoning) addActivity(el, 'reasoning', turnId, taggedDelta.reasoning);
+          deltaText = taggedDelta.answer;
+          if (!deltaText && taggedDelta.reasoning) return;
           if (looksLikeRuntimeControl(deltaText)) return;
           if (looksLikeToolTranscript(deltaText)) {
             livePresence(el, false);
@@ -2422,7 +2501,11 @@
           dismissTurnBridge(el);
           setSessionStatus('');
           var finalText = String(event.text || '');
+          var taggedFinal = window.KissneChatPresentation.channels(finalText);
+          if (taggedFinal.reasoning) addActivity(el, 'reasoning', turnId, taggedFinal.reasoning);
+          finalText = taggedFinal.answer;
           if (looksLikeRuntimeControl(finalText)) {
+            if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
             finishActivities(el, turnId);
             liveText(el, '', false);
             if (turnId) delete livePendingTurns[turnId];
@@ -2432,6 +2515,7 @@
             return;
           }
           if (looksLikeToolTranscript(finalText)) {
+            if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
             addActivity(el, 'tool', turnId, finalText);
             finishActivities(el, turnId);
             liveText(el, '', false);
@@ -2443,23 +2527,15 @@
             liveAvatar(el, 'happy');
             if (turnId && !liveCompleted[turnId]) {
               liveCompleted[turnId] = true;
-              pushLog({
-                who: 'ai',
-                /* Dated by turn START, not completion: otherwise a follow-up
-                   typed mid-stream outranks it and the reply sinks below it
-                   as soon as the list is re-rendered. */
-                sortAt: (turnId && liveTurnStartMs[turnId]) || Date.now(),
-                html: chatHtmlFromWire(finalText),
-                activity: finalActivity,
-                time: clockNow(),
-                day: chatDayKey(Date.now()),
-                messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
-                messageId: String(event.message_id || ''),
-                turnId: turnId,
-                localOwned: true,
-                optimistic: true
+              CHAT_LOG.forEach(function (row) {
+                if (row.segmentKey && row.turnId === turnId) {
+                  if (row.segmentKey === turnId + ':part:0') row.answerText = finalText;
+                  row.optimistic = false;
+                  if (row.segmentKey === turnId + ':part:0') row.activity = finalActivity;
+                }
               });
               sortChatLogChronologically();
+              persistChatLog();
             }
             if (T && typeof T.notifyReply === 'function') T.notifyReply(
               turnId || String(event.event_id || event.message_id || ''), 'Kissne 回复完成',
@@ -2470,6 +2546,7 @@
           scheduleOutboxDrain();
           updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         } else if (type === 'cancelled') {
+          if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
           if (turnId) liveClosedTurns[turnId] = true;
           livePresence(el, false);
           dismissTurnBridge(el);
@@ -3250,6 +3327,7 @@
 
         if (liveSwitching) return;
         liveSwitching = true;
+        stopBubbleDeliveries(true);
         liveEpoch += 1;
         setSessionStatus('正在切换会话…');
         setSessionDrawer(false);
@@ -3358,6 +3436,7 @@
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
+        stopBubbleDeliveries(true);
         liveEpoch += 1;
         clearTimeout(liveBootstrapTimer);
         clearTimeout(livePollTimer);

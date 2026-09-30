@@ -20,6 +20,8 @@ jobs:
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.10" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
       - name: Verify bundled web app
         run: |
           test -f ../../kissne-prototype/prototype/index.html
@@ -31,6 +33,12 @@ jobs:
           test -f ../../kissne-prototype/prototype/transport.js
       - name: Chat lifecycle regressions
         run: node --test ../../tests-js/kissne-chat-lifecycle.test.mjs
+      - name: Chat history and presentation regressions
+        working-directory: tests-js
+        run: |
+          npm install --prefix "$RUNNER_TEMP/kissne-chat-tests" --ignore-scripts jsdom@29.1.1 vitest@4.1.10
+          ln -s "$RUNNER_TEMP/kissne-chat-tests/node_modules" node_modules
+          "$RUNNER_TEMP/kissne-chat-tests/node_modules/.bin/vitest" run kissne-chat-history.test.mjs kissne-chat-presentation.test.mjs
       - run: gradle test
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
