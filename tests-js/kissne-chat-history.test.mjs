@@ -168,6 +168,7 @@ test('composer panels keep inside taps, close on outside taps and exclude each o
     expect(window.getComputedStyle(root.querySelector(selector)).backgroundColor).toBe('rgba(0, 0, 0, 0)')
   }
   expect(window.getComputedStyle(root.querySelector('.composerwrap')).position).toBe('absolute')
+  expect(window.getComputedStyle(root.querySelector('.chatstatus')).position).toBe('absolute')
 })
 
 test('a different room with identical answer text cannot inherit the previous room process', async () => {

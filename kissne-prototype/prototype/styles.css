@@ -1874,6 +1874,10 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
   border:0;backdrop-filter:none
 }
 .screen--chat .composerwrap > *{pointer-events:auto}
+.screen--chat .chatstatus{
+  position:absolute;left:50%;bottom:calc(var(--composer-height) + var(--keyboard-lift, 0px) + 4px);
+  transform:translateX(-50%);z-index:1;max-width:calc(100% - 28px);text-align:center
+}
 .screen--chat .chatbody{
   padding-bottom:calc(var(--composer-height) + var(--keyboard-lift, 0px) + 12px)!important
 }
