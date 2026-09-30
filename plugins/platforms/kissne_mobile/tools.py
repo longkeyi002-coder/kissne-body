@@ -94,26 +94,29 @@ def _sticker_index_available() -> bool:
     return bool(load_sticker_index().get("keywords"))
 
 
-def _search_sticker(args: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
+def _search_sticker(args: Dict[str, Any], **kwargs: Any) -> str:
     """``task_id``/``session_id``/``user_task`` ride along as kwargs (every tool gets them) — accept
-    and ignore, so dispatch never dies before reading the query."""
+    and ignore, so dispatch never dies before reading the query.
+
+    Returns a JSON string: the registry's ``_normalize_handler_result`` accepts only ``str``
+    (or the multimodal envelope), so a bare dict is rejected as ``tool_result_contract``."""
     query = str(args.get("query") or "").strip().lower()
     keywords = [str(k) for k in load_sticker_index().get("keywords") or []]
     if not keywords:
-        return {
+        return json.dumps({
             "ok": False,
             "error": "sticker_index_empty",
             "hint": "The app has not synced a sticker library yet; reply with plain text only.",
-        }
+        }, ensure_ascii=False)
     if not query:
-        return {"ok": True, "matches": keywords[:MAX_RESULTS], "library_size": len(keywords)}
+        return json.dumps({"ok": True, "matches": keywords[:MAX_RESULTS], "library_size": len(keywords)}, ensure_ascii=False)
     matches = [k for k in keywords if query in k.lower()]
-    return {
+    return json.dumps({
         "ok": True,
         "matches": matches[:MAX_RESULTS],
         "total_matches": len(matches),
         "library_size": len(keywords),
-    }
+    }, ensure_ascii=False)
 
 
 _DESCRIPTION = (

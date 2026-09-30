@@ -2262,7 +2262,6 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 # Android gives this request eight seconds before reporting failure.
                 payload = build_model_options_payload(
                     load_picker_context(), include_unconfigured=True,
-                    probe_current_custom_provider=False,
                 )
             # Mirror Hermes' canonical reasoning vocabulary without importing Agent truth
             # across the mobile-plugin boundary.

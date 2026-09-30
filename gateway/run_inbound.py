@@ -35,6 +35,27 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 logger = logging.getLogger("gateway.run")
 
 
+def discord_triggering_note(message_id: Any) -> str:
+    """Model-facing routing note for a Discord turn (rides the API-bound user message only)."""
+    return (
+        f"[Triggering message id: `{message_id}` — use as `message_id` for reply/react/pin "
+        f"via the discord tools.]"
+    )
+
+
+def strip_discord_triggering_note(event: Any, message_text: Any) -> Any:
+    """Authored text for the durable user row: peel off exactly the note
+    ``_prepend_inbound_reply_context`` added for THIS event, if present. The note is a
+    model instruction, not something the user wrote — persisted as ``content`` it renders
+    verbatim in every transcript surface and pollutes FTS/memory (#71304, #114719). It
+    keeps riding ``message_text`` (and the replay-only ``api_content`` sidecar)."""
+    message_id = getattr(event, "message_id", None)
+    if not message_id or not isinstance(message_text, str):
+        return message_text
+    prefix = f"{discord_triggering_note(message_id)}\n\n"
+    return message_text[len(prefix):] if message_text.startswith(prefix) else message_text
+
+
 class GatewayInboundMixin:
     """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner."""
 
@@ -86,7 +107,7 @@ class GatewayInboundMixin:
         if pairing_store._is_rate_limited(platform_name, source.user_id):
             return
         code = pairing_store.generate_code(platform_name, source.user_id, source.user_name or "")
-        adapter = self._adapter_for_source(source)
+        adapter = self._delivery_adapter_for(source)
         if code:
             store_profile = getattr(pairing_store, "profile", None)
             profile_arg = (
@@ -159,7 +180,7 @@ class GatewayInboundMixin:
             # The routed adapter's extra carries a secondary profile's own list; ``_config`` is the default's.
             _slack_adapter = None
             with suppress(Exception):
-                _slack_adapter = self._adapter_for_source(source)
+                _slack_adapter = self._intake_adapter_for(source)
         if (
             # See #51899.
             not is_internal
@@ -352,7 +373,7 @@ class GatewayInboundMixin:
             )
             # The clarify callback pauses the platform typing/status indicator while waiting so
             # Slack users can type; the active agent resumes now, so re-enable its indicator.
-            _clarify_adapter = self._adapter_for_source(source)
+            _clarify_adapter = self._delivery_adapter_for(source)
             if _clarify_adapter:
                 try:
                     _clarify_adapter.resume_typing_for_chat(source.chat_id)
@@ -499,7 +520,7 @@ class GatewayInboundMixin:
     ) -> None:
         """Merge *event* into the source adapter's pending slot (no-op without an adapter)."""
         from gateway.platforms.base import merge_pending_message_event
-        adapter = self._adapter_for_source(source)
+        adapter = self._delivery_adapter_for(source)
         if adapter:
             merge_pending_message_event(adapter._pending_messages, _quick_key, event, merge_text=merge_text)
 
@@ -554,7 +575,7 @@ class GatewayInboundMixin:
         if effective_busy_input_mode != "queue":
             self._hm_merge_pending_for_source(source, _quick_key, event, merge_text=True)
         else:
-            adapter = self._adapter_for_source(source)
+            adapter = self._delivery_adapter_for(source)
             if adapter:
                 self._enqueue_fifo(_quick_key, event, adapter)
         return True
@@ -599,7 +620,7 @@ class GatewayInboundMixin:
         _interrupt_text = event.text
         if self._pending_event_audio_paths(event):
             _interrupt_text, _ = await self._transcribe_and_echo_pending_voice(
-                event, self._adapter_for_source(source), source, event.text or "",
+                event, self._delivery_adapter_for(source), source, event.text or "",
                 log_context="Voice-priority-interrupt",
             )
         elif not _interrupt_text and getattr(event, "media_urls", None):
@@ -1169,7 +1190,7 @@ class GatewayInboundMixin:
             # turn for this session NOW: re-stage the orphans in FIFO order and enqueue the incoming event
             # behind them, so arrival order (#28503) holds: oldest orphan runs as this turn, the rest drain
             # in order, the new message last.
-            _orphan_adapter = self._adapter_for_source(source)
+            _orphan_adapter = self._delivery_adapter_for(source)
             if _orphan_adapter is None or getattr(event, "internal", False) or event.get_command():
                 return event, source, is_internal
             _rescued = self._rescue_orphaned_overflow(_quick_key, _orphan_adapter)
@@ -1421,7 +1442,7 @@ class GatewayInboundMixin:
         # quality in real time. On transcription failure do NOT send a hardcoded notice: that
         # bypassed the LLM and produced two replies; enrichment leaves one neutral marker instead.
         if _successful_transcripts and self._should_echo_stt_transcripts():
-            _echo_adapter = self._adapter_for_source(source)
+            _echo_adapter = self._delivery_adapter_for(source)
             if _echo_adapter:
                 _echo_meta = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))
                 await self._echo_stt_transcripts(_echo_adapter, source, _successful_transcripts, metadata=_echo_meta)
@@ -1593,7 +1614,7 @@ class GatewayInboundMixin:
                 message_text, cwd=_msg_cwd, context_length=_msg_ctx_len, allowed_root=_msg_cwd
             )
             if _ctx_result.blocked:
-                _adapter = self._adapter_for_source(source)
+                _adapter = self._delivery_adapter_for(source)
                 if _adapter:
                     await _adapter.send(
                         source.chat_id,
@@ -1801,7 +1822,7 @@ class GatewayInboundMixin:
             )
             return False
 
-        adapter = self._adapter_for_source(source)
+        adapter = self._delivery_adapter_for(source)
         if adapter is None:
             return False
 

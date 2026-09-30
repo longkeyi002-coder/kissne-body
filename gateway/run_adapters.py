@@ -955,6 +955,22 @@ class GatewayAdapterLifecycleMixin:
         )
         return True
 
+    def _unserved_shared_ingress_warnings(self) -> list:
+        """Loud ``not being served`` lines for shared-ingress platforms secondaries enabled while
+        NO profile (default included) actually runs them; empty when the default serves the platform."""
+        noted = getattr(self, "_unserved_secondary_platforms", None) or ()
+        lines = []
+        for platform in sorted({p for _n, p in noted}, key=lambda p: p.value):
+            if platform in self.adapters or platform in (getattr(self, "_failed_platforms", None) or {}):
+                continue  # the default owns it: secondaries ARE served through the shared adapter
+            profiles = sorted(n for n, p in noted if p is platform)
+            lines.append(
+                f"{platform.value} is enabled in profile(s) {', '.join(profiles)} but not on the default "
+                f"profile — the platform is not being served. Under multiplex {platform.value} is shared "
+                "ingress: enable and configure it on the default profile, or disable it in those profiles."
+            )
+        return lines
+
     async def _start_one_profile_adapters(
         self, profile_name: str, profile_home: "Path", claimed: Dict[tuple, str]
     ) -> int:
