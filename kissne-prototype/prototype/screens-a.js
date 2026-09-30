@@ -514,7 +514,35 @@
         if (current.trim()) out.push(current.trim());
       });
     });
-    return out;
+    /* A bracket or stray punctuation that arrived on its own line must never
+       become a one-character bubble column. */
+    var punctOnly = /^[\s（）()【】[\]「」『』《》〈〉…—·、，。；：!?！？…"”'‘’.]+$/;
+    var merged = [];
+    out.forEach(function (part) {
+      var piece = String(part || '').trim();
+      if (!piece) return;
+      var prev = merged.length ? merged[merged.length - 1] : '';
+      var lonely = punctOnly.test(piece)
+        || (piece.length <= 2 && /[（）()【】「」《》]/.test(piece));
+      if (lonely && prev && !/<(?:span|div|pre|table|ul|ol|blockquote)/i.test(prev)) {
+        merged[merged.length - 1] = prev + piece;
+        return;
+      }
+      merged.push(piece);
+    });
+    /* A bracket at the very head has nothing behind it to join, so it leads the
+       next part instead of standing there on its own. */
+    if (merged.length > 1) {
+      var head = merged[0];
+      var headLonely = punctOnly.test(head)
+        || (head.length <= 2 && /[（）()【】「」《》]/.test(head));
+      var structuredNext = /<(?:span|div|pre|table|ul|ol|blockquote)/i.test(merged[1]);
+      if (headLonely && !structuredNext) {
+        merged[0] = head + merged[1];
+        merged.splice(1, 1);
+      }
+    }
+    return merged;
   }
   function aiMsg(html, cls, time, tag, state, activity, messageRef) {
     /* Process records deliberately live outside the assistant text row.  A tool call
@@ -886,9 +914,10 @@
     var lastIndex = timeline.length - 1;
     return (state.timeline || []).map(function (item, index) {
       if (!item) return '';
-      var divider = index ? '<div class="activity-divider" role="separator" aria-hidden="true"><span>'
-        + esc(index % 2 ? '・꣑୧・┈・┈・꣑୧・┈・┈・꣑୧・' : '✩┈┈∘*┈୨୧┈*∘┈┈✩')
-        + '</span></div>' : '';
+      var divider = index ? '<div class="activity-divider" role="separator" aria-hidden="true">'
+        + '<span class="activity-divider__line"></span>'
+        + '<span class="activity-divider__star">✦</span>'
+        + '<span class="activity-divider__line"></span></div>' : '';
       if (item.kind === 'reasoning') {
         var reasoningActive = !closed && index === lastIndex;
         return divider + '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + '">'
@@ -1572,6 +1601,7 @@
       var livePollTimer = null;
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
+      var liveTurnStartMs = Object.create(null);
       var liveCovered = Object.create(null);
       var liveSeenEvents = Object.create(null);
       var liveCurrentTurn = '';
@@ -1918,6 +1948,13 @@
             }, historyPresentation === 'tool_result' ? 'result' : 'call');
             return;
           }
+          if (historyPresentation === 'reasoning' || historyPresentation === 'thinking') {
+            /* Reasoning is process, never spoken content: park it in the timeline
+               instead of letting it fall through to an assistant bubble. */
+            if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
+            appendActivity(historyTurnId || 'history', 'reasoning', rawText);
+            return;
+          }
           if (historyPresentation === 'commentary') {
             if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
             if (looksLikeToolTranscript(rawText)) {
@@ -2102,7 +2139,10 @@
           + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
           + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
         var el = list.lastElementChild;
-        if (id) liveTurns[id] = el;
+        if (id) {
+          liveTurns[id] = el;
+          if (!liveTurnStartMs[id]) liveTurnStartMs[id] = Date.now();
+        }
         return el;
       }
       function livePresence(el, visible, text) {
@@ -2167,10 +2207,10 @@
       function freezeVisibleAnswerBeforeUser() {
         var id = String(liveCurrentTurn || '');
         var el = id && liveTurns[id];
-        if (!el || !el.isConnected) return;
+        if (!el || !el.isConnected) return null;
         var box = el.querySelector('[data-live-answer]');
         var raw = box && box.getAttribute('data-live-raw') || '';
-        if (!raw.trim()) return;
+        if (!raw.trim()) return null;
         /* Keep the already spoken part before the user's new bubble, then let the
            same logical turn continue below it. This is visual interleaving only;
            the persisted assistant message still has one turn_id. */
@@ -2182,6 +2222,7 @@
         var message = el.querySelector('[data-live-message]');
         if (message) message.hidden = true;
         el.classList.add('is-process-only');
+        return el;
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -2408,6 +2449,10 @@
               liveCompleted[turnId] = true;
               pushLog({
                 who: 'ai',
+                /* Dated by turn START, not completion: otherwise a follow-up
+                   typed mid-stream outranks it and the reply sinks below it
+                   as soon as the list is re-rendered. */
+                sortAt: (turnId && liveTurnStartMs[turnId]) || Date.now(),
                 html: chatHtmlFromWire(finalText),
                 activity: finalActivity,
                 time: clockNow(),
@@ -2418,6 +2463,7 @@
                 localOwned: true,
                 optimistic: true
               });
+              sortChatLogChronologically();
             }
             if (T && typeof T.notifyReply === 'function') T.notifyReply(
               turnId || String(event.event_id || event.message_id || ''), 'Kissne 回复完成',
@@ -2784,8 +2830,14 @@
         input.value = '';
         /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
         CHAT_USER_INPUT_AT = 0;
-        freezeVisibleAnswerBeforeUser();
+        var frozenTurn = freezeVisibleAnswerBeforeUser();
         append(meMsg(esc(v), '', clockNow()));
+        /* Whatever this turn is still saying goes on below the new message,
+           so the two conversations interleave like two people talking. */
+        if (frozenTurn && frozenTurn.isConnected) {
+          list.appendChild(frozenTurn);
+          jumpTo(list.scrollHeight);
+        }
         var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
         queueOutboundText(v, localLog);
       }
