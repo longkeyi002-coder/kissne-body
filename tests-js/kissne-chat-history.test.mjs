@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { JSDOM } from 'jsdom'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test as vitestTest } from 'vitest'
+const test = (name, fn, timeout = 12000) => vitestTest(name, fn, timeout)
 
 const windows = []
 afterEach(() => windows.splice(0).forEach(window => window.close()))
@@ -104,7 +105,7 @@ test('individual answer bubbles interleave with a new user message and retain th
   const input = root.querySelector('.composer__input')
   input.value = '中途这句'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => root.querySelectorAll('.msg--ai .bubble').length, { timeout: 4000 }).toBe(4)
+  await expect.poll(() => root.querySelectorAll('.msg--ai .bubble').length, { timeout: 6000 }).toBe(4)
   const spoken = () => [...root.querySelectorAll('[data-chat-message] .bubble')].map(node => node.textContent)
   const order = ['开始', '第一句。', '中途这句', '第二句！！', '（动作。完整。）', '他说："晚点回来。"']
   expect(spoken()).toEqual(order)
@@ -133,7 +134,7 @@ test('only a local send starts waiting; first thinking event removes star and ta
   const input = root.querySelector('.composer__input')
   input.value = '开始'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => root.querySelector('[data-turn-bridge]:not([hidden])'), { timeout: 4000 }).toBeTruthy()
+  await expect.poll(() => root.querySelector('[data-turn-bridge]:not([hidden])'), { timeout: 6000 }).toBeTruthy()
   const bridge = root.querySelector('[data-turn-bridge]')
   const firstX = Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])
   await expect.poll(() => Number(bridge.querySelector('[data-wait-star]').getAttribute('transform').match(/translate\(([^ ]+)/)[1])).toBeLessThan(firstX)
@@ -227,7 +228,7 @@ test('a reply arriving before send acknowledgement cannot restart waiting or the
   const input = root.querySelector('.composer__input')
   input.value = '很快的回复'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof accept, { timeout: 4000 }).toBe('function')
+  await expect.poll(() => typeof accept, { timeout: 6000 }).toBe('function')
   events.push({ type: 'completed', turn_id: 'second', text: '已经完成。' })
   await expect.poll(() => root.querySelector('.msg--ai .bubble')?.textContent).toBe('已经完成。')
   const beforeAck = notifications.length
@@ -259,13 +260,13 @@ test('failure keeps text only in composer and explicit retry reuses its original
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '这条未确认送达'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => input.value, { timeout: 3000 }).toBe('这条未确认送达')
+  await expect.poll(() => input.value, { timeout: 6000 }).toBe('这条未确认送达')
   expect(root.querySelectorAll('.msg--me .bubble')).toHaveLength(0)
   await new Promise(resolve => setTimeout(resolve, 700)); expect(calls).toHaveLength(1)
   reopen(); await expect.poll(() => root.querySelector('.composer__input').value).toBe('这条未确认送达')
   expect(root.querySelectorAll('.msg--me .bubble')).toHaveLength(0)
   input = root.querySelector('.composer__input'); input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => calls.length, { timeout: 4000 }).toBe(2); expect(calls[1]).toEqual(calls[0]); expect(input.value).toBe('')
+  await expect.poll(() => calls.length, { timeout: 6000 }).toBe(2); expect(calls[1]).toEqual(calls[0]); expect(input.value).toBe('')
 })
 
 test('local results appear first and stale remote responses cannot repopulate a cleared search', async () => {
@@ -294,7 +295,7 @@ test('browser results require preview confirmation and retain their source', asy
   await new Promise(resolve => setTimeout(resolve, 30))
   window.dispatchEvent(new window.CustomEvent('kissne-browser-return', { detail: { text: '外部 AI 的回答', source_title: 'GPT', source_url: 'https://chatgpt.com/c/example', session_id: 'room-a' } }))
   expect(root.querySelector('[data-browser-return] textarea').value).toBe('外部 AI 的回答'); expect(sent).toEqual([])
-  root.querySelector('[data-browser-send]').click(); await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1)
+  root.querySelector('[data-browser-send]').click(); await expect.poll(() => sent.length, { timeout: 6000 }).toBe(1)
   expect(sent[0]).toContain('https://chatgpt.com/c/example'); expect(window.KissneBrowserTransfer.pending()).toBeNull()
 })
 
@@ -303,13 +304,13 @@ test('active reasoning and tools expand, then collapse into one finished process
   const { root, window } = fixture([], { poll: () => { const out = events; events = []; return out }, sendText: async () => { submitted = true; return { turn_id: 'live' } } })
   await new Promise(resolve => setTimeout(resolve, 30))
   const input = root.querySelector('.composer__input'); input.value = '查一下'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => submitted, { timeout: 4000 }).toBe(true)
+  await expect.poll(() => submitted, { timeout: 6000 }).toBe(true)
   events = [{ type: 'reasoning', turn_id: 'live', text: '正在思考' }, { type: 'tool_call', turn_id: 'live', tool_call_id: 'search', tool_name: 'web_search', text: '查网页' }]
-  await expect.poll(() => root.querySelector('.process-reasoning')?.hidden, { timeout: 4000 }).toBe(false)
+  await expect.poll(() => root.querySelector('.process-reasoning')?.hidden, { timeout: 6000 }).toBe(false)
   expect(root.querySelector('[data-turn-bridge]').hidden).toBe(true)
   await expect.poll(() => root.querySelector('.process-step--tool .activity-detail')?.hidden).toBe(false)
   events = [{ type: 'delta', turn_id: 'live', text: '查到了。' }, { type: 'completed', turn_id: 'live', text: '查到了。' }]
-  await expect.poll(() => root.querySelector('[data-activity-steps]')?.hidden, { timeout: 4000 }).toBe(true)
+  await expect.poll(() => root.querySelector('[data-activity-steps]')?.hidden, { timeout: 6000 }).toBe(true)
   expect(root.querySelectorAll('[data-activity-summary]')).toHaveLength(1)
   expect(root.querySelector('[data-activity-summary]').textContent).toContain('处理完成')
 })
@@ -333,7 +334,7 @@ test('a failed request settling after reopening removes its bubble and preserves
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '未确认的第一句'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof rejectSend, { timeout: 4000 }).toBe('function')
+  await expect.poll(() => typeof rejectSend, { timeout: 6000 }).toBe('function')
   reopen(); await new Promise(resolve => setTimeout(resolve, 30))
   input = root.querySelector('.composer__input'); input.value = '后来输入的第二句'
   input.dispatchEvent(new window.Event('input'))
@@ -390,10 +391,10 @@ test('retrying an unconfirmed send already restored from server history leaves o
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '这条服务器已收到'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => input.value, { timeout: 4000 }).toBe('这条服务器已收到')
+  await expect.poll(() => input.value, { timeout: 6000 }).toBe('这条服务器已收到')
   reopen(); await expect.poll(() => root.querySelectorAll('.msg--me .bubble').length).toBe(1)
   input = root.querySelector('.composer__input'); input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => attempt, { timeout: 4000 }).toBe(2)
+  await expect.poll(() => attempt, { timeout: 6000 }).toBe(2)
   await expect.poll(() => root.querySelectorAll('.msg--me .bubble').length).toBe(1)
   expect(root.querySelector('.msg--me .bubble').textContent).toBe('这条服务器已收到')
 })
@@ -404,7 +405,7 @@ test('an accepted request settling after reopening clears only its restored pend
   await new Promise(resolve => setTimeout(resolve, 30))
   let input = root.querySelector('.composer__input'); input.value = '等待确认这句'
   input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await expect.poll(() => typeof acceptSend, { timeout: 4000 }).toBe('function')
+  await expect.poll(() => typeof acceptSend, { timeout: 6000 }).toBe('function')
   reopen(); await expect.poll(() => root.querySelector('.composer__input').value).toBe('等待确认这句')
   acceptSend({ turn_id: 'confirmed' })
   await expect.poll(() => root.querySelector('.composer__input').value).toBe('')
@@ -490,7 +491,7 @@ test('consecutive send taps become one transport request, one bubble and one res
   input.value = '第二句'; input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   await new Promise(resolve => setTimeout(resolve, 900));
   expect(sent).toEqual([]);
-  await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1);
+  await expect.poll(() => sent.length, { timeout: 6000 }).toBe(1);
   expect(sent[0].text).toBe('第一句第二句');
   expect([...root.querySelectorAll('.msg--me .bubble')].map(node => node.textContent)).toEqual(['第一句第二句']);
   reopen();
@@ -508,7 +509,33 @@ test('Chinese composition holds the queued send and leaves unsubmitted text in t
   await new Promise(resolve => setTimeout(resolve, 1800));
   expect(sent).toEqual([]);
   input.dispatchEvent(new window.CompositionEvent('compositionend'));
-  await expect.poll(() => sent.length, { timeout: 4000 }).toBe(1);
-  expect(sent).toEqual(['已经发送']);
+  await new Promise(resolve => setTimeout(resolve, 600));
+  expect(sent).toEqual([]);
   expect(input.value).toBe('尚未发送的草稿');
+  input.value = ''; input.dispatchEvent(new window.Event('input'));
+  await expect.poll(() => sent.length, { timeout: 6000 }).toBe(1);
+  expect(sent).toEqual(['已经发送']);
+  expect(input.value).toBe('');
 }, 10000);
+
+test('replaying reasoning history around tools is idempotent and preserves separate equal phases', async () => {
+  for (const afterTool of ['第二阶段思考', '第一阶段思考']) {
+    const history = [
+      row('user', '开始', { message_ref: 'turn:first:user' }),
+      row('assistant', '第一阶段', { presentation: 'reasoning' }),
+      row('assistant', '思考', { presentation: 'reasoning' }),
+      row('assistant', '检索资料', { presentation: 'tool_call', tool_call_id: 'search', tool_name: 'web_search' }),
+      row('assistant', '检索完成', { presentation: 'tool_result', tool_call_id: 'search', tool_name: 'web_search' }),
+      row('assistant', afterTool, { presentation: 'reasoning' }),
+      row('assistant', '完成', { message_ref: 'turn:first:assistant' })
+    ];
+    const { root, reopen } = fixture(history);
+    const thoughts = () => [...root.querySelectorAll('.process-reasoning')].map(node => node.textContent);
+    await expect.poll(thoughts).toEqual(['第一阶段思考', afterTool]);
+    for (let opening = 0; opening < 2; opening++) {
+      reopen();
+      await expect.poll(thoughts).toEqual(['第一阶段思考', afterTool]);
+      expect(root.querySelectorAll('[data-tool-call-id="search"]')).toHaveLength(1);
+    }
+  }
+});

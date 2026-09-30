@@ -15,15 +15,10 @@
   }
   function outboxWait(state) {
     if (!state.items.length) return 0;
-    var remaining = 1600 - (state.now - state.updatedAt);
-    if (state.composerText.trim() && state.inputAt) {
-      remaining = Math.max(remaining, 420 - (state.now - state.inputAt));
-    }
-    // Bound sustained typing without sending any text still in the composer.
-    if (state.isComposing) remaining = Math.max(remaining, 420);
-    var firstAt = state.items[0].queuedAt;
-    if (typeof firstAt === 'number') remaining = Math.min(remaining, 8000 - (state.now - firstAt));
-    return Math.max(0, remaining);
+    // Unsubmitted text means the user is still composing the next part.
+    if (state.isComposing || state.composerText.trim()) return 420;
+    var lastAction = Math.max(state.updatedAt, state.inputAt || 0);
+    return Math.max(0, 3000 - (state.now - lastAction));
   }
   function coalesceUserRows(rows, html, chatLog, localRows) {
     if (!rows.length) return null;

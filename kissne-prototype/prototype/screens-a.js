@@ -2017,6 +2017,27 @@
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
         var historyTurnCursor = '';
+        var reasoningReplayCursor = Object.create(null);
+        var reasoningReplayPhase = Object.create(null);
+        function restoreHistoryReasoning(turnId, value) {
+          var id = String(turnId || 'history'), text = normalizeReasoningText(value);
+          if (!text) return;
+          var state = activityForTurn(id);
+          var from = reasoningReplayCursor[id] === undefined ? 0 : reasoningReplayCursor[id] + (reasoningReplayPhase[id] ? 0 : 1);
+          for (var ri = from; ri < state.timeline.length; ri++) {
+            var item = state.timeline[ri];
+            if (item.kind !== 'reasoning') continue;
+            var cachedText = normalizeReasoningText(item.text);
+            if (cachedText === text || cachedText.indexOf(text) >= 0) {
+              reasoningReplayCursor[id] = ri;
+              reasoningReplayPhase[id] = true;
+              return;
+            }
+          }
+          appendActivity(id, 'reasoning', value);
+          reasoningReplayCursor[id] = state.timeline.length - 1;
+          reasoningReplayPhase[id] = true;
+        }
         (history || []).forEach(function (item) {
           if (!item) return;
           var role = String(item.role || '');
@@ -2029,9 +2050,12 @@
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
           if (role === 'user') historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
+          if (role === 'tool' || /^tool_/.test(historyPresentation) || (item.tool_calls && item.tool_calls.length)) {
+            reasoningReplayPhase[String(historyTurnId || 'history')] = false;
+          }
           if (role === 'assistant' && !historyPresentation) {
             var taggedHistory = window.KissneChatPresentation.channels(rawText);
-            if (taggedHistory.reasoning) appendActivity(historyTurnId || 'history', 'reasoning', taggedHistory.reasoning);
+            if (taggedHistory.reasoning) restoreHistoryReasoning(historyTurnId, taggedHistory.reasoning);
             rawText = taggedHistory.answer;
             if (!rawText.trim() && taggedHistory.reasoning) return;
           }
@@ -2053,7 +2077,7 @@
             /* Reasoning is process, never spoken content: park it in the timeline
                instead of letting it fall through to an assistant bubble. */
             if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
-            appendActivity(historyTurnId || 'history', 'reasoning', rawText);
+            restoreHistoryReasoning(historyTurnId, rawText);
             return;
           }
           if (historyPresentation === 'commentary') {
@@ -2067,7 +2091,7 @@
               }, 'result');
               return;
             }
-            appendActivity(historyTurnId || 'history', 'reasoning', rawText);
+            restoreHistoryReasoning(historyTurnId, rawText);
             return;
           }
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
