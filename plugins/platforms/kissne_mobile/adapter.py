@@ -504,6 +504,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
         app.router.add_post(BOOTSTRAP_PATH, self._handle_bootstrap)
         app.router.add_post(MESSAGES_PATH, self._handle_inbound)
         app.router.add_get(MESSAGES_PATH, self._handle_outbound)
+        app.router.add_get("/toolsets", self._handle_toolsets)
+        app.router.add_post("/toolsets", self._handle_toolsets)
+        app.router.add_get("/attachments", self._handle_attachment_read)
         app.router.add_get(HISTORY_PATH, self._handle_history)
         app.router.add_get(SEARCH_PATH, self._handle_history_search)
         app.router.add_get(MEMORY_TIMELINE_PATH, self._handle_memory_timeline)
@@ -1325,6 +1328,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         kind = "file"
         file_name = ""
         mime_type = ""
+        caption = ""
         file_bytes = bytearray()
         try:
             reader = await request.multipart()
@@ -1345,7 +1349,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
                         file_bytes.extend(chunk)
                         if len(file_bytes) > DEFAULT_MEDIA_MAX_BYTES:
                             return _error_response("attachment_too_large", 413)
-                elif field in {"message_id", "kind", "file_name", "mime_type"}:
+                elif field in {"message_id", "kind", "file_name", "mime_type", "caption"}:
                     value = (await part.text()).strip()
                     if field == "message_id":
                         message_id = value
@@ -1355,6 +1359,8 @@ class KissneMobileAdapter(BasePlatformAdapter):
                         file_name = value
                     elif field == "mime_type":
                         mime_type = value
+                    elif field == "caption":
+                        caption = value[:4000]
         except web.HTTPRequestEntityTooLarge:
             return _error_response("attachment_too_large", 413)
         except Exception:
@@ -1365,14 +1371,14 @@ class KissneMobileAdapter(BasePlatformAdapter):
             return _error_response("attachment_required", 400)
         file_name = _Path(file_name or ("photo" if kind == "photo" else ("voice" if kind == "audio" else "file"))).name
         mime_type = (mime_type or "application/octet-stream").strip()
-        if mime_type.startswith("image/") and kind != "sticker":
-            kind = "photo"
+        # The sender selects photo vs document presentation, even for image files.
 
         store = self.device_store()
         client_message_id = message_id.strip()
         digest = hashlib.sha256()
         for piece in (
             kind.encode("utf-8"),
+            caption.encode("utf-8"),
             file_name.encode("utf-8", errors="replace"),
             mime_type.encode("utf-8", errors="replace"),
             bytes(file_bytes),
@@ -1424,7 +1430,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
         is_audio = kind == "audio"
         marker = f"[照片：{file_name}]" if is_photo else (f"[语音：{file_name}]" if is_audio else f"[文件：{file_name}]")
         event = MessageEvent(
-            text=marker,
+            text=(caption + "\n" + marker).strip(),
             message_type=MessageType.PHOTO if is_photo else (MessageType.VOICE if is_audio else MessageType.DOCUMENT),
             source=self.source_for_installation(installation),
             raw_message={
@@ -1444,7 +1450,7 @@ class KissneMobileAdapter(BasePlatformAdapter):
             await asyncio.to_thread(
                 store.record_attachment_message,
                 installation, turn_id, marker,
-                [{"type": "image" if is_photo else ("audio" if is_audio else "file"), "mime_type": mime_type, "label": file_name}],
+                [{"type": "image" if is_photo else ("audio" if is_audio else "file"), "mime_type": mime_type, "label": file_name, "stored_name": disk_path.name}],
             )
         except Exception:
             logger.exception("[kissne_mobile] failed to inject inbound attachment %s", message_id)
@@ -1590,7 +1596,9 @@ class KissneMobileAdapter(BasePlatformAdapter):
                 if mobile_turn:
                     item["_turn_id"] = mobile_turn
                 if attachments:
-                    item["attachments"] = attachments
+                    from .media_display import enrich_attachments, visible_media_text
+                    item["attachments"] = enrich_attachments(mobile_turn, attachments)
+                    item["text"] = visible_media_text(item["text"], attachments)
                 if role == "user" and mobile_turn:
                     link = replies_by_turn.get(mobile_turn)
                     if link:
@@ -1784,6 +1792,57 @@ class KissneMobileAdapter(BasePlatformAdapter):
             raise
         return paths
 
+    async def _handle_toolsets(self, request):
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        if self.bound_conversation(installation) is None:
+            return _error_response("installation_not_bound_to_a_runtime_conversation", 409)
+        change = None
+        if request.method == "POST":
+            try:
+                change = await request.json()
+                if not isinstance(change, dict):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return _error_response("invalid_toolset_change", 400)
+        source = self.source_for_installation(installation)
+        profile = str(getattr(source, "profile", "") or getattr(self, "_owner_profile", "") or "")
+        from .toolset_controls import platform_toolsets
+        try:
+            result = await asyncio.to_thread(platform_toolsets, profile, change)
+        except ValueError:
+            return _error_response("invalid_toolset_change", 400)
+        except Exception:
+            logger.exception("[kissne_mobile] toolset settings unavailable")
+            return _error_response("toolset_settings_unavailable", 503)
+        return _json_response(result)
+
+    async def _handle_attachment_read(self, request):
+        installation = await self._authenticated_installation(request)
+        if not installation:
+            return _error_response("unauthorized", 401)
+        turn_id = str(request.query.get("turn_id") or "")
+        try:
+            index = int(request.query.get("index", "0"))
+        except ValueError:
+            return _error_response("invalid_attachment_index", 400)
+        records = await asyncio.to_thread(self.device_store().attachment_messages, installation, 500)
+        record = next((r for r in records if r.get("turn_id") == turn_id), None)
+        rows = list((record or {}).get("attachments") or [])
+        if index < 0 or index >= len(rows):
+            return _error_response("attachment_not_found", 404)
+        from .media_display import attachment_path
+        meta = rows[index]
+        path = attachment_path(turn_id, meta)
+        if path is None:
+            return _error_response("attachment_not_found", 404)
+        import base64
+        data = await asyncio.to_thread(path.read_bytes)
+        return _json_response({"ok": True, "file_name": meta.get("file_name") or meta.get("label") or "附件",
+                               "mime_type": meta.get("mime_type") or "application/octet-stream",
+                               "base64": base64.b64encode(data).decode()})
+
     def _set_inbound_attachment_metadata(
         self, event: MessageEvent, installation: str, turn_id: str,
         marker: str, attachments: List[Dict[str, Any]], paths: List[str],
@@ -1798,6 +1857,18 @@ class KissneMobileAdapter(BasePlatformAdapter):
         metadata = getattr(event, "_kissne_attachment_metadata", None)
         if not isinstance(metadata, dict) or metadata.get("persisted"):
             return
+        def retain_media():
+            from plugins.plugin_storage import plugin_data_dir
+            import shutil
+            root = plugin_data_dir(PLATFORM_NAME) / "uploads"
+            root.mkdir(parents=True, exist_ok=True)
+            for index, (meta, raw_path) in enumerate(zip(metadata.get("attachments") or [], metadata.get("paths") or [])):
+                source = _Path(str(raw_path))
+                target = root / (str(metadata.get("turn_id")) + "_saved_" + str(index) + source.suffix)
+                if source.is_file():
+                    shutil.copyfile(source, target)
+                    meta["stored_name"] = target.name
+        await asyncio.to_thread(retain_media)
         await asyncio.to_thread(
             self.device_store().record_attachment_message,
             str(metadata.get("installation") or ""),
@@ -2700,10 +2771,12 @@ class KissneMobileAdapter(BasePlatformAdapter):
         }
         for item in history:
             turn_id = str(item.get("_turn_id") or item.get("turn_id") or "").strip()
-            if item.get("role") == "user" and turn_id in represented_turn_ids:
+            if item.get("role") == "user" and turn_id:
                 attachments = attachments_by_turn.get(turn_id)
                 if attachments:
-                    item["attachments"] = attachments
+                    from .media_display import enrich_attachments, visible_media_text
+                    item["attachments"] = enrich_attachments(turn_id, attachments)
+                    item["text"] = visible_media_text(item["text"], attachments)
         history.sort(key=lambda item: (float(item.get("created_at") or 0), str(item.get("message_ref") or "")))
         pending = await asyncio.to_thread(self.device_store().pending_turn_id, installation)
         # In-process reconnects can restore every still-live approval. After a Runtime restart the

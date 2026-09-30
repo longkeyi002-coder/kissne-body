@@ -70,7 +70,7 @@ class BrowserActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(248, 249, 253))
+            setBackgroundColor(Color.rgb(244, 249, 255))
         }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(
@@ -88,12 +88,12 @@ class BrowserActivity : AppCompatActivity() {
         fun navButton(label: String, action: () -> Unit): TextView = TextView(this).apply {
             text = label
             textSize = 16f
-            setTextColor(Color.rgb(55, 65, 90))
+            setTextColor(Color.rgb(66, 104, 139))
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnClickListener { action() }
         }
-        top.addView(navButton("‹") { if (webView.canGoBack()) webView.goBack() else finish() })
+        top.addView(navButton("‹") { if (activeTab == "bookmarks") { switchTab(lastPageTab); return@navButton }; if (webView.canGoBack()) webView.goBack() else finish() })
 
         address = EditText(this).apply {
             isSingleLine = true
@@ -135,12 +135,17 @@ class BrowserActivity : AppCompatActivity() {
         root.addView(shortcuts)
         root.addView(pages, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(actions)
+        val navigation = LinearLayout(this).apply { setBackgroundColor(Color.WHITE); gravity = Gravity.CENTER }
+        listOf("人人星" to "#/chat", "小机星" to "#/universe").forEach { (label, route) ->
+            navigation.addView(navButton(label) { setResult(RESULT_OK, Intent().putExtra("route", route)); finish() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        root.addView(navigation)
         setContentView(root)
         ViewCompat.requestApplyInsets(root)
 
         val initial = intent.getStringExtra(EXTRA_URL)?.takeIf { it.isNotBlank() } ?: DEEPSEEK_URL
         val firstTab = BrowserAgent.siteId(initial).takeIf { it == "chatgpt" || it == "deepseek" } ?: "search"
-        switchTab(firstTab, normalizeUrl(initial))
+        switchTab(if (!intent.hasExtra(EXTRA_URL)) savedActiveTab else firstTab, if (intent.hasExtra(EXTRA_URL)) normalizeUrl(initial) else null)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -196,7 +201,8 @@ class BrowserActivity : AppCompatActivity() {
             createTabWebView().also { view ->
                 pages.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                 installWebAiCommandBridge(view)
-                view.loadUrl(initialUrl ?: when (id) { "chatgpt" -> "https://chatgpt.com/"; "deepseek" -> DEEPSEEK_URL; else -> "https://www.google.com/" })
+                val restored = if (initialUrl == null) savedTabStates[id]?.let { view.restoreState(it) != null } ?: false else false
+                if (!restored) view.loadUrl(initialUrl ?: when (id) { "chatgpt" -> "https://chatgpt.com/"; "deepseek" -> DEEPSEEK_URL; else -> "https://www.google.com/" })
             }
         }
         webView.visibility = View.VISIBLE; webView.onResume(); address.setText(webView.url ?: initialUrl.orEmpty()); progress.visibility = View.GONE; paintTabs()
@@ -511,13 +517,16 @@ class BrowserActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         if (::webView.isInitialized) {
-            tabs.values.forEach { view -> (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
+            savedActiveTab = if (activeTab == "bookmarks") lastPageTab else activeTab
+            tabs.forEach { (id, view) -> savedTabStates[id] = Bundle().also { view.saveState(it) }; (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
             tabs.clear()
         }
         super.onDestroy()
     }
 
     companion object {
+        private val savedTabStates = linkedMapOf<String, Bundle>()
+        private var savedActiveTab = "deepseek"
         const val EXTRA_URL = "url"
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"

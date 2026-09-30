@@ -275,7 +275,7 @@ def test_bootstrap_restores_attachment_presentation_metadata(tmp_path):
     assert len(restored) == 1
     assert restored[0]["text"] == "给你看"
     assert restored[0]["attachments"] == [
-        {"type": "image", "mime_type": "image/png", "label": ""}
+        {"type": "image", "mime_type": "image/png", "label": "", "turn_id": "turn-attachment-1", "attachment_index": 0}
     ]
     # Presentation persistence must never put the original base64/binary payload into bootstrap.
     assert "data" not in restored[0]["attachments"][0]

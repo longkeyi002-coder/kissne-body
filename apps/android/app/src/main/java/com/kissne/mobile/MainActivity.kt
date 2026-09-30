@@ -45,8 +45,21 @@ class MainActivity : AppCompatActivity() {
     private var pendingAttachmentRequestId: String? = null
     private var pendingAttachmentKind: String? = null
 
+    private val screenPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, ScreenShareService::class.java).putExtra("data", result.data))
+        }
+    }
+    private fun screenAction(action: String) {
+        if (action == "start") {
+            if (!ScreenShareService.active) screenPermission.launch(getSystemService(android.media.projection.MediaProjectionManager::class.java).createScreenCaptureIntent())
+        } else if (ScreenShareService.active) startService(Intent(this, ScreenShareService::class.java).setAction(action))
+    }
+
     private val browserResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
+        val route = data?.getStringExtra("route")
+        if (result.resultCode == RESULT_OK && route in listOf("#/chat", "#/universe") && ::webView.isInitialized) webView.evaluateJavascript("location.hash=" + JSONObject.quote(route) + ";", null)
         val text = data?.getStringExtra(BrowserActivity.EXTRA_TEXT)?.trim().orEmpty()
         if (result.resultCode == RESULT_OK && text.isNotEmpty() && ::webView.isInitialized) {
             val payload = JSONObject().put("text", text).put("source_url", data?.getStringExtra(BrowserActivity.EXTRA_URL).orEmpty())
@@ -182,6 +195,7 @@ class MainActivity : AppCompatActivity() {
             startAttachmentPicker = { requestId, kind -> startAttachmentPicker(requestId, kind) },
             openBrowser = { url -> openBrowser(url) },
             openBrowserWithText = { url, text -> openBrowser(url, text) },
+            screenControl = { action -> screenAction(action) },
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)

@@ -2015,3 +2015,20 @@ html.is-native-shell .msg__ava *{-webkit-tap-highlight-color:transparent}
 
 .expression-setting{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 16px}
 .expression-setting .muted{flex-basis:100%}
+
+/* Shared blue/white theme, additive to existing layout and turn geometry. */
+:root { --g1:#f7fbff; --g2:#eef5fb; --g3:#e1edf7; --g4:#cedfed; --g5:#adc5da; --g8:#35536d; --g9:#436c91; --line:#dae7f1; --line-2:#b8cfe1; --ink:#294257; --ink-2:#6b8296; }
+.btn--primary,.chip.is-active,.tabbar__item.is-active { background:var(--blue-ink); color:white; }
+.msg { position:relative; margin-bottom:10px; min-height:52px; }
+.msg__time--avatar { position:absolute; top:37px; left:0; width:34px; text-align:center; margin:0!important; font-size:9px; }
+.msg--me .msg__time--avatar { left:auto; right:0; text-align:center; }
+.activity-stream__steps .process-step { margin:0 0 12px; }
+.process-tool-label { display:flex; justify-content:center; align-items:center; gap:7px; color:var(--blue-deep); font-size:12px; margin-bottom:6px; }
+.activity-summary { color:var(--blue-deep); }
+.attachmsg:has(.attachmsg__img) { padding:0; background:transparent; border:0; }
+
+.chat-progress-hint { position:absolute; right:14px; bottom:170px; z-index:8; border:1px solid var(--blue-line); border-radius:18px; background:white; color:var(--blue-deep); padding:7px 12px; font-size:12px; }
+.chat-progress-hint[hidden] { display:none; }
+
+.toolset-setting { display:flex; align-items:center; gap:8px; padding:7px 0; color:var(--blue-deep); }
+.toolset-setting input { accent-color:var(--blue-ink); }

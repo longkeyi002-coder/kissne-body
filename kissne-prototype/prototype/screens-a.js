@@ -53,14 +53,7 @@
         </div>`;
 
       var showMore = ctx.state === 'more';
-      var APPS = showMore ? [
-        { t: '语音设置', ic: 'mic',     to: '#/settings' },
-        { t: '对话记录', ic: 'clock',   to: '#/sessions' },
-        { t: '账号安全', ic: 'user',    to: '#/settings' },
-        { t: '数据备份', ic: 'refresh', to: '#/settings' },
-        { t: '关于',     ic: 'info',    to: '#/settings' },
-        { t: '返回常用', ic: 'home',    to: '#/home' }
-      ] : [
+      var APPS = [
         { t: '浏览器',   ic: 'search', action: 'open-browser' },
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: 'Skills',   ic: 'box',    to: '#/skills' },
@@ -70,7 +63,7 @@
         { t: '运维',     ic: 'server', to: '#/admin' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
         { t: '表情包',   ic: 'smile',  to: '#/stickers' },
-        { t: '更多',     ic: 'home',   to: '#/home?state=more' }
+
       ];
       var appgrid = '<div class="appgrid">' + APPS.map(function (a) {
         return '<a class="appgrid__item"' + (a.action ? ' data-action="' + a.action + '"' : ' data-nav="' + a.to + '"') + '>'
@@ -397,19 +390,18 @@
     var size = Number(meta.size || 0);
     var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
     var state = String(status || 'sent');
+    var attachmentAttrs = meta.turn_id ? ' data-open-attachment="' + esc(meta.turn_id) + '" data-attachment-index="' + Number(meta.attachment_index || 0) + '"' : '';
     var statusText = state === 'sending' ? '正在发送…' : (state === 'failed' ? '发送失败' : '已发送');
     var preview = String(meta.preview || lookupAttachmentPreview(meta) || '');
     if (/^data:image\//i.test(preview) && (kind === 'photo' || kind === 'image')) {
       rememberAttachmentPreview(meta, preview);
       return '<span class="attachmsg attachmsg--' + esc(state) + '"'
-        + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+        + attachmentAttrs + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
         + '<img class="attachmsg__img" src="' + esc(preview) + '" alt="' + esc(name) + '">'
-        + '<span class="attachmsg__body attachmsg__body--caption"><b>' + esc(name) + '</b>'
-        + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
-        + '<small class="attachmsg__status">' + esc(statusText) + '</small></span>'
+        + (state === 'sent' ? '' : '<small class="attachmsg__status">' + esc(statusText) + '</small>')
         + '</span>';
     }
-    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + attachmentAttrs + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
       + '<span class="attachmsg__ic">' + icon(kind === 'photo' || kind === 'sticker' ? 'image' : ((kind === 'voice' || kind === 'audio') ? 'mic' : 'file'), 19) + '</span>'
       + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
       + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
@@ -490,7 +482,7 @@
         return;
       }
       if (/<(?:strong|em|b|i|a|code)\b/i.test(block)) {
-        block.split(/\n+/).filter(function (line) { return hasChatPayload(line); }).forEach(function (line) { out.push(line); });
+        out.push(block);
         return;
       }
       block = block.replace(/&quot;/g, '"');
@@ -504,6 +496,7 @@
         })
         && lines.filter(function (line) { return /[。！？!?；;:]$/.test(line); }).length < Math.ceil(lines.length / 2);
       if (tokenLikeLines) lines = [joinReasoningLines(lines)];
+      if (lines.length === 1 && lines[0].length <= 180) { out.push(lines[0]); return; }
       var closing = [], quoted = false;
       var pairs = { '(': ')', '（': '）', '[': ']', '【': '】', '“': '”', '「': '」', '『': '』' };
       lines.forEach(function (line) {
@@ -517,7 +510,7 @@
           current += ch;
           var next = chars[i + 1] || '';
           var cjkEnd = /[。！？!?]/.test(ch);
-          var englishEnd = /[.!?]/.test(ch) && /\s/.test(next);
+          var englishEnd = /[.!?]/.test(ch) && /\s/.test(next) && !/^\s*\d+\.$/.test(current);
           if ((cjkEnd || englishEnd) && !closing.length && !quoted && !/[。！？!?）)\]】」』”"]/.test(next)) {
             if (current.trim()) out.push(current.trim());
             current = '';
@@ -555,7 +548,13 @@
         merged.splice(1, 1);
       }
     }
-    return merged;
+    var semantic = [];
+    merged.forEach(function (part) {
+      var prev = semantic[semantic.length - 1];
+      if (prev && /^(?:\d+[.)、]|[-*•])$/.test(prev.trim())) semantic[semantic.length - 1] = prev + ' ' + part;
+      else semantic.push(part);
+    });
+    return semantic;
   }
   function aiMsg(html, cls, time, tag, state, activity, messageRef) {
     /* Process records deliberately live outside the assistant text row.  A tool call
@@ -566,7 +565,7 @@
     return process + '<div class="msg msg--ai" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
       + '<div class="msg__body">'
       + assistantBubbleHtml(html, cls)
-      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
+      + '</div>' + '<span class="msg__time msg__time--avatar">' + (time || '09:41') + '</span>'
       + '</div>';
   }
   /* 「我」这一侧：头像是**小羊**（人人星）。
@@ -580,7 +579,7 @@
     return '<div class="msg msg--me" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
-      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
+      + '</div>' + '<span class="msg__time msg__time--avatar">' + (time || '09:41') + '</span>'
       + '</div>';
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
@@ -633,6 +632,9 @@
     if (!nextText) return oldText;
     if (nextText.indexOf(oldText) === 0) return nextText;
     if (oldText.indexOf(nextText) >= 0) return oldText;
+    for (var overlap = Math.min(oldText.length, nextText.length); overlap >= 20; overlap--) {
+      if (oldText.slice(-overlap) === nextText.slice(0, overlap)) return oldText + nextText.slice(overlap);
+    }
     return joinReasoningLines([oldText, nextText]);
   }
 
@@ -941,17 +943,12 @@
         + '<span class="activity-divider__line"></span>'
         + '<span class="activity-divider__star">✦</span>'
         + '<span class="activity-divider__line"></span></div>' : '';
-      var expanded = item.expanded === undefined ? !closed : !!item.expanded;
+      var expanded = true;
       var detailHidden = expanded ? '' : ' hidden';
       var expandedAttr = expanded ? 'true' : 'false';
       if (item.kind === 'reasoning') {
         var reasoningActive = !closed && index === lastIndex;
-        return divider + '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '">'
-          + '<button type="button" class="process-line activity-row activity-row--reasoning" data-activity-toggle aria-expanded="' + expandedAttr + '" aria-label="'
-          + (reasoningActive ? '正在处理' : '展开思考过程') + '">'
-          + '<span class="process-line__mark" aria-hidden="true"></span>'
-          + (reasoningActive ? '<span class="process-line__label">正在处理</span>' + dots() : '')
-          + '</button>'
+        return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '">'
           + '<div class="activity-detail process-reasoning"' + detailHidden + '>' + reasoningHtml(item.text) + '</div></section>';
       }
       if (item.kind !== 'tool') return '';
@@ -965,13 +962,13 @@
       var label = tool.label || toolActivityLabel(tool.name || detail);
       if (/^使用工具$|^使用\s+[a-z0-9_.-]+$/i.test(label)) label = toolActivityLabel(tool.name || detail);
       var iconName = toolActivityIcon(label);
-      return divider + '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '" data-tool-call-id="' + esc(tool.id || key) + '">'
-        + '<button type="button" class="process-line activity-row" data-activity-toggle aria-expanded="' + expandedAttr + '" aria-label="'
+      return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+        + '<div class="process-tool-label" aria-expanded="' + expandedAttr + '" aria-label="'
         + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
         + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
         + '<span class="process-line__label process-line__label--tool">' + esc(label) + '</span>'
-        + (toolActive ? dots() : '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>')
-        + '</button>'
+        + (toolActive ? dots() : '')
+        + '</div>'
         + '<div class="activity-detail"' + detailHidden + '>' + esc(detail) + '</div></section>';
     }).join('');
   }
@@ -1058,6 +1055,7 @@
   function visibleAttachmentText(text, attachments) {
     var raw = visibleChatText(text);
     if (!Array.isArray(attachments) || !attachments.length) return raw;
+    raw = raw.replace(/\[The user sent an image[\s\S]*?\]/gi, '').replace(/\[If you need a closer look,[\s\S]*?\]/gi, '');
     return raw.replace(/[\[【]\s*(?:照片|文件|表情包)\s*[:：][^\]】]+[\]】]/g, '').trim();
   }
   function chatHtmlInlineFromWire(text) {
@@ -1602,6 +1600,24 @@
       /* 我们自己的"程序化滚动"（打开就到底 / 发完消息 / 点胶囊跳过去）**不算已读**，
          否则一进聊天页就自动把未读清掉了。400ms 内的滚动事件一律忽略。 */
       var scrollGuard = 0;
+      var followLatest = true, readGestureUntil = 0, followFrame = null;
+      var progressHint = document.createElement('button');
+      progressHint.className = 'chat-progress-hint'; progressHint.textContent = '有新进展，回到底部'; progressHint.hidden = true;
+      root.appendChild(progressHint);
+      function readGesture() { readGestureUntil = Date.now() + 800; }
+      function trackReading() {
+        if (Date.now() <= readGestureUntil) followLatest = list.scrollTop + list.clientHeight >= list.scrollHeight - 48;
+        if (followLatest) progressHint.hidden = true;
+      }
+      function resumeFollowing() { followLatest = true; progressHint.hidden = true; jumpTo(list.scrollHeight); }
+      list.addEventListener('wheel', readGesture, {passive:true}); list.addEventListener('touchmove', readGesture, {passive:true}); list.addEventListener('scroll', trackReading);
+      progressHint.addEventListener('click', resumeFollowing);
+      var followObserver = typeof MutationObserver === 'function' ? new MutationObserver(function (records) {
+        if (followFrame != null) return;
+        if (!followLatest) { if (records.some(function (r) { return r.target.closest && r.target.closest('[data-live-activity], [data-live-answer]'); })) progressHint.hidden = false; return; }
+        followFrame = requestAnimationFrame(function () { followFrame = null; if (followLatest) jumpTo(list.scrollHeight); });
+      }) : null;
+      if (followObserver) followObserver.observe(list, {childList:true,subtree:true,characterData:true});
       function jumpTo(top) {
         scrollGuard = Date.now() + 400;
         list.scrollTop = top;
@@ -1617,8 +1633,9 @@
       function append(html) {
         var emptyEl = list.querySelector('.chatempty');
         if (emptyEl && emptyEl.parentNode) emptyEl.parentNode.removeChild(emptyEl);
+        if (/msg--me/.test(html)) followLatest = true;
         list.insertAdjacentHTML('beforeend', html);
-        jumpTo(list.scrollHeight);
+        if (followLatest) jumpTo(list.scrollHeight);
       }
       function appendSystemNotice(text) {
         var html = esc(String(text || '系统通知'));
@@ -2233,7 +2250,7 @@
           + '<div class="activity-history" data-live-activity></div>'
           + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
           + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
-          + '<span class="msg__time">' + clockNow() + '</span></div></div></div>');
+          + '</div><span class="msg__time msg__time--avatar">' + clockNow() + '</span></div></div>');
         var el = list.lastElementChild;
         if (id) {
           el.setAttribute('data-turn-id', id);
@@ -3731,6 +3748,8 @@
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
+        if (followObserver) followObserver.disconnect(); if (followFrame != null) cancelAnimationFrame(followFrame);
+        list.removeEventListener('wheel', readGesture); list.removeEventListener('touchmove', readGesture); list.removeEventListener('scroll', trackReading); progressHint.remove();
         window.removeEventListener('kissne-browser-transfer-ready', paintBrowserReturn);
         window.removeEventListener('kissne-send-settled', onSendSettled);
         list.removeEventListener('click', onApprovalTap);
@@ -4403,12 +4422,28 @@
   };
   K.activityPillTime = callClock;
 
+  function screenShareState(action) {
+    var bridge = window.KissneNativeTransport;
+    if (!bridge || typeof bridge.screenShare !== 'function') return { active: false, message: '屏幕共享需要安装新版 Android App' };
+    try { return JSON.parse(bridge.screenShare(action || 'status')); } catch (_) { return { active: false, message: '屏幕状态暂时无法读取' }; }
+  }
+  function screenShareMarkup() {
+    return '<div class="screen screen--call" data-real-screen-share><div class="call">'
+      + '<div class="call__share">' + icon('screen', 36) + '<h2>让叶青栩看屏幕</h2><p data-share-state>尚未共享</p></div>'
+      + '<p>授权后，手机持续采集你选择的屏幕。点击这里或通知栏的“让叶哥看当前屏幕”，才把当前画面发给他。</p>'
+      + '<p>切换到其他 App 后，可直接从通知栏发送画面。发送后回到人人星查看回复。</p>'
+      + '<div class="call__ctl"><button class="btn btn--primary" data-screen-action="start">授权共享</button>'
+      + '<button class="btn" data-screen-action="send">让叶哥看看</button><button class="btn" data-screen-action="pause">暂停／继续</button>'
+      + '<button class="btn" data-screen-action="stop">停止共享</button></div><button class="btn btn--ghost" data-nav="#/chat">回到人人星</button></div></div>';
+  }
+
   K.registerScreen({
     no: '05b', id: 'call', name: '实时语音通话页', route: '#/call', tab: null,
     purpose: '通话 / 屏幕共享页：叶青栩素材、状态、静音 / 扬声器 / 屏幕共享 / 挂断。可以后台（退出本页顶部留"流体云"提示）；说的话转成文字落到人人星。',
     out: ['#/chat'],
     states: CALL_STATES,
     render: function (ctx) {
+      if (ctx.state === 'share' || CALL.kind === 'share') return screenShareMarkup();
       var s = ctx.state || 'ongoing';
       /* 状态以**模块级会话**为准，URL 只是入口 —— 这样从流体云点回来能还原现场 */
       if (s === 'share') CALL.kind = 'share';
@@ -4463,6 +4498,22 @@
 
     /* 会话状态、通话记录、说话转文字都在这里处理（页面本身不做字幕） */
     mount: function (root) {
+      if (root.querySelector('[data-real-screen-share]')) {
+        function paintShare() {
+          var state = screenShareState();
+          CALL.active = !!state.active; CALL.kind = 'share';
+          var label = root.querySelector('[data-share-state]');
+          if (label) label.textContent = (state.active ? (state.paused ? '共享已暂停' : '正在共享') : '尚未共享') + (state.message ? ' · ' + state.message : '');
+          root.querySelectorAll('[data-screen-action]').forEach(function (button) {
+            var action = button.getAttribute('data-screen-action');
+            button.disabled = action === 'start' ? !!state.active : !state.active || (action === 'send' && (state.paused || state.sending));
+          });
+        }
+        function controlShare(event) { var button = event.target.closest('[data-screen-action]'); if (button) { screenShareState(button.getAttribute('data-screen-action')); setTimeout(paintShare, 100); } }
+        root.addEventListener('click', controlShare); paintShare(); var shareTimer = setInterval(paintShare, 500);
+        return function () { clearInterval(shareTimer); root.removeEventListener('click', controlShare); };
+      }
+
       if (!CALL.active) callStart(CALL.kind);      /* 进这一页 = 建立会话 */
 
       /* 挂断 / 结束共享：先结束会话，再按 data-nav 回人人星 */

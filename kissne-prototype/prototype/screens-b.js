@@ -439,17 +439,26 @@
           , { tight: true })}
           ${card(
             listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
-            + listRow({ title: '关于 Kissne', sub: 'V0.2.23 · Android 合体版', icon: 'info' })
+            + listRow({ title: '关于 Kissne', sub: 'V0.2.26 · Android', icon: 'info' })
           , { tight: true })}
+          <div class="card" data-toolset-settings><h3>叶青栩的工具权限</h3><p data-toolset-notice>正在读取实际工具配置…</p><div data-toolset-options></div></div>
           ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
       </div>`;
     },
     mount: function (root) {
+      var toolHost = root.querySelector('[data-toolset-options]'), toolNotice = root.querySelector('[data-toolset-notice]');
+      var disposed = false;
+      var toolLabels = {browser:'浏览器', computer_use:'电脑操作', cronjob:'定时任务', clarify:'选择与确认', image_gen:'图片生成', terminal:'终端', web:'网页搜索', kissne_mobile:'Kissne 表情包'};
+      function paintTools(payload) { if (!toolHost || disposed) return; toolHost.innerHTML = (payload.toolsets || []).map(function (row) { return '<label class="toolset-setting"><input type="checkbox" data-toolset-key="' + esc(row.key) + '"' + (row.enabled ? ' checked' : '') + '> ' + esc(toolLabels[row.key] || row.key) + '</label>'; }).join(''); toolNotice.textContent = payload.notice || '配置会持久保留，不随安装或模型切换重置。'; }
+      var transport = window.KissneTransport;
+      if (toolHost && transport && transport.toolsets) transport.toolsets().then(paintTools).catch(function () { if (!disposed) toolNotice.textContent = '无法读取工具配置，请先更新服务器后重试。'; });
+      async function updateTool(event) { var input = event.target.closest('[data-toolset-key]'); if (!input || !transport || !transport.toolsets) return; input.disabled = true; try { paintTools(await transport.toolsets({toolset:input.getAttribute('data-toolset-key'), enabled:input.checked})); } catch (_) { input.checked = !input.checked; input.disabled = false; toolNotice.textContent = '保存失败，原配置未确认更改，请重试。'; } }
+      if (toolHost) toolHost.addEventListener('change', updateTool);
       var control = root.querySelector('[data-expression-filter]');
       function change() { if (window.KissneExpressionFilter) window.KissneExpressionFilter.setEnabled(control.checked); }
       if (control) control.addEventListener('change', change);
-      return function () { if (control) control.removeEventListener('change', change); };
+      return function () { disposed = true; if (toolHost) toolHost.removeEventListener('change', updateTool); if (control) control.removeEventListener('change', change); };
     }
   });
 

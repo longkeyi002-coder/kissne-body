@@ -15,6 +15,7 @@ class PrototypeBridge(
     private val startVoiceInput: (String) -> Unit = {},
     private val startAttachmentPicker: (String, String) -> Unit = { _, _ -> },
     private val openBrowser: (String?) -> Unit = {},
+    private val screenControl: (String) -> Unit = {},
     private val openBrowserWithText: (String?, String?) -> Unit = { _, _ -> },
 ) {
     /*
@@ -36,6 +37,28 @@ class PrototypeBridge(
         baseUrl = baseUrl(),
         tokenProvider = { store.deviceToken },
     )
+
+    @JavascriptInterface fun screenShare(action: String): String {
+        if (action != "status") webView.post { screenControl(action) }
+        return JSONObject().put("active", ScreenShareService.active).put("paused", ScreenShareService.paused).put("sending", ScreenShareService.sending).put("message", ScreenShareService.error).toString()
+    }
+    @JavascriptInterface fun copyText(text: String) { webView.post {
+        val clipboard = webView.context.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Kissne", text))
+    } }
+    @JavascriptInterface fun openAttachment(turn: String, index: Int) { backgroundExecutor.execute {
+        try {
+            val result = client().attachmentPayload(turn, index)
+            val directory = java.io.File(webView.context.cacheDir, "attachments").apply { mkdirs() }
+            val file = java.io.File(directory, java.io.File(result.optString("file_name", "file")).name)
+            file.writeBytes(Base64.decode(result.getString("base64"), Base64.DEFAULT))
+            val uri = androidx.core.content.FileProvider.getUriForFile(webView.context, webView.context.packageName + ".files", file)
+            webView.post {
+                try { webView.context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, result.optString("mime_type", "application/octet-stream")).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                catch (_: Exception) { webView.context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType(result.optString("mime_type", "application/octet-stream")).putExtra(android.content.Intent.EXTRA_STREAM, uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION), "保存或分享附件")) }
+            }
+        } catch (_: Exception) { webView.post { android.widget.Toast.makeText(webView.context, "附件暂时无法读取，请检查服务器版本", android.widget.Toast.LENGTH_SHORT).show() } }
+    } }
 
     @JavascriptInterface fun getBase(): String = baseUrl()
 
@@ -125,7 +148,7 @@ class PrototypeBridge(
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
             "sessions", "history", "search", "memoryTimeline", "memoryCandidates", "reviewMemory", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
-            "modelOptions", "setModel", "approval", "clarify", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
+            "toolsets", "modelOptions", "setModel", "approval", "clarify", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
             "adminStatus",
         )
 
@@ -251,6 +274,7 @@ class PrototypeBridge(
                 effort = body.optString("effort").takeIf { it.isNotBlank() },
                 provider = body.optString("provider").takeIf { it.isNotBlank() },
             )
+            "toolsets" -> client().toolsetsPayload(if (body.has("toolset")) body else null)
             "clarify" -> client().clarifyPayload(body.optString("clarify_id"), body.optString("response"), body.optBoolean("other", false))
             "approval" -> client().approvalPayload(
                 approvalId = body.optString("approval_id"),

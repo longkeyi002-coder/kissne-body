@@ -84,6 +84,10 @@ class MobileTransportClient(
         return request("GET", query.toString())
     }
 
+    fun toolsetsPayload(change: JSONObject? = null): JSONObject = if (change == null) request("GET", "/toolsets") else request("POST", "/toolsets", change)
+
+    fun attachmentPayload(turn: String, index: Int): JSONObject = request("GET", "/attachments?turn_id=" + java.net.URLEncoder.encode(turn, "UTF-8") + "&index=" + index)
+
     fun searchPayload(queryText: String, limit: Int = 500): JSONObject =
         request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
             "&limit=" + limit.coerceIn(1, 500))
@@ -162,6 +166,7 @@ class MobileTransportClient(
         fileName: String,
         mimeType: String,
         bytes: ByteArray,
+        caption: String = "",
     ): JSONObject {
         val boundary = "Kissne-" + UUID.randomUUID().toString()
         val connection = (requestUrl("/messages").openConnection() as HttpURLConnection).apply {
@@ -190,6 +195,7 @@ class MobileTransportClient(
                 out.field("kind", normalizeAttachmentKind(kind))
                 out.field("file_name", fileName)
                 out.field("mime_type", mimeType)
+                if (caption.isNotBlank()) out.field("caption", caption)
                 out.writeBytes("--$boundary$crlf")
                 out.writeBytes(
                     "Content-Disposition: form-data; name=\"file\"; filename=\"upload.bin\"$crlf"

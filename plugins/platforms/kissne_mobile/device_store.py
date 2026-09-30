@@ -639,7 +639,8 @@ class DeviceStore:
         if not handle:
             raise ValueError("turn_id is required")
         safe = [{"type": str(x.get("type") or ""), "mime_type": str(x.get("mime_type") or ""),
-                 "label": str(x.get("label") or "")}
+                 "label": str(x.get("label") or ""),
+                 **({"stored_name": str(x["stored_name"])} if x.get("stored_name") else {})}
                 for x in (attachments or []) if isinstance(x, dict)]
         with self._lock:
             conn = self._db()

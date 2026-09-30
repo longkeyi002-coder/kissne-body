@@ -30,7 +30,7 @@ function fixture(history, options = {}) {
   }
   // Execute the production screen and its dependencies; assertions target the rendered DOM.
   for (const file of ['core.js', 'assets.js', 'chat-lifecycle.js', 'chat-presentation.js', 'expression-filter.js', 'browser-transfer.js', 'screens-a.js']) {
-    window.eval(fs.readFileSync(new URL('../kissne-prototype/prototype/' + file, import.meta.url), 'utf8'))
+    window.eval(fs.readFileSync(file === 'screens-a.js' && process.env.KISSNE_BASELINE_SCREEN ? process.env.KISSNE_BASELINE_SCREEN : new URL('../kissne-prototype/prototype/' + file, import.meta.url), 'utf8'))
   }
   const screen = window.KSN.screens.find(screen => screen.id === 'chat')
   const root = window.document.getElementById('root')
@@ -409,4 +409,71 @@ test('an accepted request settling after reopening clears only its restored pend
   acceptSend({ turn_id: 'confirmed' })
   await expect.poll(() => root.querySelector('.composer__input').value).toBe('')
   expect(root.querySelectorAll('.msg--me .bubble')).toHaveLength(1)
+})
+
+test('numbered explanations retain their complete semantic units and avatar timestamps', async () => {
+  const { root } = fixture([
+    row('user', '解释一下'),
+    row('assistant', '所以三件事可以动。都不大。\n\n1.\n把默认模型写成 deepseek-flash（否则重启就漂回 mimo）\n\n2. 想有思考链，把力度提高一点。代价是回复慢一点。\n\n3.\n打开浏览器工具。'),
+  ])
+  await expect.poll(() => root.querySelectorAll('.msg--ai .bubble').length).toBeGreaterThan(0)
+  const bubbles = [...root.querySelectorAll('.msg--ai .bubble')].map(n => n.textContent.trim())
+  expect(bubbles.some(t => /^(1|3)\.$/.test(t))).toBe(false)
+  expect(bubbles.some(t => t.includes('1.') && t.includes('默认模型'))).toBe(true)
+  expect(bubbles.some(t => t.includes('3.') && t.includes('浏览器'))).toBe(true)
+  expect(bubbles.some(t => t.includes('所以三件事') && t.includes('都不大'))).toBe(true)
+  expect(root.querySelector('.msg__body .msg__time')).toBeNull()
+  expect(root.querySelector('.msg__time--avatar')).not.toBeNull()
+})
+
+test('process divider is the only collapse control and reveals all ordered detail', async () => {
+  const { root } = fixture([row('user','查资料'), row('assistant','先看资料', {presentation:'commentary'}), row('assistant','terminal: 查好了', {presentation:'commentary',tool_call_id:'call'}), row('assistant','完成')])
+  await expect.poll(() => root.querySelector('[data-activity-summary]')).not.toBeNull()
+  expect(root.querySelector('[data-activity-toggle]')).toBeNull()
+  const summary = root.querySelector('[data-activity-summary]')
+  const steps = root.querySelector('[data-activity-steps]')
+  expect(steps.hidden).toBe(true)
+  summary.click()
+  expect(steps.hidden).toBe(false)
+  expect([...steps.querySelectorAll('.activity-detail')].every(n => !n.hidden)).toBe(true)
+  expect(steps.textContent).toContain('先看资料')
+  expect(steps.textContent).toContain('terminal: 查好了')
+})
+
+test('restored album photos hide filenames and model-side vision instructions', async () => {
+  const preview = 'data:image/png;base64,iVBORw0KGgo='
+  const { root, reopen } = fixture([row('user', '[The user sent an image~ picture description.]\n[If you need a closer look, use vision_analyze with image_url: /private/server.jpg ~]\n[文件：相册照片.png]', { attachments:[{type:'image', file_name:'相册照片.png', preview}] })])
+  for (let attempt=0; attempt<2; attempt++) {
+    if (attempt) reopen()
+    await expect.poll(() => root.querySelector('.attachmsg__img')?.getAttribute('src')).toBe(preview)
+    const user = root.querySelector('.msg--me')
+    expect(user.textContent).not.toContain('相册照片.png')
+    expect(user.textContent).not.toContain('vision_analyze')
+    expect(user.textContent).not.toContain('/private')
+  }
+})
+
+test('live process follows bottom but preserves manual history reading until resumed', async () => {
+  const events = []
+  const { root, window } = fixture([row('user','当前问题')], {poll:()=>events.splice(0)})
+  await new Promise(resolve=>setTimeout(resolve, 100))
+  const list = root.querySelector('.chatbody')
+  expect(list).not.toBeNull()
+  let height = 1000
+  Object.defineProperty(list, 'clientHeight', {get:()=>300})
+  Object.defineProperty(list, 'scrollHeight', {get:()=>height})
+  list.scrollTop = 700
+  events.push({type:'reasoning',turn_id:'second',text:'第一段过程'})
+  await expect.poll(()=>root.querySelector('.process-reasoning')?.textContent, {timeout:3000}).toContain('第一段过程')
+  height = 1300
+  events.push({type:'reasoning',turn_id:'second',text:'第一段过程，继续查看新内容'})
+  await expect.poll(()=>list.scrollTop, {timeout:3000}).toBe(1300)
+  list.dispatchEvent(new window.Event('touchmove'))
+  list.scrollTop = 150; list.dispatchEvent(new window.Event('scroll'))
+  height = 1600
+  events.push({type:'reasoning',turn_id:'second',text:'第一段过程，继续查看新内容，然后得到结果'})
+  await expect.poll(()=>root.querySelector('.chat-progress-hint')?.hidden, {timeout:3000}).toBe(false)
+  expect(list.scrollTop).toBe(150)
+  root.querySelector('.chat-progress-hint').click()
+  expect(list.scrollTop).toBe(1600)
 })

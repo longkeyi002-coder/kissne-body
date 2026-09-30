@@ -180,6 +180,7 @@
           bytes_base64: btoa(binary)
         }, 120000);
       },
+      toolsets: function (change) { return nativeCall('toolsets', change || {}); },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort, provider) {
         return nativeCall('setModel', {
@@ -491,6 +492,7 @@
     poll: poll,
     ack: ack,
     cancel: cancel,
+    toolsets: function (change) { return request('/mobile/toolsets', {method:change ? 'POST' : 'GET', body:change}); },
     modelOptions: modelOptions,
     setModel: setModel,
     respondClarify: function (id, response, other) { return request('/mobile/clarify', { method: 'POST', body: { clarify_id: String(id || ''), response: String(response || ''), other: !!other } }); },
