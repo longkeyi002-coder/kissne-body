@@ -69,17 +69,60 @@ class MobileTransportClient(
         return request("POST", "/admin/sessions", body)
     }
 
-    fun historyPayload(limit: Int = 50, before: String? = null): JSONObject {
+    fun historyPayload(
+        limit: Int = 50,
+        before: String? = null,
+        sessionId: String? = null,
+    ): JSONObject {
         val query = StringBuilder("/history?limit=").append(limit.coerceIn(1, 100))
         before?.takeIf { it.isNotBlank() }?.let {
             query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
         }
+        sessionId?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&session_id=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
         return request("GET", query.toString())
     }
 
-    fun searchPayload(queryText: String, limit: Int = 20): JSONObject =
+    fun toolsetsPayload(change: JSONObject? = null): JSONObject = if (change == null) request("GET", "/toolsets") else request("POST", "/toolsets", change)
+
+    fun attachmentPayload(turn: String, index: Int): JSONObject = request("GET", "/attachments?turn_id=" + java.net.URLEncoder.encode(turn, "UTF-8") + "&index=" + index)
+
+    fun searchPayload(queryText: String, limit: Int = 500): JSONObject =
         request("GET", "/search?q=" + java.net.URLEncoder.encode(queryText, "UTF-8") +
-            "&limit=" + limit.coerceIn(1, 50))
+            "&limit=" + limit.coerceIn(1, 500))
+
+    fun memoryCandidatesPayload(): JSONObject = request("GET", "/memory/review")
+
+    fun reviewMemoryPayload(body: JSONObject): JSONObject = request("POST", "/memory/review", body)
+
+    fun memoryTimelinePayload(
+        limit: Int = 50,
+        before: String? = null,
+        space: String? = null,
+        queryText: String? = null,
+    ): JSONObject {
+        val query = StringBuilder("/memory/timeline?limit=").append(limit.coerceIn(1, 100))
+        before?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&before=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        space?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&space=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        queryText?.trim()?.takeIf { it.isNotBlank() }?.let {
+            query.append("&q=").append(java.net.URLEncoder.encode(it, "UTF-8"))
+        }
+        return request("GET", query.toString())
+    }
+
+    fun adminMemoryPayload(): JSONObject = request("GET", "/admin/memory")
+
+    fun deleteAdminMemoryPayload(memoryId: String): JSONObject =
+        request("DELETE", "/admin/memory/" + java.net.URLEncoder.encode(memoryId, "UTF-8"))
+
+    fun adminSkillsPayload(): JSONObject = request("GET", "/admin/skills")
+
+    fun adminMcpPayload(): JSONObject = request("GET", "/admin/mcp")
 
 
     fun bootstrapPayload(cursor: Long): JSONObject =
@@ -110,6 +153,9 @@ class MobileTransportClient(
     fun pollPayload(cursor: Long): JSONObject = request("GET", "/messages?cursor=$cursor")
 
 
+    fun clarifyPayload(clarifyId: String, response: String, other: Boolean): JSONObject =
+        request("POST", "/clarify", JSONObject().put("clarify_id", clarifyId).put("response", response).put("other", other))
+
     fun ack(cursor: Long) {
         request("POST", "/messages", JSONObject().put("ack", JSONObject().put("cursor", cursor)))
     }
@@ -120,6 +166,7 @@ class MobileTransportClient(
         fileName: String,
         mimeType: String,
         bytes: ByteArray,
+        caption: String = "",
     ): JSONObject {
         val boundary = "Kissne-" + UUID.randomUUID().toString()
         val connection = (requestUrl("/messages").openConnection() as HttpURLConnection).apply {
@@ -148,6 +195,7 @@ class MobileTransportClient(
                 out.field("kind", normalizeAttachmentKind(kind))
                 out.field("file_name", fileName)
                 out.field("mime_type", mimeType)
+                if (caption.isNotBlank()) out.field("caption", caption)
                 out.writeBytes("--$boundary$crlf")
                 out.writeBytes(
                     "Content-Disposition: form-data; name=\"file\"; filename=\"upload.bin\"$crlf"
@@ -220,5 +268,7 @@ internal fun resolveMobileRequestUrl(baseUrl: String, path: String): String =
 internal fun normalizeAttachmentKind(kind: String): String = when (kind.trim().lowercase()) {
     "photo" -> "photo"
     "sticker" -> "sticker"
+    "audio", "voice" -> "audio"
     else -> "file"
 }
+

@@ -1,0 +1,9 @@
+Kissne Laya integration attribution
+
+The Android tokenizer, prompt builder, decoder, calibration loader and LiteRT engine are adapted from the Laya multilingual LiteRT Android sample by John Rocky, licensed under Apache License 2.0. The sample ports host-side components from Laya 0.3.4 by Convai Innovations.
+
+Source: https://github.com/john-rocky/LiteRT-Models/tree/main/laya
+Original model project: https://huggingface.co/convaiinnovations/laya
+Converted multilingual model: https://huggingface.co/litert-community/Laya-Multilingual-LiteRT
+
+The model assets are downloaded on demand to the device. Expected SHA-256 hashes are pinned in LayaLocal.kt.

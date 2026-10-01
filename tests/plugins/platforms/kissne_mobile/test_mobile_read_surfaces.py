@@ -1,7 +1,9 @@
 """Regression coverage for Android read surfaces."""
+import time
+
 from _transport_harness import (
-    build_session_store, http, isolated_runtime, make_adapter, pair,
-    preexisting_conversation, run, start, stop,
+    PAIRED_INSTALLATION, build_session_store, http, isolated_runtime, make_adapter, pair,
+    preexisting_conversation, run, seed_transcript, start, stop,
 )
 
 
@@ -11,6 +13,7 @@ def test_paired_device_can_read_deduplicated_session_index_and_status(tmp_path):
             adapter = make_adapter()
             sessions = build_session_store(home)
             conversation = preexisting_conversation(sessions)
+            seed_transcript(sessions, conversation.session_id, 2)
             adapter.set_session_store(sessions)
             port = await start(adapter)
             try:
@@ -26,6 +29,7 @@ def test_paired_device_can_read_deduplicated_session_index_and_status(tmp_path):
     assert session_result[0] == 200, session_result
     rows = session_result[1]["sessions"]
     assert sum(row["session_id"] == conversation.session_id for row in rows) == 1
+    assert next(row for row in rows if row["session_id"] == conversation.session_id)["message_count"] >= 4
     assert session_result[1]["active_session_id"] == conversation.session_id
     assert status_result[0] == 200, status_result
     assert status_result[1]["mobile"]["connected"] is True
@@ -225,3 +229,256 @@ def test_production_gateway_startup_chain_serves_mobile_read_routes(tmp_path, mo
     adapter, runner = run(scenario())
     assert adapter.gateway_runner is runner
 
+
+def test_session_select_reaches_rows_the_routing_index_never_held(tmp_path):
+    """The app's list is the whole session history; the index only holds each key's current row.
+
+    Switching to a conversation that exists only in the session DB must still bind — that is the
+    failure mode behind "session_not_found" on a list full of valid entries.
+    """
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                from hermes_state import SessionDB
+
+                db = SessionDB()
+                try:
+                    db.create_session("20260101_000000_deadbee1", "telegram")
+                    db.create_session("20260101_000001_deadbee2", "telegram")
+                    db.end_session("20260101_000001_deadbee2", "session_reset")
+                finally:
+                    db.close()
+                listed_before = await http(port, "GET", "/admin/sessions", token=token)
+                assert any(
+                    row["session_id"] == "20260101_000000_deadbee1"
+                    for row in listed_before[1]["sessions"]
+                ), "the list is the session DB, so an unindexed row must still show up"
+                assert "message_count" in next(row for row in listed_before[1]["sessions"]
+                                               if row["session_id"] == "20260101_000000_deadbee1")
+                assert any(row["session_id"] == "20260101_000001_deadbee2"
+                           for row in listed_before[1]["sessions"]), "ended conversations remain browsable"
+                selected = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": "20260101_000000_deadbee1"},
+                )
+                listed = await http(port, "GET", "/admin/sessions", token=token)
+                unknown = await http(
+                    port, "POST", "/admin/sessions", token=token,
+                    body={"session_id": "20990101_000000_nope1234"},
+                )
+                return selected, listed, unknown
+            finally:
+                await stop(adapter)
+
+    selected, listed, unknown = run(scenario())
+    assert selected[0] == 200, selected
+    assert selected[1]["ok"] is True
+    assert unknown[0] == 404, unknown
+    assert listed[0] == 200, listed
+
+
+
+def test_history_reads_the_conversation_the_app_asked_for(tmp_path):
+    """/history returns the conversation it is asked for instead of the device's merged timeline.
+
+    Every tap landing on the same messages was this: the request carried a session_id and the
+    handler ignored it, so switching never changed what the app showed.
+    """
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            bound = preexisting_conversation(sessions, chat_id="bound-chat")
+            other = preexisting_conversation(sessions, chat_id="other-chat")
+            seed_transcript(sessions, bound.session_id, turns=1)
+            seed_transcript(sessions, other.session_id, turns=2)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=bound)
+                scoped = await http(
+                    port, "GET",
+                    f"/history?limit=50&session_id={other.session_id}",
+                    token=token,
+                )
+                paged = await http(
+                    port, "GET",
+                    f"/history?limit=2&session_id={other.session_id}",
+                    token=token,
+                )
+                return other.session_id, scoped, paged
+            finally:
+                await stop(adapter)
+
+    session_id, scoped, paged = run(scenario())
+    assert scoped[0] == 200, scoped
+    refs = [row["message_ref"] for row in scoped[1]["messages"]]
+    assert refs and all(ref.startswith(session_id + ":") for ref in refs), refs
+    assert any("seeded question" in row["text"] for row in scoped[1]["messages"]), scoped[1]
+    assert paged[0] == 200, paged
+    assert len(paged[1]["messages"]) <= 2, paged[1]
+
+
+def test_history_shows_one_copy_of_a_replayed_message(tmp_path):
+    """A transcript rewrite re-persists the tail; the app must still show each message once.
+
+    Compaction/recovery appends copies of rows the store already holds: byte-identical
+    rows keep their source timestamp, regenerated rows land in one shared bulk stamp.
+    """
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            conversation = preexisting_conversation(sessions)
+            seed_transcript(sessions, conversation.session_id, turns=1)
+            sid = conversation.session_id
+            stamp = time.time()
+
+            def user(text, ts):
+                sessions.append_to_transcript(sid, {"role": "user", "content": text, "timestamp": ts})
+                sessions.append_to_transcript(
+                    sid, {"role": "assistant", "content": "ack " + text, "timestamp": ts + 1},
+                )
+
+            # byte-identical replay: same text, same stamp as the row above it
+            user("ping once", stamp)
+            user("ping once", stamp)
+            # a genuine repeat: same text, its own stamp — must survive
+            user("ping once", stamp + 7)
+            # bulk write: rows sharing one regenerated stamp, one of them a copy
+            bulk = stamp + 30
+            user("bulk copy", bulk)
+            user("bulk helper", bulk)
+            user("seeded question 0", bulk)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=conversation)
+                result = await http(
+                    port, "GET", f"/history?limit=50&session_id={sid}", token=token,
+                )
+                return result
+            finally:
+                await stop(adapter)
+
+    status, payload, _headers = run(scenario())
+    assert status == 200, (status, payload)
+    texts = [row["text"] for row in payload["messages"]]
+    assert texts.count("ping once") == 2, texts
+    assert texts.count("seeded question 0") == 1, texts
+    assert texts.count("bulk copy") == 1, texts
+    assert texts.count("bulk helper") == 1, texts
+
+
+def test_history_keeps_a_reset_notice_out_of_conversations_it_did_not_open(tmp_path):
+    """A new-chat notice belongs to the conversation it opened, not to every old one.
+
+    Installation-wide notices were appended to every scoped timeline, so each old
+    conversation carried a "session reset" line at the bottom forever.
+    """
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            fresh = preexisting_conversation(sessions, chat_id="fresh-chat")
+            seed_transcript(sessions, fresh.session_id, turns=1)
+            adapter.set_session_store(sessions)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=fresh)
+                # pair() already bound the installation; record through the adapter's own store
+                adapter.device_store().record_timeline_notice(
+                    PAIRED_INSTALLATION, "kbn_test_notice", "session_reset",
+                    "Session reset! Starting fresh.",
+                )
+                fresh_history = await http(
+                    port, "GET", f"/history?limit=50&session_id={fresh.session_id}", token=token,
+                )
+                old_history = await http(
+                    port, "GET", "/history?limit=50&session_id=20260101_000000_deadbee1", token=token,
+                )
+                return fresh_history, old_history
+            finally:
+                await stop(adapter)
+
+    fresh_history, old_history = run(scenario())
+    assert fresh_history[0] == 200, fresh_history
+    assert old_history[0] == 200, old_history
+    fresh_system = [row for row in fresh_history[1]["messages"] if row["role"] == "system"]
+    old_system = [row for row in old_history[1]["messages"] if row["role"] == "system"]
+    assert fresh_system, fresh_history[1]
+    assert not old_system, old_system
+
+
+def test_memory_timeline_requires_auth_and_active_lifemem(tmp_path, monkeypatch):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter=make_adapter()
+            sessions=build_session_store(home)
+            conversation=preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port=await start(adapter)
+            try:
+                token=await pair(port,adapter,conversation=conversation)
+                unauth=await http(port,"GET","/memory/timeline")
+                inactive=await http(port,"GET","/memory/timeline",token=token)
+                return unauth,inactive
+            finally:
+                await stop(adapter)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"builtin"}})
+    monkeypatch.setattr("hermes_cli.config.cfg_get",lambda cfg,*keys,default=None: cfg.get("memory",{}).get("provider",default))
+    unauth,inactive=run(scenario())
+    assert unauth[0]==401,unauth
+    assert inactive[0]==503,inactive
+    assert inactive[1]["error"]=="lifemem_not_active"
+
+
+def test_memory_timeline_reads_lifemem_with_filters_and_evidence_refs(tmp_path, monkeypatch):
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            from plugins.memory.lifemem.store import MemoryStore
+            db_path=home/"kissne-lifemem"/"memory.db"
+            db_path.parent.mkdir(parents=True,exist_ok=True)
+            store=MemoryStore(str(db_path))
+            try:
+                store.add_memory("现实决定","证据A",memory_space="reality",
+                                 session_id="s1",turn_id=11,event_time=100)
+                world_id=store.add_memory("小机星事件","证据B",memory_space="ai_world",
+                                          session_id="s2",turn_id=22,event_time=200)
+            finally:
+                store.close()
+            adapter=make_adapter()
+            sessions=build_session_store(home)
+            conversation=preexisting_conversation(sessions)
+            adapter.set_session_store(sessions)
+            port=await start(adapter)
+            try:
+                token=await pair(port,adapter,conversation=conversation)
+                page=await http(port,"GET","/memory/timeline?limit=1",token=token)
+                world=await http(port,"GET","/memory/timeline?space=ai_world&q=%E8%AF%81%E6%8D%AEB",token=token)
+                bad=await http(port,"GET","/memory/timeline?space=fiction_leak",token=token)
+                return world_id,page,world,bad
+            finally:
+                await stop(adapter)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",lambda: {"memory":{"provider":"lifemem"}})
+    monkeypatch.setattr("hermes_cli.config.cfg_get",lambda cfg,*keys,default=None: cfg.get("memory",{}).get("provider",default))
+    world_id,page,world,bad=run(scenario())
+    assert page[0]==200,page
+    assert page[1]["items"][0]["id"]==world_id
+    assert page[1]["has_more"] is True
+    assert page[1]["next_before"]=="200.0|2"
+    assert world[0]==200,world
+    assert [x["memory_space"] for x in world[1]["items"]]==["ai_world"]
+    assert world[1]["items"][0]["source_ref"]=={"session_id":"s2","turn_id":22}
+    assert bad[0]==400,bad
+    assert bad[1]["error"]=="invalid_memory_space"

@@ -19,3 +19,5 @@ description: >
   The device is never given a Runtime management key.
 author: kissne-agent
 emoji: "📱"
+provides_tools:
+  - kissne_sticker_search

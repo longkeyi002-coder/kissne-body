@@ -259,21 +259,32 @@
   }
   function openWebAiSheet(msg) {
     closeWebAiSheet();
-    var text = msg && msg.getAttribute('data-message-text') || '';
-    if (!text.trim()) return;
+    var clone = msg && msg.cloneNode(true);
+    if (clone) { clone.querySelectorAll('button, .attachmsg__status').forEach(function(n) { n.remove(); }); clone.querySelectorAll('br').forEach(function(n) { n.replaceWith(document.createTextNode('\n')); }); clone.querySelectorAll('p,pre,li').forEach(function(n) { n.appendChild(document.createTextNode('\n')); }); }
+    var text = clone ? String(clone.textContent || '').trim() : '';
+    if (!text.trim() || !msg) return;
+    var rect = msg.getBoundingClientRect();
     var sheet = document.createElement('div');
     sheet.className = 'webai-sheet';
     sheet.innerHTML = '<button class="webai-sheet__scrim" type="button" data-webai-close aria-label="关闭"></button>'
-      + '<div class="webai-sheet__panel"><div class="webai-sheet__grab"></div>'
-      + '<div class="webai-sheet__title">发送给…</div>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">DeepSeek<span>临时网页 · 不共享上下文</span></button>'
-      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">ChatGPT<span>临时网页 · 不共享上下文</span></button>'
-      + '<div class="webai-sheet__note">只发送当前这条消息，不会带上 Kissne 记忆或其他聊天内容。</div></div>';
+      + '<div class="webai-sheet__panel">'
+      + '<button class="webai-sheet__item" type="button" data-webai-copy>复制</button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="deepseek">发送给 DeepSeek</button>'
+      + '<button class="webai-sheet__item" type="button" data-webai-provider="chatgpt">发送给 ChatGPT</button>'
+      + '</div>';
     sheet.dataset.messageText = text;
     document.body.appendChild(sheet);
+    var panel = sheet.querySelector('.webai-sheet__panel');
+    if (panel) {
+      var panelRect = panel.getBoundingClientRect();
+      var left = Math.max(8, Math.min(window.innerWidth - panelRect.width - 8, rect.left));
+      var top = Math.max(8, rect.top - panelRect.height - 8);
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+    }
   }
   document.addEventListener('pointerdown', function (e) {
-    var msg = e.target.closest && e.target.closest('[data-chat-message]');
+    var msg = e.target.closest && e.target.closest('.bubble');
     if (!msg) return;
     webAiPressTarget = msg;
     webAiPressStartX = e.clientX;
@@ -302,6 +313,20 @@
   }, { passive: true });
 
   document.addEventListener('click', function (e) {
+    var attachment = e.target.closest('[data-open-attachment]');
+    if (attachment && window.KissneNativeTransport && window.KissneNativeTransport.openAttachment) { window.KissneNativeTransport.openAttachment(attachment.getAttribute('data-open-attachment'), Number(attachment.getAttribute('data-attachment-index') || 0)); return; }
+    var copy = e.target.closest('[data-webai-copy]');
+    if (copy) {
+      var sheet = copy.closest('.webai-sheet'), text = sheet.dataset.messageText || '';
+      try {
+        if (window.KissneNativeTransport && window.KissneNativeTransport.copyText) window.KissneNativeTransport.copyText(text);
+        else if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(function () { copy.textContent = '复制失败'; }); }
+        else { var area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select(); if (!document.execCommand('copy')) throw new Error('copy'); area.remove(); }
+        copy.textContent = '已复制'; setTimeout(closeWebAiSheet, 500);
+      } catch (_) { copy.textContent = '复制失败'; }
+      return;
+    }
+    if (e.target.closest('.bubble') && !e.target.closest('a,button,input,textarea')) { openWebAiSheet(e.target.closest('.bubble')); return; }
     var webAiClose = e.target.closest('[data-webai-close]');
     if (webAiClose) { closeWebAiSheet(); return; }
     var webAiProvider = e.target.closest('[data-webai-provider]');

@@ -171,3 +171,42 @@ def test_bootstrap_payload_carries_no_credentials(tmp_path):
     assert not offenders, f"the reported Conversation leaked provider truth: {offenders}"
     assert "device_token" not in payload, (
         "bootstrap must not hand back a device token (the device already holds it)")
+
+
+def test_slow_history_read_does_not_block_mobile_listener(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            store = build_session_store(home)
+            existing = preexisting_conversation(store)
+            adapter.set_session_store(store)
+            original = adapter._bootstrap_history_snapshot
+
+            def slow_history(session_id):
+                entered.set()
+                release.wait(2)
+                return original(session_id)
+
+            monkeypatch.setattr(adapter, "_bootstrap_history_snapshot", slow_history)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=existing)
+                task = asyncio.create_task(http(port, "POST", "/bootstrap", token=token))
+                assert await asyncio.to_thread(entered.wait, 1)
+                try:
+                    health = await asyncio.wait_for(http(port, "GET", "/health"), 0.5)
+                    assert health[0] == 200
+                finally:
+                    release.set()
+                assert (await task)[0] == 200
+            finally:
+                release.set()
+                await stop(adapter)
+
+    run(scenario())

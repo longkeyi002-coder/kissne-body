@@ -37,7 +37,7 @@ jobs:
     # Standard runner + the whole suite: slow but bounded. Measured upstream on a
     # 96-core runner at ~126s; a 4-core standard runner is roughly an order of
     # magnitude slower, hence the generous ceiling.
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -65,8 +65,8 @@ jobs:
             pyproject.toml
             uv.lock
 
-      - name: Set up Python 3.11
-        run: uv python install 3.11
+      - name: Set up Python 3.14
+        run: uv python install 3.14
 
       - name: Install dependencies
         # Same pinned, locked set as upstream's test job — including the extras
@@ -74,12 +74,26 @@ jobs:
         # (HERMES_DISABLE_LAZY_INSTALLS=1 forbids mid-run installs).
         uses: ./.github/actions/retry
         with:
-          command: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+          command: uv sync --locked --python 3.14 --extra all --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra parallel-web
 
       - name: Minimize uv cache
         run: uv cache prune --ci
 
+      - name: Run Lifemem tests
+        timeout-minutes: 10
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh tests/plugins/memory/test_kissne_lifemem.py
+          scripts/run_tests.sh tests/plugins/memory/test_kissne_lifemem_ablation.py
+
+      - name: Run Kissne Mobile tests
+        timeout-minutes: 15
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh tests/plugins/platforms/kissne_mobile/
+
       - name: Run tests
+        timeout-minutes: 30
         run: |
           source .venv/bin/activate
           scripts/run_tests.sh

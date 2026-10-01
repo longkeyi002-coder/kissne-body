@@ -11,169 +11,128 @@
       banner = K.banner, kv = K.kv, toast = K.toast, esc = K.esc;
 
   /* =====================================================================
-     07 记忆库页
+     07 记忆库页 — Lifemem external provider journal projection
      ===================================================================== */
-  var MEMORY_STATES = [
-    { key: 'list', label: '记忆列表' },
-    { key: 'detail', label: '记忆详情' },
-    { key: 'delete-confirm', label: '删除确认' }
+  var MEMORY_STATES = [{ key: 'list', label: '时间线' }, { key: 'detail', label: '记忆详情' }];
+  var MEMORY_INDEX = { items: [], builtin: [], loaded: false, error: '', space: '', query: '', mode: 'active' };
+  var MEMORY_SPACES = [
+    { k: '', v: '全部' }, { k: 'reality', v: '现实' }, { k: 'relationship', v: '关系' },
+    { k: 'ai_self', v: '叶青栩' }, { k: 'ai_world', v: '小机星' }
   ];
-  var MEMORY_INDEX = { items: [], loaded: false, error: '', providerConfigured: false, provider: '' };
 
   function memoryItemById(id) {
-    id = String(id || '');
-    for (var i = 0; i < MEMORY_INDEX.items.length; i++) {
-      if (String(MEMORY_INDEX.items[i].id || '') === id) return MEMORY_INDEX.items[i];
-    }
-    return null;
+    id=String(id||'');
+    return MEMORY_INDEX.items.concat(MEMORY_INDEX.builtin || []).find(function(item){ return String(item.id||'')===id; }) || null;
   }
-  function memoryTitle(item) {
-    var text = String(item && item.text || '').replace(/\s+/g, ' ').trim();
-    return text.length > 34 ? text.slice(0, 34) + '…' : (text || '未命名记忆');
+  function memoryTitle(item) { return String(item && item.title || '未命名记忆'); }
+  function memorySpaceLabel(space) {
+    var row=MEMORY_SPACES.find(function(x){return x.k===String(space||'');});
+    return row ? row.v : String(space||'');
   }
-  function memoryListHtml() {
-    if (!MEMORY_INDEX.loaded && MEMORY_INDEX.error) {
-      return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div>'
-        + '<div class="mempty__s">这里只显示 Hermes 的真实记忆，不再使用演示数据。</div></div>';
-    }
-    if (!MEMORY_INDEX.loaded) {
-      return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
-    }
-    if (!MEMORY_INDEX.providerConfigured) {
-      return '<div class="mempty"><div class="mempty__t">未配置记忆供应商</div>'
-        + '<div class="mempty__s">当前不会显示 Hermes 的 MEMORY.md / USER.md，也不会生成演示记忆。</div></div>';
-    }
-    if (!MEMORY_INDEX.items.length) {
-      return '<div class="mempty"><div class="mempty__t">暂无记忆</div>'
-        + '<div class="mempty__s">已连接记忆供应商，但目前没有可显示的记忆。</div></div>';
-    }
-    return card(MEMORY_INDEX.items.map(function (item) {
-      var source = item.target === 'user' ? '用户资料' : '长期记忆';
-      return listRow({
-        title: memoryTitle(item),
-        sub: source + ' · ' + String(item.source || ''),
-        to: '#/memory?state=detail&id=' + encodeURIComponent(String(item.id || '')),
-        right: icon('chevron', 16)
-      });
-    }).join(''), { tight: true });
+  function memoryTime(value) {
+    var n=Number(value||0); if(!n) return '';
+    var d=new Date(n*1000); return isNaN(d.getTime()) ? '' : d.toLocaleString([], {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  }
+  function memoryTimelineHtml() {
+    if(!MEMORY_INDEX.loaded && MEMORY_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取记忆库</div><div class="mempty__s">Lifemem 当前不可用。</div></div>';
+    if(!MEMORY_INDEX.loaded) return '<div class="mempty"><div class="mempty__t">正在读取记忆…</div></div>';
+    var all = MEMORY_INDEX.items.concat(MEMORY_INDEX.builtin || []);
+    if(!all.length) return '<div class="mempty"><div class="mempty__t">暂无匹配记忆</div><div class="mempty__s">这里显示 Runtime 已确认写入的长期记忆。</div></div>';
+    return '<div class="memtimeline">'+all.map(function(item){
+      return '<a class="memtimeline__item" data-nav="#/memory?state=detail&id='+encodeURIComponent(String(item.id||''))+'">'
+        +'<span class="memtimeline__dot"></span><span class="memtimeline__time">'+esc(memoryTime(item.occurred_at))+'</span>'
+        +'<span class="memtimeline__card"><b>'+esc(memoryTitle(item))+'</b>'
+        +'<span>'+esc(memorySpaceLabel(item.memory_space))+(item.emotion?' · '+esc(item.emotion):'')+'</span></span></a>';
+    }).join('')+'</div>';
   }
 
   K.registerScreen({
-    no: '07', id: 'memory', name: '记忆库页', route: '#/memory', tab: null,
-    purpose: '直接读取 Hermes 的真实 MEMORY.md / USER.md；支持查看和真实删除，不展示演示记忆。',
-    out: ['#/home', '#/memory?state=detail'],
-    states: MEMORY_STATES,
-    render: function (ctx) {
-      var s = ctx.state || 'list';
-      var id = ctx.params && ctx.params.get('id') || '';
-      var item = memoryItemById(id);
-
-      if (s === 'detail' || s === 'delete-confirm') {
-        var detail = item
-          ? '<div class="memdetail"><h2 class="memdetail__t">' + esc(memoryTitle(item)) + '</h2>'
-            + '<div class="memdetail__meta">' + chip(item.target === 'user' ? '用户资料' : '长期记忆')
-            + '<span class="muted">' + esc(item.source || '') + '</span></div>'
-            + '<p class="memdetail__body">' + esc(item.text || '') + '</p></div>'
-          : '<div class="mempty"><div class="mempty__t">这条记忆不存在</div></div>';
-        return '<div class="screen">'
-          + appbar({ title: '记忆详情', back: '#/memory' })
-          + '<div class="screen__body">' + detail + '</div>'
-          + (item ? '<div class="screen__foot">'
-              + btn('删除记忆', { to: '#/memory?state=delete-confirm&id=' + encodeURIComponent(id), block: true, kind: 'danger' })
-              + '</div>' : '')
-          + (s === 'delete-confirm' && item ? modal({
-              title: '删除这条记忆？',
-              kind: 'danger',
-              body: '<p>将从 Hermes 的真实记忆文件中永久删除这条内容。</p>',
-              actions: [
-                { label: '取消', to: '#/memory?state=detail&id=' + encodeURIComponent(id), kind: 'ghost' },
-                { label: '确认删除', action: 'delete-memory', kind: 'danger' }
-              ]
-            }) : '')
-          + '</div>';
+    no:'07', id:'memory', name:'记忆库页', route:'#/memory', tab:null,
+    purpose:'读取 Lifemem 外部记忆供应商的真实时间线；不读取 Hermes builtin MEMORY.md / USER.md。',
+    out:['#/home','#/memory?state=detail'], states:MEMORY_STATES,
+    render:function(ctx){
+      var state=ctx.state||'list', id=ctx.params&&ctx.params.get('id')||'', item=memoryItemById(id);
+      if(state==='detail'){
+        var detail=item
+          ? '<div class="memdetail"><h2 class="memdetail__t">'+esc(memoryTitle(item))+'</h2>'
+            +'<div class="memdetail__meta">'+chip(memorySpaceLabel(item.memory_space))+'<span class="muted">'+esc(memoryTime(item.occurred_at))+'</span></div>'
+            +'<p class="muted">'+esc(item.status==='candidate'?'待审核 · '+(item.admission_reason||''):'已生效')+'</p>'
+            +'<p class="memdetail__body">'+esc(item.body||item.text||'')+'</p>'
+            +(item.evidence_context?'<details><summary>查看原话附近语境</summary><p>'+esc(item.evidence_context)+'</p></details>':'')
+            +(item.source_ref&&item.source_ref.session_id?'<div class="muted">来源会话 '+esc(item.source_ref.session_id)+' · turn '+esc(item.source_ref.turn_id||0)+'</div>':'')
+            +(item.source?'<div class="muted">来源：'+esc(item.source)+'</div>':'')
+            +(item.status==='candidate'?'<div class="memreviewform">'
+              +'<label>记忆内容<input data-review-summary value="'+esc(item.title||'')+'"></label>'
+              +'<label>归属主体<input data-review-subject value="'+esc(item.subject||'')+'" placeholder="例如：用户、Kissne"></label>'
+              +'<label>适用范围<input data-review-scope value="'+esc(item.scope||'')+'" placeholder="例如：Kissne界面约定"></label>'
+              +'<label>类型<select data-review-category>'+['fact','preference','agreement','event','project','relationship','temporary'].map(function(c){return '<option value="'+c+'"'+(item.category===c?' selected':'')+'>'+({fact:'事实',preference:'偏好',agreement:'约定',event:'经历',project:'项目',relationship:'关系',temporary:'临时'})[c]+'</option>';}).join('')+'</select></label>'
+              +'<button class="btn" data-memory-review="approve" data-id="'+esc(item.id)+'">确认记住</button>'
+              +'<button class="btn btn--ghost" data-memory-review="reject" data-id="'+esc(item.id)+'">不记住</button></div>':'')
+            +(item.deletable?'<button type="button" class="btn btn--ghost is-small" data-memory-delete="'+esc(item.id)+'" style="margin-top:12px">删除这条记忆</button>':'')
+            +'</div>'
+          : '<div class="mempty"><div class="mempty__t">这条记忆不在当前时间线中</div></div>';
+        return '<div class="screen">'+appbar({title:'记忆详情',back:'#/memory'})+'<div class="screen__body"><div data-memory-notice hidden></div>'+detail+'</div></div>';
       }
-
-      return '<div class="screen">'
-        + appbar({
-            title: '记忆库',
-            sub: MEMORY_INDEX.loaded
-              ? (MEMORY_INDEX.providerConfigured
-                  ? ('记忆供应商 · ' + MEMORY_INDEX.items.length + ' 条')
-                  : '未配置记忆供应商')
-              : '正在检查记忆供应商',
-            back: '#/home',
-            right: '<button class="iconbtn" data-memory-refresh aria-label="刷新">' + icon('sync') + '</button>'
-          })
-        + '<div class="screen__body"><div class="adminnotice" data-memory-notice hidden></div>'
-        + '<div data-memory-list>' + memoryListHtml() + '</div></div></div>';
+      var filters='<div class="chips">'+MEMORY_SPACES.map(function(row){
+        return '<button class="chip'+(MEMORY_INDEX.space===row.k?' is-on':'')+'" data-memory-space="'+esc(row.k)+'">'+esc(row.v)+'</button>';
+      }).join('')+'</div>';
+      return '<div class="screen">'+appbar({title:'记忆库',sub:'Lifemem · 时间线',back:'#/home',
+        right:'<button class="iconbtn" data-memory-refresh aria-label="刷新">'+icon('sync')+'</button>'})
+        +'<div class="screen__body"><div class="searchbar"><span>'+icon('search',16)+'</span>'
+        +'<input class="memorysearch" data-memory-search placeholder="搜索时间线" value="'+esc(MEMORY_INDEX.query)+'"></div>'
+        +'<div class="chips"><button class="chip" data-memory-mode="active">已记住</button><button class="chip" data-memory-mode="candidate">待审核</button></div>'+filters+'<div class="adminnotice" data-memory-notice hidden></div><div data-memory-list>'+memoryTimelineHtml()+'</div></div></div>';
     },
-    mount: function (root, ctx) {
-      var T = window.KissneTransport;
-      var host = root.querySelector('[data-memory-list]');
-      var refresh = root.querySelector('[data-memory-refresh]');
-      var notice = root.querySelector('[data-memory-notice]');
-      var del = root.querySelector('[data-action="delete-memory"]');
-      var stopped = false;
-
-      function show(text) {
-        if (!notice) return;
-        notice.hidden = !text;
-        notice.textContent = text || '';
+    mount:function(root,ctx){
+      var T=window.KissneTransport, host=root.querySelector('[data-memory-list]'), refresh=root.querySelector('[data-memory-refresh]');
+      var search=root.querySelector('[data-memory-search]'), notice=root.querySelector('[data-memory-notice]'), stopped=false, timer=0, requestSeq=0;
+      function show(text){if(notice){notice.hidden=!text;notice.textContent=text||'';}}
+      function paint(){if(host&&!stopped)host.innerHTML=memoryTimelineHtml();}
+      async function reload(){
+        if(!T||typeof T.memoryTimeline!=='function'){MEMORY_INDEX.loaded=false;MEMORY_INDEX.error='transport_unavailable';paint();return;}
+        var seq=++requestSeq, mode=MEMORY_INDEX.mode;
+        show('正在读取 Lifemem…');
+        try{
+          if(typeof T.ensureToken==='function') await T.ensureToken(false);
+          var payload=mode==='candidate'
+            ? await T.memoryCandidates()
+            : await T.memoryTimeline({limit:100,space:MEMORY_INDEX.space,q:MEMORY_INDEX.query});
+          if(stopped||seq!==requestSeq)return;
+          MEMORY_INDEX.items=(Array.isArray(payload&&payload.items)?payload.items:[]).map(function(item){
+            return mode==='candidate'?Object.assign({},item,{title:item.summary,body:item.quote,source_ref:{session_id:item.session_id,turn_id:item.turn_id}}):item;
+          }).filter(function(item){return MEMORY_INDEX.mode!=='candidate'||((!MEMORY_INDEX.space||item.memory_space===MEMORY_INDEX.space)&&(!MEMORY_INDEX.query||String(item.title+' '+item.body).indexOf(MEMORY_INDEX.query)>=0));});
+          MEMORY_INDEX.builtin=[];
+          MEMORY_INDEX.loaded=true; MEMORY_INDEX.error=''; if(!stopped){show('');paint();}
+        }catch(err){if(stopped||seq!==requestSeq)return;MEMORY_INDEX.loaded=false;MEMORY_INDEX.error=String(err&&err.message||'memory_unavailable');if(!stopped){show('记忆库读取失败');paint();}}
       }
-      function paint() {
-        if (host && !stopped) host.innerHTML = memoryListHtml();
+      function onRefresh(e){e.preventDefault();reload();}
+      function onSpace(e){var b=e.target.closest('[data-memory-space]');if(!b)return;MEMORY_INDEX.space=String(b.getAttribute('data-memory-space')||'');location.hash='#/memory';reload();}
+      function onSearch(){clearTimeout(timer);timer=setTimeout(function(){MEMORY_INDEX.query=String(search&&search.value||'').trim();reload();},320);}
+      async function onDelete(e){
+        var b=e.target.closest('[data-memory-delete]'); if(!b||!T||typeof T.deleteAdminMemory!=='function')return;
+        e.preventDefault(); b.disabled=true;
+        try { await T.deleteAdminMemory(b.getAttribute('data-memory-delete')); await reload(); location.hash='#/memory'; }
+        catch (err) { show('删除记忆失败'); b.disabled=false; }
       }
-      async function reload() {
-        if (!T || typeof T.memories !== 'function') {
-          MEMORY_INDEX.loaded = false;
-          MEMORY_INDEX.error = 'transport_unavailable';
-          paint();
-          return;
+      async function onReview(e){
+        var mode=e.target.closest('[data-memory-mode]');
+        if(mode){MEMORY_INDEX.mode=mode.getAttribute('data-memory-mode');reload();return;}
+        var b=e.target.closest('[data-memory-review]');if(!b||!T||!T.reviewMemory)return;
+        e.preventDefault();b.disabled=true;
+        var payload={action:b.getAttribute('data-memory-review'),id:Number(b.getAttribute('data-id'))};
+        if(payload.action==='approve'){
+          payload.updates={};
+          ['summary','subject','scope','category'].forEach(function(k){var el=root.querySelector('[data-review-'+k+']');payload.updates[k]=el?el.value:'';});
         }
-        show('正在读取真实记忆…');
-        try {
-          if (typeof T.ensureToken === 'function') await T.ensureToken(false);
-          var payload = await T.memories();
-          MEMORY_INDEX.items = Array.isArray(payload && payload.items) ? payload.items : [];
-          MEMORY_INDEX.providerConfigured = !!(payload && payload.provider_configured);
-          MEMORY_INDEX.provider = String(payload && payload.provider || '');
-          MEMORY_INDEX.loaded = true;
-          MEMORY_INDEX.error = '';
-          if (!stopped) { show(''); paint(); }
-        } catch (err) {
-          MEMORY_INDEX.loaded = false;
-          MEMORY_INDEX.error = String(err && err.message || 'memory_unavailable');
-          if (!stopped) { show('记忆库读取失败'); paint(); }
-        }
+        try{await T.reviewMemory(payload);MEMORY_INDEX.loaded=false;location.hash='#/memory';}
+        catch(err){show('审核未完成：'+String(err&&err.message||err));b.disabled=false;}
       }
-      async function onDelete(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var id = ctx && ctx.params && ctx.params.get('id') || '';
-        if (!id || !T || typeof T.deleteMemory !== 'function') return;
-        del.disabled = true;
-        try {
-          await T.deleteMemory(id);
-          MEMORY_INDEX.items = MEMORY_INDEX.items.filter(function (entry) {
-            return String(entry.id || '') !== String(id);
-          });
-          location.hash = '#/memory';
-        } catch (err) {
-          del.disabled = false;
-          del.textContent = '删除失败 · 重试';
-        }
-      }
-      function onRefresh(e) { e.preventDefault(); e.stopPropagation(); reload(); }
-
-      if (refresh) refresh.addEventListener('click', onRefresh);
-      if (del) del.addEventListener('click', onDelete);
-      if ((ctx && ctx.state || 'list') === 'list') reload();
-
-      return function () {
-        stopped = true;
-        if (refresh) refresh.removeEventListener('click', onRefresh);
-        if (del) del.removeEventListener('click', onDelete);
-      };
+      root.addEventListener('click',onReview);
+      if(refresh)refresh.addEventListener('click',onRefresh);
+      root.addEventListener('click',onSpace);
+      root.addEventListener('click',onDelete);
+      if(search)search.addEventListener('input',onSearch);
+      if((ctx&&ctx.state||'list')==='list')reload();
+      return function(){root.removeEventListener('click',onReview);stopped=true;clearTimeout(timer);if(refresh)refresh.removeEventListener('click',onRefresh);root.removeEventListener('click',onSpace);root.removeEventListener('click',onDelete);if(search)search.removeEventListener('input',onSearch);};
     }
   });
 
@@ -472,17 +431,101 @@
             listRow({ title: '账号信息', sub: '昵称 / 头像 / 本地数据', icon: 'user' })
             + listRow({ title: '高级诊断', sub: '服务状态 / 安装标识', icon: 'plug', to: '#/device' })
             + listRow({ title: '会话列表', sub: '查看服务器上的全部对话', icon: 'chat', to: '#/sessions' })
+            + listRow({ title: '本地 Laya（实验）', sub: '在手机上判断长期记忆候选', icon: 'cpu', to: '#/laya' })
             + listRow({ title: '模型设置', sub: '跟随 Hermes', icon: 'cpu' })
+            + '<label class="expression-setting"><input type="checkbox" data-expression-filter' + (!window.KissneExpressionFilter || window.KissneExpressionFilter.enabled() ? ' checked' : '') + '> 简化模板套话<span class="muted">仅调整聊天显示，不增加模型请求</span></label>'
             + listRow({ title: '通知设置', sub: '新消息 / 服务状态 / 记忆同步', icon: 'bell', to: '#/notifications' })
             + listRow({ title: '运维与部署', sub: '版本 / 上游合并 / 回滚 / 部署日志', icon: 'server', to: '#/admin' })
           , { tight: true })}
           ${card(
             listRow({ title: '检查更新', sub: '检查并下载最新 Kissne APK', icon: 'refresh', action: 'check-update', right: chip('自动检查', 'solid') })
-            + listRow({ title: '关于 Kissne', sub: 'V0.2.23 · Android 合体版', icon: 'info' })
+            + listRow({ title: '关于 Kissne', sub: 'V0.2.26 · Android', icon: 'info' })
           , { tight: true })}
+          <div class="card" data-toolset-settings><h3>叶青栩的工具权限</h3><p data-toolset-notice>正在读取实际工具配置…</p><div data-toolset-options></div></div>
           ${note('版本更新会自动检查；发现新版本后可在 App 内直接下载，再由 Android 系统确认安装。')}
         </div>
       </div>`;
+    },
+    mount: function (root) {
+      var toolHost = root.querySelector('[data-toolset-options]'), toolNotice = root.querySelector('[data-toolset-notice]');
+      var disposed = false;
+      var toolLabels = {browser:'浏览器', computer_use:'电脑操作', cronjob:'定时任务', clarify:'选择与确认', image_gen:'图片生成', terminal:'终端', web:'网页搜索', kissne_mobile:'Kissne 表情包'};
+      function paintTools(payload) { if (!toolHost || disposed) return; toolHost.innerHTML = (payload.toolsets || []).map(function (row) { return '<label class="toolset-setting"><input type="checkbox" data-toolset-key="' + esc(row.key) + '"' + (row.enabled ? ' checked' : '') + '> ' + esc(toolLabels[row.key] || row.key) + '</label>'; }).join(''); toolNotice.textContent = payload.notice || '配置会持久保留，不随安装或模型切换重置。'; }
+      var transport = window.KissneTransport;
+      if (toolHost && transport && transport.toolsets) transport.toolsets().then(paintTools).catch(function () { if (!disposed) toolNotice.textContent = '无法读取工具配置，请先更新服务器后重试。'; });
+      async function updateTool(event) { var input = event.target.closest('[data-toolset-key]'); if (!input || !transport || !transport.toolsets) return; input.disabled = true; try { paintTools(await transport.toolsets({toolset:input.getAttribute('data-toolset-key'), enabled:input.checked})); } catch (_) { input.checked = !input.checked; input.disabled = false; toolNotice.textContent = '保存失败，原配置未确认更改，请重试。'; } }
+      if (toolHost) toolHost.addEventListener('change', updateTool);
+      var control = root.querySelector('[data-expression-filter]');
+      function change() { if (window.KissneExpressionFilter) window.KissneExpressionFilter.setEnabled(control.checked); }
+      if (control) control.addEventListener('change', change);
+      return function () { disposed = true; if (toolHost) toolHost.removeEventListener('change', updateTool); if (control) control.removeEventListener('change', change); };
+    }
+  });
+
+
+  /* =====================================================================
+     本地 Laya 实验页
+     ===================================================================== */
+  K.registerScreen({
+    no: '09A', id: 'laya', name: '本地 Laya', route: '#/laya', tab: null,
+    purpose: 'Laya 在手机本地运行。模型只保存在本机；输入不会上传，也不会自动写入记忆。',
+    out: ['#/settings'], states: [{ key: 'default', label: '默认' }],
+    render: function () {
+      return '<div class="screen">'
+        + appbar({ title: '本地 Laya', sub: '手机端实验', back: '#/settings' })
+        + '<div class="screen__body">'
+        + card('<div class="muted">首次需要从 Hugging Face 下载约 648 MiB 模型文件，保存在手机本机。请连接 Wi-Fi 并预留约 700 MB 空间。模型和推理均在手机本地运行，不经过 Kissne 服务器。</div>')
+        + '<div class="field"><label class="field__label" for="layaInput">要判断的内容</label>'
+        + '<textarea id="layaInput" data-laya-input rows="4" maxlength="1200" placeholder="例如：我每周三晚上要去游泳"></textarea></div>'
+        + '<div class="row" style="gap:10px;margin:12px 0">'
+        + '<button class="btn btn--primary" type="button" data-laya-run>判断是否适合作为记忆</button>'
+        + '<button class="btn" type="button" data-laya-download>下载 / 安装模型</button></div>'
+        + '<div class="adminnotice" data-laya-status role="status">正在检查模型状态…</div>'
+        + '<div class="card" data-laya-result hidden style="margin-top:12px;white-space:pre-line"></div>'
+        + note('实验功能：Laya 的中文效果尚未在你的手机上验证。结果只作参考，不会保存或发送。')
+        + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport, status=root.querySelector('[data-laya-status]');
+      var input=root.querySelector('[data-laya-input]'), run=root.querySelector('[data-laya-run]');
+      var download=root.querySelector('[data-laya-download]'), result=root.querySelector('[data-laya-result]');
+      var stopped=false, timer=null, busy=false;
+      function show(p) {
+        if(!status||stopped)return;
+        if(!p||!p.supported){status.textContent='此功能需要 Kissne Android 原生 App。';return;}
+        if(p.downloading){status.textContent='正在下载模型：'+Math.round((p.progress||0)*100)+'%';return;}
+        status.textContent=p.installed?'模型已在本机安装，可离线判断。':'模型尚未下载（约 648 MiB）。';
+      }
+      async function refresh() {
+        if(!T||typeof T.layaStatus!=='function'){show({supported:false});return;}
+        try{show(await T.layaStatus());}catch(e){if(status)status.textContent='无法读取本地 Laya 状态：'+String(e.message||e);}
+      }
+      async function install() {
+        if(busy||!T||!T.layaDownload)return;
+        busy=true;download.disabled=true;
+        try{await T.layaDownload();await refresh();}
+        catch(e){if(status)status.textContent='模型下载失败：'+String(e.message||e);}
+        finally{busy=false;download.disabled=false;}
+      }
+      async function classify() {
+        var text=String(input&&input.value||'').trim();
+        if(!text){if(status)status.textContent='先输入一段内容。';return;}
+        if(busy||!T||!T.layaClassify)return;
+        busy=true;run.disabled=true;result.hidden=false;result.textContent='正在手机本地推理…';
+        try {
+          var p=await T.layaClassify(text), a=p.answer||{}, probs=a.probabilities||{};
+          var labels=Object.keys(probs);
+          result.textContent='判断：'+String(a.choice||'')+' · 置信度 '+String(a.confidence||0)+'\n'
+            +'判定来源：'+(a.heuristic_override?'本地规则已纠正模型的过度否定':'Laya 模型')+'\n'
+            +labels.map(function(k){return k+' '+probs[k];}).join(' / ')
+            +'\n推理耗时约 '+Math.round(p.elapsed_ms||0)+' ms';
+        } catch(e){result.textContent='本地判断失败：'+String(e.message||e);}
+        finally{busy=false;run.disabled=false;await refresh();}
+      }
+      if(run)run.addEventListener('click',classify);
+      if(download)download.addEventListener('click',install);
+      refresh();timer=setInterval(refresh,1500);
+      return function(){stopped=true;if(timer)clearInterval(timer);if(run)run.removeEventListener('click',classify);if(download)download.removeEventListener('click',install);};
     }
   });
 
@@ -789,47 +832,79 @@
   /* =====================================================================
      13 Skills
      ===================================================================== */
+  var SKILL_INDEX = { items: [], loaded: false, error: '' };
+  function skillsHtml() {
+    if (!SKILL_INDEX.loaded) return '<div class="mempty">正在读取 Runtime Skills…</div>';
+    if (SKILL_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取 Skills</div><div class="mempty__s">'+esc(SKILL_INDEX.error)+'</div></div>';
+    if (!SKILL_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">当前没有已安装 Skill</div></div>';
+    return '<div class="list">'+SKILL_INDEX.items.map(function(item){
+      return listRow({ title: item.name || '未命名 Skill', sub: (item.description || '已从 Hermes Runtime 读取') + ' · ' + (item.source || '本地'), icon: 'box' });
+    }).join('')+'</div>';
+  }
   K.registerScreen({
     no: '13', id: 'skills', name: 'Skills', route: '#/skills', tab: null,
-    purpose: 'Kissne 的 Skills 管理入口。只展示真实 Runtime 数据；Mobile Adapter 尚未暴露管理接口时明确显示未接入。',
+    purpose: '读取 Hermes Runtime 当前实际安装的 Skills。',
     out: ['#/home', '#/settings'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return '<div class="screen">'
-        + appbar({ title: 'Skills', sub: '给叶青栩扩展可复用能力', back: '#/home' })
+        + appbar({ title: 'Skills', sub: 'Hermes Runtime · 已安装能力', back: '#/home', right: '<button class="iconbtn" data-skills-refresh aria-label="刷新">'+icon('refresh')+'</button>' })
         + '<div class="screen__body">'
-        + sectionTitle('技能管理')
-        + card(
-            listRow({ title: '已安装 Skills', sub: '仅显示 Hermes Runtime 的真实安装状态', icon: 'box' })
-            + listRow({ title: '安装 / 更新', sub: '后续从 Skills 管理接口直接操作', icon: 'plus' }),
-            { tight: true }
-          )
-        + note('当前 Mobile Adapter 还没有暴露 Skills 列表与安装接口，因此这里不会伪造“已安装”条目。接入后本页直接读取真实 Runtime。')
+        + '<div class="adminnotice" data-skills-notice hidden></div><div data-skills-list>'+skillsHtml()+'</div>'
         + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport, host=root.querySelector('[data-skills-list]'), notice=root.querySelector('[data-skills-notice]'), refresh=root.querySelector('[data-skills-refresh]'), stopped=false;
+      function paint(){if(host&&!stopped)host.innerHTML=skillsHtml();}
+      async function reload(){
+        if(!T||typeof T.adminSkills!=='function'){SKILL_INDEX.loaded=true;SKILL_INDEX.error='当前版本未接入 Skills 数据接口';paint();return;}
+        try{if(T.ensureToken)await T.ensureToken(false);var p=await T.adminSkills();SKILL_INDEX.items=Array.isArray(p&&p.items)?p.items:[];SKILL_INDEX.loaded=true;SKILL_INDEX.error='';paint();}
+        catch(err){SKILL_INDEX.loaded=true;SKILL_INDEX.error=String(err&&err.message||'skills_unavailable');if(notice){notice.hidden=false;notice.textContent='Skills 读取失败';}paint();}
+      }
+      if(refresh)refresh.addEventListener('click',reload);reload();
+      return function(){stopped=true;if(refresh)refresh.removeEventListener('click',reload);};
     }
   });
 
   /* =====================================================================
      14 MCP
      ===================================================================== */
+  var MCP_INDEX = { items: [], loaded: false, error: '' };
+  function mcpHtml() {
+    if (!MCP_INDEX.loaded) return '<div class="mempty">正在读取 MCP Runtime…</div>';
+    if (MCP_INDEX.error) return '<div class="mempty"><div class="mempty__t">暂时无法读取 MCP</div><div class="mempty__s">'+esc(MCP_INDEX.error)+'</div></div>';
+    if (!MCP_INDEX.items.length) return '<div class="mempty"><div class="mempty__t">当前没有配置 MCP Server</div><div class="mempty__s">页面只显示真实配置，不生成演示服务器。</div></div>';
+    return '<div class="list">'+MCP_INDEX.items.map(function(item){
+      var state=item.connected?'已连接':(item.enabled?'已配置':'已停用');
+      var transport=item.transport==='stdio'?'本地进程':(item.transport==='http'?'HTTP':'未识别');
+      return listRow({ title: item.name, sub: state+' · '+transport+(item.url?' · '+item.url:'')+(item.tool_count!=null?' · '+item.tool_count+' 个工具':''), icon: 'server' });
+    }).join('')+'</div>';
+  }
   K.registerScreen({
     no: '14', id: 'mcp', name: 'MCP', route: '#/mcp', tab: null,
-    purpose: 'Kissne 的 MCP Server 管理入口。只展示真实连接状态；未接入控制接口时不生成演示服务器。',
+    purpose: '读取 Hermes Runtime 当前配置与连接状态的 MCP Server。',
     out: ['#/home', '#/settings'],
     states: [{ key: 'default', label: '默认' }],
     render: function () {
       return '<div class="screen">'
-        + appbar({ title: 'MCP', sub: '连接外部工具与数据源', back: '#/home' })
+        + appbar({ title: 'MCP', sub: 'Runtime · 外部工具与数据源', back: '#/home', right: '<button class="iconbtn" data-mcp-refresh aria-label="刷新">'+icon('refresh')+'</button>' })
         + '<div class="screen__body">'
-        + sectionTitle('MCP Servers')
-        + card(
-            listRow({ title: '服务器列表', sub: '接入后显示真实 MCP Server 与连接状态', icon: 'server' })
-            + listRow({ title: '添加 MCP', sub: '后续支持地址、认证与启停配置', icon: 'plus' }),
-            { tight: true }
-          )
-        + note('当前 Mobile Adapter 尚未暴露 MCP 管理接口，所以本页不会显示假的服务器。后续接线后再开放新增、启停和配置。')
+        + '<div class="adminnotice" data-mcp-notice hidden></div><div data-mcp-list>'+mcpHtml()+'</div>'
         + '</div></div>';
+    },
+    mount: function(root) {
+      var T=window.KissneTransport,host=root.querySelector('[data-mcp-list]'),notice=root.querySelector('[data-mcp-notice]'),refresh=root.querySelector('[data-mcp-refresh]'),stopped=false;
+      function paint(){if(host&&!stopped)host.innerHTML=mcpHtml();}
+      async function reload(){
+        if(!T||typeof T.adminMcp!=='function'){MCP_INDEX.loaded=true;MCP_INDEX.error='当前版本未接入 MCP 数据接口';paint();return;}
+        try{if(T.ensureToken)await T.ensureToken(false);var p=await T.adminMcp();MCP_INDEX.items=Array.isArray(p&&p.items)?p.items:[];MCP_INDEX.loaded=true;MCP_INDEX.error='';paint();}
+        catch(err){MCP_INDEX.loaded=true;MCP_INDEX.error=String(err&&err.message||'mcp_unavailable');if(notice){notice.hidden=false;notice.textContent='MCP 读取失败';}paint();}
+      }
+      if(refresh)refresh.addEventListener('click',reload);reload();
+      return function(){stopped=true;if(refresh)refresh.removeEventListener('click',reload);};
     }
   });
 
 })();
+
+

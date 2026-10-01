@@ -44,8 +44,8 @@ android {
         applicationId = "com.kissne.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.2.24"
+        versionCode = 28
+        versionName = "0.2.26"
         manifestPlaceholders["appLabel"] = "Kissne"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MOBILE_BASE_URL", "\"${mobileBaseUrl.get()}\"")
@@ -71,7 +71,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 }
 
 dependencies {
@@ -79,5 +79,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("com.google.ai.edge.litert:litert:2.2.0")
     testImplementation("junit:junit:4.13.2")
 }

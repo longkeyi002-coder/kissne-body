@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from agent.delegation_context import owned_kanban_task
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, EXECUTION_GUIDANCE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE, HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS, KANBAN_GUIDANCE,
@@ -25,9 +26,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, drain_truncation_warnings,
 )
 from agent import prompt_builder as _pb
-from agent import identity_state
-from agent.runtime_cwd import resolve_context_cwd
-from agent.kissne_context import make_context_layers
+from agent.runtime_cwd import resolve_agent_cwd, resolve_context_cwd
 from hermes_constants import get_default_hermes_root, get_hermes_home
 from utils import is_truthy_value
 
@@ -285,9 +284,9 @@ def _tool_guidance_block(agent: Any) -> Optional[str]:
             skill_manage_available="skill_manage" in names,
         )
     # Kanban lifecycle: resolved once at __init__ (_kanban_worker_guidance);
-    # the kanban_show fallback covers code paths that bypass agent_init.
+    # fallback paths must also limit task protocol guidance to dispatcher workers.
     _kanban_guidance = getattr(agent, "_kanban_worker_guidance", None)
-    if _kanban_guidance is None and "kanban_show" in names:
+    if _kanban_guidance is None and "kanban_show" in names and owned_kanban_task():
         _kanban_guidance = KANBAN_GUIDANCE
     tool_guidance = [
         memory_guidance,
@@ -312,6 +311,33 @@ def _skills_prompt(agent: Any) -> str:
         _compact_cats = frozenset()
     return _pb.build_skills_system_prompt(available_tools=agent.valid_tool_names, available_toolsets=avail_toolsets,
                                          compact_categories=_compact_cats or None, skills_dir_override=_agent_skills_dir(agent))
+
+
+def _auto_load_parts(agent: Any) -> List[str]:
+    """``skills.auto_load`` blocks, resolved once per agent lifecycle (config, skill files and
+    HERMES_IGNORE_RULES are read on the first build only) so the prompt stays byte-stable
+    across model switches, compression and static-prefix restoration.
+
+    Same gate as ``_skills_prompt``: nothing without the skills toolset, and nothing for agents that skip
+    context files (delegate children, curator/review forks, gateway hygiene agents) — pinned skills are
+    operator guidance for the user's session, not payload for every internal fork."""
+    if getattr(agent, "skip_context_files", False) or not any(
+            name in agent.valid_tool_names for name in ("skills_list", "skill_view", "skill_manage")):
+        return []
+    if not getattr(agent, "_auto_load_skills_resolved", False):
+        result: Tuple[str, List[str], List[str]] = ("", [], [])
+        try:
+            if not is_truthy_value(os.environ.get("HERMES_IGNORE_RULES")):
+                from agent.skill_commands import build_auto_load_prompt
+                result = build_auto_load_prompt(task_id=getattr(agent, "session_id", None), home_override=_agent_home(agent))
+            if result[2]:
+                logger.warning("skills.auto_load: skill(s) not found or disabled, skipped: %s", ", ".join(result[2]))
+        except Exception:
+            logger.debug("skills.auto_load: injection skipped", exc_info=True)  # config errors never block session start
+        agent._auto_load_skills_result = result
+        agent._auto_load_skills_resolved = True
+    prompt = agent._auto_load_skills_result[0]
+    return [prompt] if prompt else []
 
 
 def _bot_mode_parts(agent: Any) -> List[str]:
@@ -383,23 +409,49 @@ def _active_profile_line(agent: Any) -> str:
     )
 
 
-def platform_hint(agent: Any) -> str:
-    """Built-in/plugin platform hint + Telegram rich-messages opt-in + config
-    override + desktop TUI clarifier."""
-    platform_key = (agent.platform or "").lower().strip()
-    _default_hint = PLATFORM_HINTS.get(platform_key, "")
-    if not _default_hint and platform_key:
+def _default_platform_hint(platform_key: str) -> str:
+    """Built-in hint, else the plugin adapter's ``platform_hint``, else ``""``."""
+    hint = PLATFORM_HINTS.get(platform_key, "")
+    if not hint and platform_key:
         try:
             from gateway.platform_registry import platform_registry
             _entry = platform_registry.get(platform_key)
-            _default_hint = (_entry and _entry.platform_hint) or ""
+            hint = (_entry and _entry.platform_hint) or ""
         except Exception:
             pass
-    if platform_key == "telegram" and _default_hint and _telegram_rich_messages_enabled():
-        _default_hint = _default_hint.rstrip() + " " + TELEGRAM_RICH_MESSAGES_HINT
-    _effective_hint = _resolve_platform_hint(agent, platform_key, _default_hint)
+    if platform_key == "telegram" and hint and _telegram_rich_messages_enabled():
+        hint = hint.rstrip() + " " + TELEGRAM_RICH_MESSAGES_HINT
+    return hint
+
+
+def _cron_delivery_hint(agent: Any) -> str:
+    """The destination channel's hint (default + its ``platform_hints`` override) for a cron agent.
+
+    A cron agent runs as platform ``cron`` but its final response lands on the job's ``deliver``
+    channel, so without this the model never learns that MEDIA: tags become Slack/Telegram
+    attachments or that tables do not render there — and a user's ``platform_hints.slack.append``
+    never reached scheduled jobs at all. The scheduler publishes the primary auto-deliver target
+    into the session ContextVar before the agent runs (same seam ``send_message`` routes by).
+    """
+    from gateway.session_context import get_session_env
+    deliver_key = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "").lower().strip()
+    if not deliver_key or deliver_key == "cron":
+        return ""
+    hint = _resolve_platform_hint(agent, deliver_key, _default_platform_hint(deliver_key))
+    return f"Delivery destination ({deliver_key}): {hint}" if hint else ""
+
+
+def platform_hint(agent: Any) -> str:
+    """Built-in/plugin platform hint + Telegram rich-messages opt-in + config
+    override + desktop TUI clarifier; cron agents also carry their delivery channel's hint."""
+    platform_key = (agent.platform or "").lower().strip()
+    _effective_hint = _resolve_platform_hint(agent, platform_key, _default_platform_hint(platform_key))
     if platform_key == "tui" and _effective_hint:
         _effective_hint = _tui_embedded_pane_clarifier(_effective_hint)
+    if platform_key == "cron":
+        _delivery = _cron_delivery_hint(agent)
+        if _delivery:
+            _effective_hint = f"{_effective_hint}\n\n{_delivery}".strip()
     return _effective_hint
 
 
@@ -422,8 +474,9 @@ def _zone_bits(now: Any, tz: Any) -> List[str]:
     """IANA key, abbreviation (if different) and UTC offset — all constant for
     the day, so the byte-stable date line stays cacheable."""
     _iana = getattr(tz, "key", None)
-    _abbrev = now.strftime("%Z")
-    _offset = now.strftime("%z")  # '-0400' -> 'UTC-04:00'
+    from hermes_time import safe_strftime
+    _abbrev = safe_strftime(now, "%Z")
+    _offset = safe_strftime(now, "%z")  # '-0400' -> 'UTC-04:00'
     bits = [_iana] if _iana else []
     if _abbrev and _abbrev != _iana:
         bits.append(_abbrev)
@@ -436,12 +489,12 @@ def _timestamp_line(agent: Any) -> str:
     """Date-only so the prompt is byte-stable for the day; zone + offset so
     tools needn't guess EST vs EDT. Long-lived sessions get an "as of" line on
     rebuild days (the cache prefix is already invalidated at that boundary)."""
-    from hermes_time import get_timezone as _hermes_tz, now as _hermes_now
+    from hermes_time import get_timezone as _hermes_tz, now as _hermes_now, safe_strftime
     now = _hermes_now()
     _bits = _zone_bits(now, _hermes_tz())
     _zone_suffix = f" ({', '.join(_bits)})" if _bits else ""
     _start = _session_start_like(agent, now)
-    timestamp_line = f"Conversation started: {_start.strftime('%A, %B %d, %Y')}{_zone_suffix}"
+    timestamp_line = f"Conversation started: {safe_strftime(_start, '%A, %B %d, %Y')}{_zone_suffix}"
     # Second line (maintainer design, salvaging #96224's anchor): long-lived sessions — Bot Mode
     # forever-chats, messenger channels people never close — span many days and many compactions. A lone
     # birth date leads the model to believe it is still living in that old day. The prompt is rebuilt at
@@ -450,7 +503,7 @@ def _timestamp_line(agent: Any) -> str:
     # line costs no extra cache churn. Same-day sessions skip the second line entirely — nothing to correct,
     # and the single-line shape stays byte-identical for the day (prefix-cache safe).
     if now.strftime("%Y%m%d") != _start.strftime("%Y%m%d"):
-        timestamp_line += (f"\nToday's date (as of the last context rebuild): {now.strftime('%A, %B %d, %Y')} "
+        timestamp_line += (f"\nToday's date (as of the last context rebuild): {safe_strftime(now, '%A, %B %d, %Y')} "
                            "— trust this over the start date for what day it is now; query tools for exact time.")
     if getattr(agent, "_bot_chat_timeless_prompt", False):
         timestamp_line = f"Timezone: {', '.join(_bits)}" if _bits else ""
@@ -490,21 +543,9 @@ def _memory_parts(agent: Any) -> List[str]:
 def _identity_parts(agent: Any, ctx_len: Optional[int]) -> Tuple[List[str], bool]:
     """SOUL.md (primary identity; cron keeps the persona while skipping cwd
     instructions, scoped to the agent's OWN home) or the default identity.
-    Returns ``(parts, soul_loaded)``.
-
-    KB1-IDENTITY-DEGRADED: when the slot is absent, an untouched placeholder or
-    a legacy template, ``load_soul_md`` returns None *and* records the degraded
-    classification. The generic default is still in force (the model needs a
-    behavior spec), but the slot now carries an explicit notice naming the
-    degraded file and forbidding that default from passing as a personal
-    identity. A patched-out reader records nothing and stays a no-op here.
-    """
+    Returns ``(parts, soul_loaded)``."""
     wants_soul = agent.load_soul_identity or not agent.skip_context_files
     _soul_content = _pb.load_soul_md(ctx_len, home_override=_agent_home(agent)) if wants_soul else None
-    soul_slot = _pb.consume_identity_slot(identity_state.SOUL) if wants_soul else None
-    agent._identity_soul_slot = soul_slot
-    if soul_slot is not None and soul_slot.degraded:
-        return ([soul_slot.notice, DEFAULT_AGENT_IDENTITY], False)
     return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
 
 
@@ -533,7 +574,7 @@ def _guidance_parts(agent: Any) -> List[str]:
             parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
-        parts.append(execution_guidance_text(agent.valid_tool_names))
+        parts.append(execution_guidance_text())
     return parts
 
 
@@ -551,6 +592,70 @@ def _alibaba_identity_part(agent: Any) -> List[str]:
     ]
 
 
+def _workspace_pin_key() -> str:
+    """The directory the workspace probe inspects, which is also the prompt's ``Current working
+    directory``: a build with no cwd bound (launch dir) and a later one binding that same dir
+    (TUI ``/compress``) are one workspace, not two."""
+    try:
+        return str(resolve_context_cwd() or resolve_agent_cwd())
+    except OSError:  # deleted cwd
+        return ""
+
+
+def _persisted_workspace_block(prompt: str, key: str) -> Optional[str]:
+    """The workspace snapshot inside ``prompt`` taken for ``key`` (its ``- Root:`` is ``key`` or an
+    ancestor); "" when the prompt has none; None when it has one for another root."""
+    from agent.coding_context import WORKSPACE_BLOCK_HEADER
+    head = f"\n\n{WORKSPACE_BLOCK_HEADER}\n- Root: "
+    start = prompt.find(head)
+    if start < 0:
+        return ""
+    cwd = Path(key).resolve()
+    while start >= 0:
+        block = prompt[start + 2:].split("\n\n", 1)[0]
+        root = Path(block.split("\n", 2)[1][len("- Root: "):]).resolve()
+        if root == cwd or root in cwd.parents:
+            return block
+        start = prompt.find(head, start + 2)
+    return None
+
+
+def _session_prompt(agent: Any) -> Optional[str]:
+    """Prompt bytes this session already sends: the cached copy, else its persisted row."""
+    cached = getattr(agent, "_cached_system_prompt", None)
+    if isinstance(cached, str) and cached:
+        return cached
+    db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", None)
+    if db is None or not isinstance(session_id, str) or not session_id:
+        return None
+    try:
+        row = db.get_session(session_id)
+    except Exception:
+        logger.debug("workspace snapshot: session row read failed (session=%s)", session_id, exc_info=True)
+        return None
+    prompt = row.get("system_prompt") if isinstance(row, dict) else None
+    return prompt if isinstance(prompt, str) and prompt else None
+
+
+def _seed_workspace_pin(agent: Any, key: str) -> None:
+    """Pin the snapshot the session's existing prompt already carries.  An agent that did not
+    build those bytes (resumed, or a fresh gateway/TUI agent whose first act is ``/compress``)
+    would otherwise re-probe git at its first rebuild and rewrite the prompt for any repo that
+    moved since session start.  Only a snapshot provably taken in this cwd is adopted."""
+    from agent.surface_switch import runtime_host_value
+    prompt = _session_prompt(agent)
+    if not prompt:
+        return
+    stored_cwd = runtime_host_value(prompt, "Current working directory")
+    if stored_cwd and stored_cwd != key:
+        return
+    block = _persisted_workspace_block(prompt, key)
+    # Only a real snapshot is adopted: a prompt without one (built on a surface without the
+    # coding posture, or with tools off) leaves the pin open so this build captures one.
+    if block:
+        agent._frozen_workspace_snapshot = (key, block)
+
+
 def _coding_parts(agent: Any) -> Tuple[List[str], List[str], List[str]]:
     """``(prefix, workspace, trailing)`` coding-posture blocks; all empty
     without tools or when probing fails (it must never block prompt build).
@@ -558,15 +663,18 @@ def _coding_parts(agent: Any) -> Tuple[List[str], List[str], List[str]]:
     The workspace block is a live git probe after project context, ahead of the whole
     volatile band; re-probing at the compaction rebuild re-emits different bytes for any
     repo that moved and defeats the keep-prompt fast path.  So the bytes are pinned per
-    session on the agent, keyed by the resolved cwd (a gateway serves many cwds), and
-    replayed on rebuilds; ``reset_session_state`` drops the pin at a session boundary.
+    session on the agent, keyed by the probed cwd (a gateway serves many cwds), seeded from
+    the session's existing prompt when this agent did not build it, and replayed on
+    rebuilds; ``reset_session_state`` drops the pin at a session boundary.
     """
     try:
         from agent.coding_context import coding_system_prompt_parts
         if not agent.valid_tool_names:
             return [], [], []
         cwd = resolve_context_cwd()
-        cwd_key = str(cwd) if cwd is not None else ""
+        cwd_key = _workspace_pin_key()
+        if getattr(agent, "_frozen_workspace_snapshot", None) is None:
+            _seed_workspace_pin(agent, cwd_key)
         pinned = getattr(agent, "_frozen_workspace_snapshot", None)
         # "" is a real pinned value (no workspace here) — only a cwd mismatch re-probes.
         replay = pinned[1] if pinned is not None and pinned[0] == cwd_key else None
@@ -616,42 +724,19 @@ def _join_tier(parts: List[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-_PROMPT_TIER_KEYS = ("stable", "context", "volatile")
-
-
-def _kissne_volatile_head(
-    self_snapshot: Optional[str],
-    memory_snapshot_parts: List[str],
-    skills_prompt: str,
-) -> List[Optional[str]]:
-    """KISSNE-CTX-14 order: SELF -> MEMORY -> Skills Index."""
-    return [self_snapshot, *memory_snapshot_parts, skills_prompt]
-
-
-def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
+def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
-    ``volatile`` (SELF snapshot, memory snapshot, skills index, plugin sections,
-    session timestamp, runtime environment hints), plus the Kissne semantic slots
-    (``kissne_stable_core`` / ``kissne_self`` / ``kissne_memory``) that
-    :func:`build_system_prompt` turns into the layer adapter.  Worktree-dependent blocks follow project context so a
+    ``volatile`` (skills index, memory, user profile, external memory block,
+    timestamp line, runtime environment hints).  Worktree-dependent blocks follow project context so a
     shared context file can remain in the longest common prefix across worktrees.
     Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
-    # Drop identity-slot classifications leaked by a reader called before this
-    # build (a test's direct load_soul_md/load_self_md call, a /reread): the
-    # identity state must describe THIS build only.
-    _pb.drain_identity_slots()
-    agent._identity_soul_slot = None
-    agent._identity_self_slot = None
     # ── Stable tier ────────────────────────────────────────────────
-    stable_identity_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
-    # Hermes' whole stable cache tier is not Kissne Stable Core. Only the
-    # identity slot (SOUL or its fallback) owns that semantic role.
-    stable_parts = list(stable_identity_parts)
+    stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
     # The skill_view() pointer dangles without skill tools OR without the
     # hermes-agent skill installed, so the variant is chosen after the skills
     # index is built; this slot holds its position.
@@ -664,6 +749,8 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
     if "skill_view" in (agent.valid_tool_names or set()) and "- hermes-agent:" in skills_prompt:
         stable_parts[_help_guidance_slot] = HERMES_AGENT_HELP_GUIDANCE
     stable_parts.extend(_alibaba_identity_part(agent))
+    # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
+    stable_parts.extend(_auto_load_parts(agent))
     # Coding posture: the operating brief stays in the stable prefix. The
     # environment block contains the current cwd/backend and belongs after
     # project context, not ahead of a large shared AGENTS.md block.
@@ -684,26 +771,9 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
         # worktree snapshot whose later position would improve their prefix.
         stable_parts.extend([*coding_trailing_parts, *post_workspace_parts])
     # ── Volatile tier (most likely to differ on a rebuild; kept last so the stable prefix stays reusable) ──
-    # KISSNE-CTX-14 fixes the volatile head as SELF -> MEMORY -> Skills Index.
-    # These are frozen together for the Session Snapshot lifecycle.
-    wants_identity_snapshot = agent.load_soul_identity or not agent.skip_context_files
-    self_snapshot = (
-        _pb.load_self_md(_ctx_len, home_override=_agent_home(agent))
-        if wants_identity_snapshot else None
-    )
-    # KB1-IDENTITY-DEGRADED: an absent or untouched-placeholder SELF.md must not
-    # read as recorded self-state; the explicit degraded notice takes its place.
-    self_slot = _pb.consume_identity_slot(identity_state.SELF) if wants_identity_snapshot else None
-    agent._identity_self_slot = self_slot
-    if self_slot is not None and self_slot.degraded:
-        self_snapshot = self_slot.notice
-    agent._identity_state = identity_state.merge_slots(
-        getattr(agent, "_identity_soul_slot", None), self_slot
-    )
-    memory_snapshot_parts = _memory_parts(agent)
-    volatile_parts: List[Optional[str]] = _kissne_volatile_head(
-        self_snapshot, memory_snapshot_parts, skills_prompt
-    )
+    # Skills are runtime-mutable, so the index leads the volatile band: on a longest-prefix
+    # backend an unchanged index stays inside the reused prefix; a changed one re-prefills from here.
+    volatile_parts: List[str] = [skills_prompt, *_memory_parts(agent)]
     # Plugin sections are confined to one coarse anchor in the volatile tail so
     # a resumed process can reconstruct the stable prefix without re-running plugins.
     volatile_parts.extend(_plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory"))
@@ -714,88 +784,25 @@ def _assemble_prompt_parts(agent: Any, system_message: Optional[str] = None) -> 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-    return {
-        "stable": _join_tier(stable_parts),
-        "context": _join_tier(context_parts),
-        "volatile": _join_tier(volatile_parts),
-        "kissne_stable_core": _join_tier(stable_identity_parts),
-        "kissne_self": self_snapshot or "",
-        "kissne_memory": _join_tier(memory_snapshot_parts),
-    }
-
-
-def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
-    """Public three-tier view of :func:`_assemble_prompt_parts`.
-
-    Kept to the stable/context/volatile contract on purpose: callers
-    (``hermes_cli.prompt_size``, ``agent.context_breakdown``, the
-    token-accounting evals, tests) treat the mapping as "the prompt", so the
-    Kissne slots must not travel through it.
-    """
-    parts = _assemble_prompt_parts(agent, system_message=system_message)
-    return {tier: parts[tier] for tier in _PROMPT_TIER_KEYS}
+    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
     """Assemble the full prompt; cached on ``agent._cached_system_prompt`` and
     only rebuilt after compression.  Tiers are ordered stable -> context ->
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
-    parts = _assemble_prompt_parts(agent, system_message=system_message)
+    parts = build_system_prompt_parts(agent, system_message=system_message)
     agent._cached_system_prompt_static = parts["stable"]
-    full_prompt = "\n\n".join(
-        part for part in (
-            parts["stable"], parts["context"], parts["volatile"]
-        ) if part
-    )
-    agent._kissne_context_layers = make_context_layers(
-        stable_core=parts["kissne_stable_core"],
-        self_state=parts["kissne_self"],
-        memory_state=parts["kissne_memory"],
-        runtime_system_prompt=full_prompt,
-        snapshot_origin=getattr(
-            agent, "_kissne_snapshot_refresh_reason", "fresh_session"
-        ),
-    )
-    agent._kissne_snapshot_refresh_reason = "cached"
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
-        agent._emit_status(warning)
-    _announce_identity_degraded(agent)
-    return full_prompt
+        agent._emit_diagnostic_status(warning)
+    return "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
 
 
-def _announce_identity_degraded(agent: Any) -> None:
-    """Emit the one-line identity-degraded warning (deduped on the reason set).
-
-    KB1-IDENTITY-DEGRADED: the prompt now *says* the identity is degraded, but a
-    running instance must also tell its human — the whole failure mode was a
-    clone/restore silently carrying a generic persona. Deduped per reason set so
-    a rebuild (compression, model switch) does not repeat itself until the state
-    actually changes. Never raises: status plumbing must not break a prompt build.
-    """
-    try:
-        state = getattr(agent, "_identity_state", None)
-        if state is None or not state.degraded:
-            return
-        if getattr(agent, "_identity_degraded_announced", None) == state.reasons:
-            return
-        agent._identity_degraded_announced = state.reasons
-        logger.warning("identity degraded: %s", ", ".join(state.reasons))
-        emit = getattr(agent, "_emit_warning", None) or getattr(agent, "_emit_status", None)
-        if emit is not None:
-            emit(state.warning)
-    except Exception:
-        logger.debug("identity-degraded announcement failed", exc_info=True)
-
-
-def invalidate_system_prompt(agent: Any, reason: Optional[str] = None) -> None:
+def invalidate_system_prompt(agent: Any) -> None:
     """Force a rebuild on the next turn (after compression): reload memory from
     disk and clear the frozen plugin snapshot (previous bytes stashed as the
     fail-open fallback) so plugins re-render at the same boundary.
-
-    ``reason`` is the Kissne snapshot-origin label for the rebuild that follows
-    (``"compression"``, ``"model_switch"``, ...). Callers that pass nothing get
-    ``"invalidated"`` rather than a wrong guess.
 
     Called after context compression events. Also reloads memory from disk so the rebuilt prompt captures
     any writes from this session, and clears the frozen plugin-section snapshot so plugins re-render at the
@@ -806,11 +813,6 @@ def invalidate_system_prompt(agent: Any, reason: Optional[str] = None) -> None:
     """
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
-    agent._kissne_context_layers = None
-    # Truthful origin label for the rebuild that follows: this function also
-    # serves the model-switch / session-reset paths, so "compression" is not safe
-    # to assume here.
-    agent._kissne_snapshot_refresh_reason = reason or "invalidated"
     if hasattr(agent, "_plugin_system_prompt_sections_snapshot"):
         agent._plugin_system_prompt_sections_previous = agent._plugin_system_prompt_sections_snapshot
         del agent._plugin_system_prompt_sections_snapshot

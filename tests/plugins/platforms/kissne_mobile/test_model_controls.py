@@ -16,6 +16,7 @@ from _transport_harness import (
 
 def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     import hermes_cli.inventory as inventory
+    calls = []
 
     class Ctx:
         def with_overrides(self, **kwargs):
@@ -31,7 +32,7 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     monkeypatch.setattr(
         inventory,
         "build_model_options_payload",
-        lambda _ctx, **_kwargs: {
+        lambda _ctx, **kwargs: (calls.append(kwargs) or {
             "providers": [
                 {
                     "slug": "openrouter",
@@ -42,7 +43,7 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
             ],
             "model": "anthropic/claude-sonnet-4.5",
             "provider": "openrouter",
-        },
+        }),
     )
 
     async def scenario():
@@ -66,24 +67,35 @@ def test_model_options_reuses_dashboard_inventory_shape(tmp_path, monkeypatch):
     assert payload.get("efforts"), payload
     assert payload["effort"] == "high"
     assert payload["current_effort"] == "high"
+    assert calls[0]["probe_current_custom_provider"] is False
 
 
 def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
     seen = []
 
     class Runner:
-        _session_model_overrides = {}
+        def __init__(self, adapter):
+            self.adapter = adapter
+            self._session_model_overrides = {}
+            self.effort = "medium"
 
         def _profile_name_for_source(self, _source, adapter_profile=None):
             return adapter_profile
 
         async def _handle_model_command(self, event):
             seen.append(("model", event.text))
+            self._session_model_overrides[self.adapter.mobile_session_key(PAIRED_INSTALLATION)] = {
+                "model": "anthropic/claude-sonnet-4.5", "provider": "openrouter",
+            }
             return "switched"
 
         async def _handle_reasoning_command(self, event):
             seen.append(("reasoning", event.text))
+            self.effort = "high"
             return "reasoning set"
+
+        def _resolve_session_reasoning_config(self, *, source, session_key, model):
+            return {"enabled": True, "effort": self.effort}
 
     async def scenario():
         with isolated_runtime(tmp_path) as home:
@@ -91,7 +103,7 @@ def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
             sessions = build_session_store(home)
             conversation = preexisting_conversation(sessions)
             adapter.set_session_store(sessions)
-            adapter.gateway_runner = Runner()
+            adapter.gateway_runner = Runner(adapter)
             port = await start(adapter)
             try:
                 token = await pair(port, adapter, conversation=conversation)
@@ -118,6 +130,75 @@ def test_set_model_keeps_provider_separate_from_slashful_model_id(tmp_path):
     assert seen[1] == ("reasoning", "/reasoning high")
     assert payload["provider"] == "openrouter"
     assert payload["model"] == "anthropic/claude-sonnet-4.5"
+
+
+def test_set_model_rejects_when_next_turn_route_stays_on_old_model(tmp_path):
+    class Runner:
+        def __init__(self, adapter):
+            self.adapter = adapter
+            self._session_model_overrides = {}
+
+        async def _handle_model_command(self, event):
+            key = self.adapter.mobile_session_key(PAIRED_INSTALLATION)
+            self._session_model_overrides[key] = {
+                "model": "mimo-v2.6-flash", "provider": "opencode-go",
+            }
+            return "switched"
+
+        def _resolve_session_agent_runtime(self, *, source, session_key):
+            # Simulate the exact regression seen on device: slash bookkeeping changed,
+            # but the route used by the next turn is still the old backend model.
+            return "old-model", {"provider": "old-provider"}
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            adapter.set_session_store(sessions)
+            adapter.gateway_runner = Runner(adapter)
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=preexisting_conversation(sessions))
+                return await http(port, "POST", "/set-model", token=token, body={
+                    "provider": "opencode-go", "model": "mimo-v2.6-flash",
+                })
+            finally:
+                await stop(adapter)
+
+    status, payload, _ = run(scenario())
+    assert status == 409, payload
+    assert payload["error"] == "model_switch_not_effective"
+    assert payload["actual_model"] == "old-model"
+    assert payload["actual_provider"] == "old-provider"
+
+
+def test_set_model_does_not_acknowledge_an_unapplied_gateway_command(tmp_path):
+    class Runner:
+        _session_model_overrides = {}
+
+        async def _handle_model_command(self, event):
+            # A confirmation handler can send a card and return None; the
+            # override must not be reported as applied at that point.
+            return None
+
+    async def scenario():
+        with isolated_runtime(tmp_path) as home:
+            adapter = make_adapter()
+            sessions = build_session_store(home)
+            adapter.set_session_store(sessions)
+            adapter.gateway_runner = Runner()
+            port = await start(adapter)
+            try:
+                token = await pair(port, adapter, conversation=preexisting_conversation(sessions))
+                return await http(port, "POST", "/set-model", token=token, body={
+                    "provider": "opencode-go", "model": "mimo-v2.6-flash",
+                })
+            finally:
+                await stop(adapter)
+
+    status, payload, _ = run(scenario())
+    assert status == 409, payload
+    assert payload["error"] == "model_switch_not_applied"
 
 
 def test_real_gateway_runner_wires_canonical_reasoning_resolver(tmp_path):

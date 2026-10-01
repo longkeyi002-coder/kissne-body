@@ -86,6 +86,7 @@
       ApiError: NativeApiError,
       base: function () { return nativeBase(''); },
       setBase: function (value) { return String(Native.setBase(nativeBase(value)) || nativeBase(value)); },
+      cacheIdentity: function () { return String(Native.cacheIdentity() || ''); },
       installationId: function () { return String(Native.installationId() || ''); },
       token: function () { return Native.hasToken() ? 'native-secure' : ''; },
       hasToken: function () { return !!Native.hasToken(); },
@@ -93,6 +94,12 @@
         return typeof Native.hasBootstrapCache === 'function' && !!Native.hasBootstrapCache();
       },
       isConnected: function () { return typeof Native.isConnected === 'function' ? !!Native.isConnected() : !!Native.hasToken(); },
+      notifyReply: function (id, title, body) {
+        if (typeof Native.notifyReply === 'function') Native.notifyReply(String(id || ''), String(title || ''), String(body || ''));
+      },
+      updateNotification: function (state, title, body) {
+        if (typeof Native.updateNotification === 'function') Native.updateNotification(String(state || ''), String(title || ''), String(body || ''));
+      },
       clearToken: function () { Native.clearToken(); },
       cursor: function () {
         var n = Number(Native.getCursor());
@@ -108,8 +115,23 @@
         return nativeCall('ensureToken', { force: !!force });
       },
       sessions: function () { return nativeCall('sessions', {}); },
-      history: function (limit, before) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || '') }); },
-      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 20 }); },
+      history: function (limit, before, sessionId) { return nativeCall('history', { limit: Number(limit) || 50, before: String(before || ''), session_id: String(sessionId || '') }); },
+      search: function (q, limit) { return nativeCall('search', { q: String(q || ''), limit: Number(limit) || 500 }); },
+      memoryTimeline: function (options) {
+        options = options || {};
+        return nativeCall('memoryTimeline', {
+          limit: Number(options.limit) || 50,
+          before: String(options.before || ''),
+          space: String(options.space || ''),
+          q: String(options.q || '')
+        });
+      },
+      memoryCandidates: function () { return nativeCall('memoryCandidates', {}); },
+      reviewMemory: function (payload) { return nativeCall('reviewMemory', payload); },
+      adminMemory: function () { return nativeCall('adminMemory', {}); },
+      deleteAdminMemory: function (id) { return nativeCall('deleteAdminMemory', { memory_id: String(id || '') }); },
+      adminSkills: function () { return nativeCall('adminSkills', {}); },
+      adminMcp: function () { return nativeCall('adminMcp', {}); },
       deleteSession: function (sessionId) { return nativeCall('deleteSession', { session_id: String(sessionId || '') }); },
       selectSession: function (sessionKey, sessionId) {
         return nativeCall('selectSession', {
@@ -128,10 +150,10 @@
           text: String(text || ''),
           message_id: messageId || nativeMessageId(),
           reply_to: String(replyTo || '')
-        });
+        }, 65000);
       },
       poll: function () { return nativeCall('poll', { cursor: Number(Native.getCursor()) || 0 }); },
-      ack: function (nextCursor) { return nativeCall('ack', { cursor: Number(nextCursor) || 0 }); },
+      ack: function (nextCursor) { var n = Number(nextCursor); return !isFinite(n) || n <= Number(Native.getCursor()) ? Promise.resolve({ ok: true, unchanged: true }) : nativeCall('ack', { cursor: n }); },
       cancel: function (turnId) { return nativeCall('cancel', { turn_id: String(turnId || '') }); },
       voiceInput: function () { return nativeCall('voiceInput', {}, 45000); },
       pickAttachment: function (kind, hooks) {
@@ -158,6 +180,7 @@
           bytes_base64: btoa(binary)
         }, 120000);
       },
+      toolsets: function (change) { return nativeCall('toolsets', change || {}); },
       modelOptions: function () { return nativeCall('modelOptions', {}); },
       setModel: function (model, effort, provider) {
         return nativeCall('setModel', {
@@ -166,6 +189,7 @@
           provider: String(provider || '')
         });
       },
+      respondClarify: function (id, response, other) { return nativeCall('clarify', { clarify_id: String(id || ''), response: String(response || ''), other: !!other }); },
       respondApproval: function (approvalId, decision, scope) {
         return nativeCall('approval', {
           approval_id: String(approvalId || ''),
@@ -173,9 +197,13 @@
           scope: String(scope || 'once')
         });
       },
+      layaStatus: function () { return nativeCall('layaStatus', {}); },
+      layaDownload: function () { return nativeCall('layaDownload', {}, 1800000); },
+      layaClassify: function (text) { return nativeCall('layaClassify', { text: String(text || '') }, 300000); },
       adminStatus: function () { return nativeCall('adminStatus', {}); },
       revoke: function () { return nativeCall('revoke', {}); }
     };
+    if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
     return;
   }
   var KEY = {
@@ -298,32 +326,34 @@
       base: adminBase()
     });
   }
-  function history(limit, before) {
+  function history(limit, before, sessionId) {
     var path = '/mobile/history?limit=' + encodeURIComponent(Number(limit) || 50);
     if (before) path += '&before=' + encodeURIComponent(String(before));
+    if (sessionId) path += '&session_id=' + encodeURIComponent(String(sessionId));
     return request(path, { method: 'GET' });
   }
   function searchHistory(q, limit) {
     var query = String(q || '').trim();
     if (!query) throw new ApiError(400, { error: 'query_required' }, 'query_required');
-    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 20), { method: 'GET' });
+    return request('/mobile/search?q=' + encodeURIComponent(query) + '&limit=' + encodeURIComponent(Number(limit) || 500), { method: 'GET' });
   }
   function deleteSession(sessionId) {
     var id = String(sessionId || '').trim();
     if (!id) throw new ApiError(400, { error: 'session_id_required' }, 'session_id_required');
     return request('/admin/sessions', { method: 'DELETE', body: { session_id: id }, base: adminBase() });
   }
-  function memories() {
-    return request('/admin/memory', { method: 'GET', base: adminBase() });
+  function memoryTimeline(options) {
+    options = options || {};
+    var path = '/mobile/memory/timeline?limit=' + encodeURIComponent(Number(options.limit) || 50);
+    if (options.before) path += '&before=' + encodeURIComponent(String(options.before));
+    if (options.space) path += '&space=' + encodeURIComponent(String(options.space));
+    if (options.q) path += '&q=' + encodeURIComponent(String(options.q));
+    return request(path, { method: 'GET' });
   }
-  function deleteMemory(memoryId) {
-    var id = String(memoryId || '').trim();
-    if (!id) throw new ApiError(400, { error: 'memory_id_required' }, 'memory_id_required');
-    return request('/admin/memory/' + encodeURIComponent(id), {
-      method: 'DELETE',
-      base: adminBase()
-    });
-  }
+  function adminMemory() { return request('/admin/memory', { method: 'GET', base: adminBase() }); }
+  function deleteAdminMemory(id) { return request('/admin/memory/' + encodeURIComponent(String(id || '')), { method: 'DELETE', base: adminBase() }); }
+  function adminSkills() { return request('/admin/skills', { method: 'GET', base: adminBase() }); }
+  function adminMcp() { return request('/admin/mcp', { method: 'GET', base: adminBase() }); }
   async function selectSession(sessionKey, sessionId) {
     var key = String(sessionKey || '').trim();
     var id = String(sessionId || '').trim();
@@ -367,6 +397,25 @@
     return request('/mobile/messages', { method: 'POST', body: body });
   }
 
+  async function sendSticker(key, label) {
+    var assets = window.KSN && window.KSN.ASSETS;
+    var rel = assets && assets.stickers && assets.stickers[String(key || '')];
+    if (!rel) throw new ApiError(0, { error: 'sticker_asset_not_found' }, 'sticker_asset_not_found');
+    var response = await fetch(new URL('assets/' + rel, location.href).toString(), { cache: 'force-cache' });
+    if (!response.ok) throw new ApiError(0, { error: 'sticker_asset_read_failed' }, 'sticker_asset_read_failed');
+    var bytes = new Uint8Array(await response.arrayBuffer());
+    var chunk = 0x8000, binary = '';
+    for (var i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+    }
+    return request('/mobile/messages', { method: 'POST', body: {
+      message_id: makeMessageId(), text: '', attachments: [{
+        type: 'sticker', mime_type: String(response.headers.get('content-type') || 'image/webp').split(';')[0].trim(),
+        label: String(label || key || ''), data: btoa(binary)
+      }]
+    }});
+  }
+
   function pickAttachment() {
     return Promise.reject(new ApiError(0, { error: 'native_attachment_picker_required' }, 'native_attachment_picker_required'));
   }
@@ -374,8 +423,9 @@
   async function ack(nextCursor) {
     var n = Number(nextCursor);
     if (!isFinite(n) || n < 0) return { ok: false };
+    if (n <= cursor()) return { ok: true, unchanged: true };
     var out = await request('/mobile/messages', { method: 'POST', body: { ack: { cursor: n } } });
-    set(KEY.cursor, String(n));
+    set(KEY.cursor, String(Math.max(n, cursor())));
     return out;
   }
   function cancel(turnId) {
@@ -418,6 +468,7 @@
     hasToken: function () { return !!deviceToken(); },
     hasBootstrapCache: hasBootstrapCache,
     isConnected: function () { return hasBootstrapCache(); },
+    updateNotification: function () {},
     clearToken: clearToken,
     cursor: cursor,
     pair: pair,
@@ -425,17 +476,29 @@
     sessions: sessions,
     history: history,
     search: searchHistory,
+    memoryTimeline: memoryTimeline,
+    memoryCandidates: function () { return request('/mobile/memory/review', {method:'GET'}); },
+    reviewMemory: function (payload) { return request('/mobile/memory/review', {method:'POST',body:payload}); },
+    adminMemory: adminMemory,
+    deleteAdminMemory: deleteAdminMemory,
+    adminSkills: adminSkills,
+    adminMcp: adminMcp,
     deleteSession: deleteSession,
     selectSession: selectSession,
     bootstrap: bootstrap,
     sendText: sendText,
+    sendSticker: sendSticker,
     pickAttachment: pickAttachment,
     poll: poll,
     ack: ack,
     cancel: cancel,
+    toolsets: function (change) { return request('/mobile/toolsets', {method:change ? 'POST' : 'GET', body:change}); },
     modelOptions: modelOptions,
     setModel: setModel,
+    respondClarify: function (id, response, other) { return request('/mobile/clarify', { method: 'POST', body: { clarify_id: String(id || ''), response: String(response || ''), other: !!other } }); },
     respondApproval: respondApproval,
     adminStatus: adminStatus
   };
+  if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
 })();
+

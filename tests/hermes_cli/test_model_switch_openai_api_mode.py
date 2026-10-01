@@ -115,7 +115,9 @@ def test_stale_chat_overridden_on_meta_direct():
         runtime_base_url="https://api.meta.ai/v1",
     )
     assert result.success, f"switch_model failed: {result.error_message}"
-    assert result.target_provider == "meta"
+    # ``meta`` is an accepted alias; model switching persists the canonical
+    # Hermes provider id so downstream provider configuration remains stable.
+    assert result.target_provider == "meta-ai"
     assert result.new_model == "muse-spark-1.2"
     assert result.api_mode == "codex_responses"
 
@@ -135,3 +137,22 @@ def test_generic_relay_not_clobbered_on_meta_switch():
     # so it stays chat_completions (not forced to codex_responses).
     assert result.success
     assert result.api_mode == "chat_completions"
+
+
+def test_openai_runtime_codex_app_server_survives_host_mandate():
+    """``model.openai_runtime: codex_app_server`` must survive the /model switch (#115169).
+
+    The resolver applies the opt-in after its ladder and hands ``api_mode=codex_app_server``
+    to the switch; api.openai.com's host-mandated ``codex_responses`` is a wire-protocol
+    correction for stale modes and must not overwrite the app-server runtime selection.
+    """
+    result = _run_openai_switch(
+        raw_input="gpt-5.6-sol",
+        current_provider="openrouter",
+        current_model="anthropic/claude-opus-4.8",
+        explicit_provider="openai-api",
+        runtime_api_mode="codex_app_server",
+    )
+    assert result.success, f"switch_model failed: {result.error_message}"
+    assert result.target_provider == "openai-api"
+    assert result.api_mode == "codex_app_server"

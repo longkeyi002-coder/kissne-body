@@ -53,14 +53,7 @@
         </div>`;
 
       var showMore = ctx.state === 'more';
-      var APPS = showMore ? [
-        { t: '语音设置', ic: 'mic',     to: '#/settings' },
-        { t: '对话记录', ic: 'clock',   to: '#/sessions' },
-        { t: '账号安全', ic: 'user',    to: '#/settings' },
-        { t: '数据备份', ic: 'refresh', to: '#/settings' },
-        { t: '关于',     ic: 'info',    to: '#/settings' },
-        { t: '返回常用', ic: 'home',    to: '#/home' }
-      ] : [
+      var APPS = [
         { t: '浏览器',   ic: 'search', action: 'open-browser' },
         { t: '记忆库',   ic: 'memory', to: '#/memory' },
         { t: 'Skills',   ic: 'box',    to: '#/skills' },
@@ -70,7 +63,7 @@
         { t: '运维',     ic: 'server', to: '#/admin' },
         { t: '设置',     ic: 'gear',   to: '#/settings' },
         { t: '表情包',   ic: 'smile',  to: '#/stickers' },
-        { t: '更多',     ic: 'home',   to: '#/home?state=more' }
+
       ];
       var appgrid = '<div class="appgrid">' + APPS.map(function (a) {
         return '<a class="appgrid__item"' + (a.action ? ' data-action="' + a.action + '"' : ' data-nav="' + a.to + '"') + '>'
@@ -143,12 +136,11 @@
         var active = sessionIsCurrent(s);
         return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
           + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
-          + '<button type="button" class="sessiondrawer__select" data-session-select'
-          + ((s.key || s.id) ? '' : ' disabled') + '>'
+          + '<button type="button" class="sessiondrawer__select"' + ((s.key || s.id) ? '' : ' disabled') + '>'
           + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
           + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
-          + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
-          + '</div>';
+          + '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话"'
+          + ((s.id && !active) ? '' : ' disabled') + '>' + icon('trash', 14) + '</button></div>';
       }).join('');
     }
     return '<div class="sessiondrawer__scrim" data-session-drawer-close hidden></div>'
@@ -297,9 +289,7 @@
   }
 
   function modelsForProvider(provider) {
-    var p = String(provider || '');
-    var filtered = p ? MODELS.filter(function (m) { return m.p === p; }) : MODELS.slice();
-    return filtered.length ? filtered : MODELS.slice();
+    return window.KissneChatLifecycle.providerModels(MODELS, provider);
   }
 
   function dropdown(title, items, curKey, param, origin) {
@@ -358,7 +348,8 @@
   function plusPopLayer(origin) {
     var items = [
       { ic: 'image', t: '照片', d: '从相册选择并发送原图', kind: 'photo' },
-      { ic: 'file',  t: '文件', d: '选择文档、压缩包等并发送', kind: 'file' }
+      { ic: 'file',  t: '文件', d: '选择文档、压缩包等并发送', kind: 'file' },
+      { ic: 'mic',   t: '语音文件', d: '选择录音或音频文件并发送', kind: 'audio' }
     ];
     return '<div class="pop" data-plus-panel hidden>'
       + items.map(function (it) {
@@ -369,20 +360,69 @@
       + '</div>';
   }
 
+  var ATTACH_PREVIEW_KEY = 'kissne:attachment-previews:v1';
+  function rememberAttachmentPreview(meta, preview) {
+    if (!/^data:image\//i.test(String(preview || ''))) return;
+    var key = String(meta.mime_type || meta.mime || '') + '|' + String(meta.file_name || meta.name || '');
+    if (key.replace(/\|/g, '').length < 2) return;
+    try {
+      var map = JSON.parse(localStorage.getItem(ATTACH_PREVIEW_KEY) || '{}');
+      map[key] = { p: String(preview), t: Date.now() };
+      Object.keys(map)
+        .sort(function (a, b) { return (map[b].t || 0) - (map[a].t || 0); })
+        .slice(20)
+        .forEach(function (k) { delete map[k]; });
+      localStorage.setItem(ATTACH_PREVIEW_KEY, JSON.stringify(map));
+    } catch (e) { /* quota or private mode: previews just do not survive reloads */ }
+  }
+  function lookupAttachmentPreview(meta) {
+    var key = String(meta.mime_type || meta.mime || '') + '|' + String(meta.file_name || meta.name || meta.label || '');
+    try {
+      var map = JSON.parse(localStorage.getItem(ATTACH_PREVIEW_KEY) || '{}');
+      var hit = map[key];
+      return hit && /^data:image\//i.test(hit.p) ? hit.p : '';
+    } catch (e) { return ''; }
+  }
+
   function attachmentMsg(meta, kind, status, localId) {
     meta = meta || {};
-    var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : '文件'));
+    var name = String(meta.file_name || meta.name || (kind === 'photo' ? '照片' : ((kind === 'voice' || kind === 'audio') ? '语音消息' : '文件')));
     var size = Number(meta.size || 0);
     var sizeText = size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : '';
     var state = String(status || 'sent');
+    var attachmentAttrs = meta.turn_id ? ' data-open-attachment="' + esc(meta.turn_id) + '" data-attachment-index="' + Number(meta.attachment_index || 0) + '"' : '';
     var statusText = state === 'sending' ? '正在发送…' : (state === 'failed' ? '发送失败' : '已发送');
-    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
-      + '<span class="attachmsg__ic">' + icon(kind === 'photo' ? 'image' : 'file', 19) + '</span>'
+    var preview = String(meta.preview || lookupAttachmentPreview(meta) || '');
+    if (/^data:image\//i.test(preview) && (kind === 'photo' || kind === 'image')) {
+      rememberAttachmentPreview(meta, preview);
+      return '<span class="attachmsg attachmsg--' + esc(state) + '"'
+        + attachmentAttrs + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+        + '<img class="attachmsg__img" src="' + esc(preview) + '" alt="' + esc(name) + '">'
+        + (state === 'sent' ? '' : '<small class="attachmsg__status">' + esc(statusText) + '</small>')
+        + '</span>';
+    }
+    return '<span class="attachmsg attachmsg--' + esc(state) + '"' + attachmentAttrs + (localId ? ' data-attachment-id="' + esc(localId) + '"' : '') + '>'
+      + '<span class="attachmsg__ic">' + icon(kind === 'photo' || kind === 'sticker' ? 'image' : ((kind === 'voice' || kind === 'audio') ? 'mic' : 'file'), 19) + '</span>'
       + '<span class="attachmsg__body"><b>' + esc(name) + '</b>'
       + (sizeText ? '<small>' + esc(sizeText) + '</small>' : '')
       + '<small class="attachmsg__status">' + esc(statusText) + '</small></span>'
       + (state === 'sending' ? '<span class="attachmsg__spin" aria-hidden="true"></span>' : '')
       + '</span>';
+  }
+  function historyAttachmentHtml(item) {
+    var rows = Array.isArray(item && item.attachments) ? item.attachments : [];
+    return rows.map(function (meta) {
+      meta = meta || {};
+      var kind = String(meta.type || meta.kind || '').toLowerCase();
+      if (kind === 'sticker') {
+        var key = String(meta.key || meta.sticker_key || meta.file_name || '').replace(/\.(?:webp|png|jpg|jpeg|gif)$/i, '');
+        var sticker = stickerMatch(key) || stickerMatch(meta.label || '');
+        if (sticker) return '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
+      }
+      var cachedPreview = lookupAttachmentPreview(meta);
+      if (cachedPreview && !meta.preview) meta = Object.assign({}, meta, { preview: cachedPreview });
+      return attachmentMsg(meta, kind === 'image' ? 'photo' : (kind === 'sticker' ? 'sticker' : (kind === 'audio' || kind === 'voice' ? 'voice' : 'file')), 'sent', '');
+    }).join('');
   }
 
   var AVA_STATES = {
@@ -405,20 +445,127 @@
       + ph(code, { size: 34, compact: true, tag: tag || '头像', state: state })
       + '</div>';
   }
+  function hasChatPayload(html) {
+    return /<(?:img|svg|video|audio|canvas)\b/i.test(String(html || '')) || !!String(html || '').replace(/<[^>]*>/g, '').replace(/&(?:nbsp|#160);/gi, ' ').replace(/[\s\u200b]/g, '');
+  }
   function assistantBubbleHtml(html, cls) {
-    var parts = String(html == null ? '' : html).split(/\\n\\s*\\n+/).filter(function (part) {
-      return !!String(part || '').trim();
-    });
-    if (!parts.length) parts = [''];
+    var parts = splitAssistantBubbleParts(window.KissneExpressionFilter ? window.KissneExpressionFilter.html(html) : html);
+    if (!parts.length) return '';
     return parts.map(function (part) {
       return '<div class="msg__text bubble' + (cls ? ' ' + cls : '') + '">' + part + '</div>';
     }).join('');
   }
-  function aiMsg(html, cls, time, tag, state, activity) {
-    return '<div class="msg msg--ai" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
-      + '<div class="msg__body">' + (activity || '')
+  function splitAssistantBubbleParts(html) {
+    var raw = String(html == null ? '' : html).replace(/\r\n?/g, '\n').trim();
+    if (!raw || !hasChatPayload(raw)) return [];
+    var blocks = raw.split(/\n\s*\n+/).filter(function (part) { return !!String(part || '').trim(); });
+    var out = [];
+    blocks.forEach(function (block) {
+      block = String(block || '').trim();
+      /* Structured HTML, code fences, and sticker markup are already a visual unit. */
+      var fence = String.fromCharCode(96, 96, 96);
+      if (/class="stkmix"/.test(block)) {
+        /* A sticker marker mixed with prose is two human messages, never one bubble. */
+        var mixed = block.replace(/^<span class="stkmix">/, '').replace(/<\/span>\s*$/, '');
+        mixed.split(/(<span class="stkmsg">[\s\S]*?<\/span>)/g).forEach(function (part) {
+          part = String(part || '').trim();
+          if (!part) return;
+          if (/^<span class="stkmsg">[\s\S]*<\/span>$/.test(part)) out.push(part);
+          else out.push.apply(out, splitAssistantBubbleParts(part));
+        });
+        return;
+      }
+      if (/(?:<pre|<table|<ul|<ol|<blockquote)/i.test(block)
+          || block.indexOf(fence) >= 0
+          || /class="stkmsg/.test(block)) {
+        out.push(block);
+        return;
+      }
+      if (/<(?:strong|em|b|i|a|code)\b/i.test(block)) {
+        out.push(block);
+        return;
+      }
+      block = block.replace(/&quot;/g, '"');
+      var lines = block.split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+      /* A few providers persist the streamed answer with one token per line.
+         Treat that transport artifact as one sentence before making human-sized
+         bubbles; otherwise the final answer becomes a column of one-word cards. */
+      var tokenLikeLines = lines.length > 2
+        && lines.every(function (line) {
+          return line.length <= 8 && !/[（）()\[\]【】「」『』“”"]/.test(line) && !/^(?:[-*•]|\d+[.)])\s+/.test(line);
+        })
+        && lines.filter(function (line) { return /[。！？!?；;:]$/.test(line); }).length < Math.ceil(lines.length / 2);
+      if (tokenLikeLines) lines = [joinReasoningLines(lines)];
+      if (lines.length === 1 && lines[0].length <= 180) { out.push(lines[0]); return; }
+      var closing = [], quoted = false;
+      var pairs = { '(': ')', '（': '）', '[': ']', '【': '】', '“': '”', '「': '」', '『': '』' };
+      lines.forEach(function (line) {
+        var current = '';
+        var chars = Array.from(line);
+        for (var i = 0; i < chars.length; i++) {
+          var ch = chars[i];
+          if (pairs[ch]) closing.push(pairs[ch]);
+          else if (ch === closing[closing.length - 1]) closing.pop();
+          if (ch === '"' && chars[i - 1] !== '\\') quoted = !quoted;
+          current += ch;
+          var next = chars[i + 1] || '';
+          var cjkEnd = /[。！？!?]/.test(ch);
+          var englishEnd = /[.!?]/.test(ch) && /\s/.test(next) && !/^\s*\d+\.$/.test(current);
+          if ((cjkEnd || englishEnd) && !closing.length && !quoted && !/[。！？!?）)\]】」』”"]/.test(next)) {
+            if (current.trim()) out.push(current.trim());
+            current = '';
+            while (i + 1 < chars.length && /\s/.test(chars[i + 1])) i++;
+          }
+        }
+        if (current.trim()) out.push(current.trim());
+      });
+    });
+    /* A bracket or stray punctuation that arrived on its own line must never
+       become a one-character bubble column. */
+    var punctOnly = /^[\s（）()【】[\]「」『』《》〈〉…—·、，。；：!?！？…"”'‘’.]+$/;
+    var merged = [];
+    out.forEach(function (part) {
+      var piece = String(part || '').trim();
+      if (!piece || !hasChatPayload(piece)) return;
+      var prev = merged.length ? merged[merged.length - 1] : '';
+      var lonely = punctOnly.test(piece)
+        || (piece.length <= 2 && /[（）()【】「」《》]/.test(piece));
+      if (lonely && prev && !/<(?:span|div|pre|table|ul|ol|blockquote)/i.test(prev)) {
+        merged[merged.length - 1] = prev + piece;
+        return;
+      }
+      merged.push(piece);
+    });
+    /* A bracket at the very head has nothing behind it to join, so it leads the
+       next part instead of standing there on its own. */
+    if (merged.length > 1) {
+      var head = merged[0];
+      var headLonely = punctOnly.test(head)
+        || (head.length <= 2 && /[（）()【】「」《》]/.test(head));
+      var structuredNext = /<(?:span|div|pre|table|ul|ol|blockquote)/i.test(merged[1]);
+      if (headLonely && !structuredNext) {
+        merged[0] = head + merged[1];
+        merged.splice(1, 1);
+      }
+    }
+    var semantic = [];
+    merged.forEach(function (part) {
+      var prev = semantic[semantic.length - 1];
+      if (prev && /^(?:\d+[.)、]|[-*•])$/.test(prev.trim())) semantic[semantic.length - 1] = prev + ' ' + part;
+      else semantic.push(part);
+    });
+    return semantic;
+  }
+  function aiMsg(html, cls, time, tag, state, activity, messageRef) {
+    /* Process records deliberately live outside the assistant text row.  A tool call
+       or visible reasoning is not spoken content, so it must not borrow the fox
+       avatar that identifies an actual reply. */
+    var process = activity ? '<div class="activity-history">' + activity + '</div>' : '';
+    if (!hasChatPayload(html)) return process;
+    return process + '<div class="msg msg--ai" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('FOX_CHAT_AVATAR', tag, state)
+      + '<div class="msg__body">'
       + assistantBubbleHtml(html, cls)
-      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
+      + '</div>' + '<span class="msg__time msg__time--avatar">' + (time || '09:41') + '</span>'
       + '</div>';
   }
   /* 「我」这一侧：头像是**小羊**（人人星）。
@@ -428,17 +575,17 @@
      省得每个调用点都传一个参数（和 UNREAD / LAST_SENT_HASH 一个路子）：
        设备离线 / 断网 = 人不在 → 睡着；上一条没发出去 → 委屈；其余平静。 */
   var MY_AVA = 'idle';
-  function meMsg(html, meta, time, state) {
-    return '<div class="msg msg--me" data-chat-message data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
+  function meMsg(html, meta, time, state, messageRef) {
+    return '<div class="msg msg--me" data-chat-message data-message-ref="' + esc(messageRef || '') + '" data-message-text="' + esc(String(html || '').replace(/<[^>]*>/g, ' ')) + '">' + ava('USER_AVATAR', '我', state || MY_AVA)
       + '<div class="msg__body"><div class="bubble">' + html + '</div>'
       + (meta ? '<div class="msg__meta">' + meta + '</div>' : '')
-      + '<span class="msg__time">' + (time || '09:41') + '</span></div>'
+      + '</div>' + '<span class="msg__time msg__time--avatar">' + (time || '09:41') + '</span>'
       + '</div>';
   }
   function dots() { return '<span class="dots"><i></i><i></i><i></i></span>'; }
 
-  /* 思考过程与工具调用共用一个折叠区。
-     没有真实 reasoning/tool 事件时不创建折叠区，也不伪造“正在思考”。 */
+  /* 过程记录是 AI 侧的独立时间线。思考可以折叠；工具调用必须保留
+     人类可读的动作说明和结果，不能退化成一条装饰分割线。 */
   function cleanActivityText(value, fallback) {
     var text = String(value == null ? '' : value);
     try {
@@ -450,11 +597,56 @@
     return text || String(fallback || '');
   }
 
+  function joinReasoningLines(lines) {
+    var out = '';
+    (lines || []).forEach(function (line) {
+      var value = String(line || '').trim();
+      if (!value) return;
+      if (!out) { out = value; return; }
+      var left = out.slice(-1), right = value.charAt(0);
+      var asciiWord = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right);
+      out += (asciiWord ? ' ' : '') + value;
+    });
+    return out;
+  }
+
+  /* Providers sometimes stream one token per line. A single newline is a transport
+     boundary, not a paragraph boundary; blank lines and list markers remain semantic. */
+  function normalizeReasoningText(value) {
+    var raw = activityDetailText(value || '').replace(/\r\n?/g, '\n').trim();
+    if (!raw) return '';
+    return raw.split(/\n\s*\n+/).map(function (block) {
+      var lines = block.split('\n').map(function (line) { return line.trim(); }).filter(Boolean);
+      if (!lines.length) return '';
+      if (lines.some(function (line) { return /^(?:[-*•]|\d+[.)])\s+/.test(line); })) {
+        return lines.join('\n');
+      }
+      return joinReasoningLines(lines);
+    }).filter(Boolean).join('\n\n');
+  }
+
+  function mergeReasoningText(previous, incoming) {
+    var oldText = normalizeReasoningText(previous || '');
+    var nextText = normalizeReasoningText(incoming || '');
+    if (!oldText) return nextText;
+    if (!nextText) return oldText;
+    if (nextText.indexOf(oldText) === 0) return nextText;
+    if (oldText.indexOf(nextText) >= 0) return oldText;
+    for (var overlap = Math.min(oldText.length, nextText.length); overlap >= 20; overlap--) {
+      if (oldText.slice(-overlap) === nextText.slice(0, overlap)) return oldText + nextText.slice(overlap);
+    }
+    return joinReasoningLines([oldText, nextText]);
+  }
+
   function toolActivityLabel(value) {
     var text = cleanActivityText(value, '');
     var low = text.toLowerCase();
     if (!low) return '使用工具';
+    if (/kissne_sticker_search\b/.test(low)) return '搜索表情包';
+    if (/kissne_sticker_send\b/.test(low)) return '发送表情包';
     if (/sticker|表情包/.test(low) && /grep|rg|find|search|terminal/.test(low)) return '查找表情包发送逻辑';
+    if (/search[_-]?files?|find[_-]?files?|grep|ripgrep|\brg\b/.test(low)) return '查找相关文件';
+    if (/execute[_-]?code|running\s+code|hermes[_\s-]?tools/.test(low)) return '运行代码';
     if (/adapter\.py|mobile adapter|kissne_mobile/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查 Mobile Adapter';
     if (/screens-a\.js|chat|bubble|message/.test(low) && /read|reading|sed|cat|grep|rg/.test(low)) return '检查聊天界面逻辑';
     if (/\bgit\s+log\b|commit history|history/.test(low)) return '检查 Git 历史';
@@ -486,6 +678,7 @@
   }
   function activityDetailText(value) {
     var text = cleanActivityText(value, '');
+    text = text.replace(/^[\s\p{Extended_Pictographic}\uFE0F\u200D]+/u, '');
     text = text.replace(/```[a-z0-9_-]*\s*/gi, '').replace(/```/g, '').trim();
     text = text.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s'"]+/gi, '$1[已隐藏]');
     text = text.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s'"]+/gi, '$1[已隐藏]');
@@ -495,19 +688,26 @@
 
   function looksLikeToolTranscript(value) {
     var text = cleanActivityText(value, '').trim();
-    return /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
+    var toolText = text.replace(/^[\s\p{Extended_Pictographic}\uFE0F\u200D]+/u, '');
+    return /^kissne_[\w.-]+\s*(?:[:：]|\.{3}|…)/i.test(toolText)
+      || /^\`\`\`\s*(terminal|find|tool|shell-command)\b/i.test(text)
       || /^(terminal|tool)\s*[:：]?/i.test(text)
       || /\bterminal\b[\s\S]*?\`\`\`/i.test(text)
       || /^\s*(find|rg|grep)\s+[^\n]+$/i.test(text)
       || /^\s*git\s+(status|log|diff|show|branch)\b/i.test(text)
       || /(?:^|\n)Reading\s+[^\n]+\s+L\d+/i.test(text)
-      || /^\s*[🐍]?\s*Running code from\s+hermes_tools_import\b/i.test(text);
+      || /^\s*Running code from\s+hermes_tools(?:[_\s]+)import\b/i.test(text)
+      || /^\s*Running code from\s+[a-z0-9_.-]+\s+import\b/i.test(text);
   }
 
   function looksLikeRuntimeControl(value) {
     var text = cleanActivityText(value, '').trim();
-    return /^\s*[⚡]?\s*Interrupting current task\b/i.test(text)
-      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text);
+    return /^\s*Interrupting current task\b/i.test(text)
+      || /^\s*(?:↪\s*)?Redirected current run\b/i.test(text)
+      || /^\s*(?:Steered into current run|Subagent working|Compressing context|Queued for the next turn)\b/i.test(text)
+      || /^\s*I'll respond to your message shortly\.?\s*$/i.test(text)
+      || /^(?:回复)?已(?:暂停|停止)回复[。.!！]?\s*$/.test(text)
+      || /^(?:回复)?(?:暂停|停止)回复[。.!！]?\s*$/.test(text);
   }
 
   var CHAT_LOG = [];
@@ -529,12 +729,14 @@
       var sid = String(CHAT_LOG_SESSION || '');
       var key = chatLogStorageKeyFor(sid);
       if (!key) return; /* 未绑定会话时不落盘，避免写进错误会话 */
-      var safe = CHAT_LOG.slice(-240).map(function (m, index) {
+      var safe = CHAT_LOG.filter(function (m) { return !m.pendingSend; }).slice(-240).map(function (m) {
         return {
           who: m.who, html: m.html, cls: m.cls || '', meta: m.meta || '', time: m.time || '',
           day: m.day || '', sortAt: m.sortAt || m.createdAt || 0, messageRef: m.messageRef || '', turnId: m.turnId || '',
+          segmentKey: m.segmentKey || '', answerText: m.answerText || '',
+          messageId: m.messageId || '', attachments: Array.isArray(m.attachments) ? m.attachments : [],
+          replyTo: m.replyTo || '', replyPreview: m.replyPreview || null,
           localOwned: !!m.localOwned, optimistic: !!m.optimistic, localOnly: !!m.localOnly,
-          stableOrder: Number(m._stableOrder != null ? m._stableOrder : index),
           sid: sid
         };
       });
@@ -553,7 +755,6 @@
       parsed.forEach(function (m) {
         if (!m || !/^(me|ai|sys)$/.test(String(m.who || ''))) return;
         if (m.sid && String(m.sid) !== sid) return; /* 行必须属于该会话 */
-        if (m._stableOrder == null && m.stableOrder != null) m._stableOrder = Number(m.stableOrder);
         rows.push(m);
       });
       rows = rows.slice(-240);
@@ -565,13 +766,9 @@
   function bindChatLogSession(sessionId) {
     var sid = String(sessionId || '');
     if (sid === CHAT_LOG_SESSION) return;
-    /* Flush the old namespace before replacing the in-memory array. UI rerenders
-       must never turn a route/menu tap into an implicit history clear. */
-    if (CHAT_LOG_SESSION) persistChatLog();
     CHAT_LOG_SESSION = sid;
     CHAT_LOG.length = 0;
     loadChatLogFor(sid).forEach(function (m) { CHAT_LOG.push(m); });
-    sortChatLogChronologically();
   }
   /* Human-style composer: every tap creates its own visible bubble. The 1.6s value is only a
      maximum coalescing guard; actual drain follows live composer typing state. Messages sent while
@@ -593,6 +790,7 @@
     var sid = String(sessionId || '');
     if (sid === TURN_ACTIVITY_SESSION) return;
     TURN_ACTIVITY_SESSION = sid;
+    FINAL_ACTIVITY_BY_TEXT = Object.create(null);
     TURN_ACTIVITY = Object.create(null);
     loadTurnActivity(sid);
   }
@@ -614,11 +812,10 @@
   function activityForTurn(turnId) {
     var id = String(turnId || 'pending');
     if (!TURN_ACTIVITY[id]) {
-      TURN_ACTIVITY[id] = { reasoning: false, reasoningText: '', toolOrder: [], toolCalls: {}, done: false, updatedAt: Date.now() };
+      TURN_ACTIVITY[id] = { timeline: [], toolCalls: {}, done: false, updatedAt: Date.now() };
     }
     var state = TURN_ACTIVITY[id];
-    if (typeof state.reasoningText !== 'string') state.reasoningText = '';
-    if (!Array.isArray(state.toolOrder)) state.toolOrder = [];
+    if (!Array.isArray(state.timeline)) state.timeline = [];
     if (!state.toolCalls || typeof state.toolCalls !== 'object') state.toolCalls = {};
     return state;
   }
@@ -633,23 +830,35 @@
         var row = parsed[id];
         if (!row || typeof row !== 'object') return;
         var state = activityForTurn(id);
-        state.reasoning = !!row.reasoning;
-        state.reasoningText = activityDetailText(row.reasoningText || '');
         state.done = !!row.done;
         state.updatedAt = Number(row.updatedAt) || 0;
-        (Array.isArray(row.toolOrder) ? row.toolOrder : []).slice(-24).forEach(function (key) {
-          var tool = row.toolCalls && row.toolCalls[key];
-          if (!tool || typeof tool !== 'object') return;
-          state.toolOrder.push(String(key));
-          state.toolCalls[String(key)] = {
-            id: String(tool.id || key),
-            name: cleanActivityText(tool.name || '', ''),
-            label: cleanActivityText(tool.label || '', '使用工具'),
-            detail: activityDetailText(tool.detail || ''),
-            result: activityDetailText(tool.result || ''),
-            status: toolCallStatus(tool.status, 'completed')
-          };
-        });
+        if (Array.isArray(row.timeline)) {
+          var seenTimeline = Object.create(null);
+          state.timeline = row.timeline.slice(-48).map(function (item) {
+            return item && typeof item === 'object' ? Object.assign({}, item) : null;
+          }).filter(function (item) {
+            if (!item) return false;
+            var key = item.kind === 'tool' ? 'tool:' + String(item.key || '') : 'reasoning:' + String(item.text || '');
+            if (seenTimeline[key]) return false;
+            seenTimeline[key] = true;
+            return true;
+          });
+        } else {
+          /* One-time migration from the old grouped reasoning/tools store. */
+          var legacyReasoning = activityDetailText(row.reasoningText || '');
+          if (legacyReasoning) state.timeline.push({ kind: 'reasoning', text: legacyReasoning });
+          (Array.isArray(row.toolOrder) ? row.toolOrder : []).forEach(function (key) {
+            var tool = row.toolCalls && row.toolCalls[key];
+            if (!tool) return;
+            state.timeline.push({ kind: 'tool', key: String(key) });
+            state.toolCalls[String(key)] = Object.assign({}, tool);
+          });
+        }
+        if (row.toolCalls && typeof row.toolCalls === 'object') {
+          Object.keys(row.toolCalls).forEach(function (key) {
+            state.toolCalls[key] = Object.assign({}, row.toolCalls[key]);
+          });
+        }
       });
     } catch (e) {}
   }
@@ -664,27 +873,16 @@
       if (keyName) localStorage.setItem(keyName, JSON.stringify(TURN_ACTIVITY));
     } catch (e) {}
   }
-
   function upsertToolActivity(turnId, value, phase) {
     var state = activityForTurn(turnId);
     var row = value && typeof value === 'object' ? value : { detail: value };
-    var key = toolCallKey(row, state.toolOrder.length);
+    var key = toolCallKey(row, state.timeline.length);
     var current = state.toolCalls[key];
     if (!current) {
-      current = {
-        id: key,
-        name: '',
-        label: '',
-        detail: '',
-        result: '',
-        status: 'running'
-      };
+      current = { id: key, name: '', label: '', detail: '', result: '', status: 'running' };
       state.toolCalls[key] = current;
-      state.toolOrder.push(key);
-      if (state.toolOrder.length > 24) {
-        var dropped = state.toolOrder.shift();
-        delete state.toolCalls[dropped];
-      }
+      state.timeline.push({ kind: 'tool', key: key });
+      if (state.timeline.length > 48) state.timeline.shift();
     }
     current.name = cleanActivityText(row.tool_name || row.tool || row.function_name || current.name, current.name);
     current.label = cleanActivityText(row.label || '', current.label)
@@ -702,14 +900,16 @@
   function appendActivity(turnId, kind, value) {
     var state = activityForTurn(turnId);
     if (kind === 'reasoning') {
-      var reasoningText = activityDetailText(value || '');
-      state.reasoning = true;
-      if (reasoningText) {
-        /* Reasoning may stream in cumulative snapshots or incremental chunks.
-           Replace cumulative snapshots; append genuinely new chunks. */
-        if (!state.reasoningText) state.reasoningText = reasoningText;
-        else if (reasoningText.indexOf(state.reasoningText) === 0) state.reasoningText = reasoningText;
-        else if (state.reasoningText.indexOf(reasoningText) < 0) state.reasoningText += '\n' + reasoningText;
+      var text = normalizeReasoningText(value || '');
+      if (!text) return false;
+      var last = state.timeline[state.timeline.length - 1];
+      if (last && last.kind === 'reasoning') {
+        var merged = mergeReasoningText(last.text, text);
+        if (merged === normalizeReasoningText(last.text)) return false;
+        last.text = merged;
+      } else {
+        state.timeline.push({ kind: 'reasoning', text: text });
+        if (state.timeline.length > 48) state.timeline.shift();
       }
       state.updatedAt = Date.now();
       persistTurnActivity();
@@ -717,57 +917,89 @@
     }
     return upsertToolActivity(turnId, value, kind === 'tool_result' ? 'result' : 'call');
   }
+  function reasoningHtml(text) {
+    var raw = normalizeReasoningText(text);
+    if (!raw) return '';
+    var blocks = raw.split(/\n\s*\n+/).map(function (part) { return part.trim(); }).filter(Boolean);
+    return blocks.map(function (part) {
+      var lines = part.split('\n').map(function (line) { return line.trim(); }).filter(Boolean);
+      var isList = lines.length > 1 && lines.every(function (line) {
+        return /^(?:[-*•]|\d+[.)])\s+/.test(line);
+      });
+      if (isList) {
+        return '<ul class="process-reasoning__list">' + lines.map(function (line) {
+          return '<li>' + esc(line.replace(/^(?:[-*•]|\d+[.)])\s+/, '')) + '</li>';
+        }).join('') + '</ul>';
+      }
+      return '<p>' + esc(joinReasoningLines(lines)) + '</p>';
+    }).join('');
+  }
   function activityRows(state, closed) {
-    var rows = [];
-    if (state.reasoning) {
-      rows.push('<div class="activity-item">'
-        + '<button type="button" class="activity-row activity-row--reasoning" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-label">' + (closed ? '思考' : '正在思考') + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(state.reasoningText || (closed ? '已完成这一步处理。' : '正在分析并处理当前请求。')) + '</div></div>');
-    }
-    (state.toolOrder || []).forEach(function (key) {
+    var timeline = state.timeline || [];
+    var lastIndex = timeline.length - 1;
+    return (state.timeline || []).map(function (item, index) {
+      if (!item) return '';
+      var divider = index ? '<div class="activity-divider" role="separator" aria-hidden="true">'
+        + '<span class="activity-divider__line"></span>'
+        + '<span class="activity-divider__star">✦</span>'
+        + '<span class="activity-divider__line"></span></div>' : '';
+      var expanded = true;
+      var detailHidden = expanded ? '' : ' hidden';
+      var expandedAttr = expanded ? 'true' : 'false';
+      if (item.kind === 'reasoning') {
+        var reasoningActive = !closed && index === lastIndex;
+        return '<section class="process-step process-step--reasoning' + (reasoningActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '">'
+          + '<div class="activity-detail process-reasoning"' + detailHidden + '>' + reasoningHtml(item.text) + '</div></section>';
+      }
+      if (item.kind !== 'tool') return '';
+      var key = String(item.key || '');
       var tool = state.toolCalls[key];
-      if (!tool) return;
+      if (!tool) return '';
       var status = closed && tool.status === 'running' ? 'completed' : tool.status;
-      var statusText = status === 'failed' ? '失败' : (status === 'completed' ? '完成' : '进行中');
+      var toolActive = !closed && index === lastIndex && status === 'running';
       var detail = tool.detail || tool.name || tool.label || '工具调用';
       if (tool.result) detail += '\n\n结果：' + tool.result;
-      var meta = tool.name ? '<span class="activity-toolname">' + esc(tool.name) + '</span>' : '';
-      rows.push('<div class="activity-item activity-item--' + esc(status) + '" data-tool-call-id="' + esc(tool.id || key) + '">'
-        + '<button type="button" class="activity-row" data-activity-toggle aria-expanded="false">'
-        + '<span class="activity-statusdot" aria-hidden="true"></span>'
-        + '<span class="activity-icon">' + icon(toolActivityIcon(tool.label), 13) + '</span>'
-        + '<span class="activity-copy"><span class="activity-label">' + esc(tool.label || '使用工具') + '</span>' + meta + '</span>'
-        + '<span class="activity-count">' + esc(statusText) + '</span>'
-        + icon('chevron', 12, 'activity-chevron') + '</button>'
-        + '<div class="activity-detail" hidden>' + esc(detail) + '</div></div>');
-    });
-    return rows.join('');
+      var label = tool.label || toolActivityLabel(tool.name || detail);
+      if (/^使用工具$|^使用\s+[a-z0-9_.-]+$/i.test(label)) label = toolActivityLabel(tool.name || detail);
+      var iconName = toolActivityIcon(label);
+      return '<section class="process-step process-step--tool activity-item--' + esc(status) + (toolActive ? ' is-active' : '') + (expanded ? ' is-open' : '') + '" data-activity-index="' + index + '" data-tool-call-id="' + esc(tool.id || key) + '">'
+        + '<div class="process-tool-label" aria-expanded="' + expandedAttr + '" aria-label="'
+        + (toolActive ? '正在' + label : '展开' + label + '详情') + '">'
+        + '<span class="process-line__mark process-line__mark--tool" aria-hidden="true">' + icon(iconName, 13) + '</span>'
+        + '<span class="process-line__label process-line__label--tool">' + esc(label) + '</span>'
+        + (toolActive ? dots() : '')
+        + '</div>'
+        + '<div class="activity-detail"' + detailHidden + '>' + esc(detail) + '</div></section>';
+    }).join('');
   }
   function activityMarkupForTurn(turnId, done) {
     var id = String(turnId || 'pending');
     var state = activityForTurn(id);
-    var closed = done === true || state.done === true;
+    var closed = done === true || state.done === true || state.answerStarted === true;
     var rows = activityRows(state, closed);
     if (!rows) return '';
+    var expanded = state.expanded === undefined ? !closed : !!state.expanded;
     return '<div class="activity-stream' + (closed ? ' is-done' : '') + '" data-activity-turn="' + esc(id) + '">'
-      + rows + '</div>';
+      + '<button type="button" class="process-line activity-summary" data-activity-summary aria-expanded="' + (expanded ? 'true' : 'false') + '">'
+      + '<span class="process-line__mark" aria-hidden="true"></span><span class="process-line__label">' + (closed ? '处理完成' : '正在处理') + '</span>'
+      + (closed ? '<span class="process-line__chevron" aria-hidden="true">' + icon('chevron', 10) + '</span>' : dots())
+      + '</button><div class="activity-stream__steps" data-activity-steps' + (expanded ? '' : ' hidden') + '>' + rows + '</div></div>';
   }
   function rememberFinalActivity(text, turnId) {
     var raw = String(text || '');
     if (!raw) return '';
     var state = activityForTurn(turnId);
     state.done = true;
-    state.toolOrder.forEach(function (key) {
+    Object.keys(state.toolCalls || {}).forEach(function (key) {
       var tool = state.toolCalls[key];
       if (tool && tool.status === 'running') tool.status = 'completed';
     });
     state.updatedAt = Date.now();
     persistTurnActivity();
     var html = activityMarkupForTurn(turnId, true);
-    if (html) FINAL_ACTIVITY_BY_TEXT[raw] = html;
-    else delete FINAL_ACTIVITY_BY_TEXT[raw];
+    var finalKey = String(turnId || '') + '\u0000' + raw;
+    if (html) FINAL_ACTIVITY_BY_TEXT[finalKey] = html;
+    else delete FINAL_ACTIVITY_BY_TEXT[finalKey];
     return html;
   }
 
@@ -820,29 +1052,60 @@
       ''
     );
   }
-  function chatHtmlFromWire(text) {
+  function visibleAttachmentText(text, attachments) {
+    var raw = visibleChatText(text);
+    if (!Array.isArray(attachments) || !attachments.length) return raw;
+    raw = raw.replace(/\[The user sent an image[\s\S]*?\]/gi, '').replace(/\[If you need a closer look,[\s\S]*?\]/gi, '');
+    return raw.replace(/[\[【]\s*(?:照片|文件|表情包)\s*[:：][^\]】]+[\]】]/g, '').trim();
+  }
+  function chatHtmlInlineFromWire(text) {
     var raw = visibleChatText(text);
     var exact = stickerFromWire(raw);
     if (exact) return exact;
+    function inlineMarkdown(value) {
+      var html = esc(value);
+      html = html.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
+      return html;
+    }
     var re = /[\[【]\s*表情包\s*[:：]\s*([^\]】]+)\s*[\]】]/g;
     var out = '';
     var last = 0;
     var matched = false;
     var m;
     while ((m = re.exec(raw))) {
-      out += esc(raw.slice(last, m.index));
+      out += inlineMarkdown(raw.slice(last, m.index));
       var sticker = stickerMatch(m[1]);
       if (sticker) {
         out += '<span class="stkmsg">' + K.sticker(sticker.k, { alt: sticker.label }) + '</span>';
         matched = true;
       } else {
-        out += esc(m[0]);
+        out += inlineMarkdown(m[0]);
       }
       last = m.index + m[0].length;
     }
-    if (!matched) return esc(raw);
-    out += esc(raw.slice(last));
+    if (!matched) return inlineMarkdown(raw);
+    out += inlineMarkdown(raw.slice(last));
     return '<span class="stkmix">' + out + '</span>';
+  }
+  function chatHtmlFromWire(text) {
+    var raw = visibleChatText(text);
+    var fence = String.fromCharCode(96, 96, 96);
+    if (raw.indexOf(fence) < 0) return chatHtmlInlineFromWire(raw);
+    var out = '', last = 0, match;
+    var re = /```([^\n]*)\n([\s\S]*?)```/g;
+    while ((match = re.exec(raw))) {
+      out += chatHtmlInlineFromWire(raw.slice(last, match.index));
+      var language = String(match[1] || '').trim();
+      var code = String(match[2] || '').replace(/\n$/, '');
+      out += '<div class="codeblock" data-copy-code="' + esc(code) + '">'
+        + '<div class="codeblock__bar"><span>' + esc(language || '代码') + '</span>'
+        + '<button type="button" class="codeblock__copy" data-copy-text="' + esc(code) + '">复制</button></div>'
+        + '<pre><code>' + esc(code) + '</code></pre></div>';
+      last = match.index + match[0].length;
+    }
+    out += chatHtmlInlineFromWire(raw.slice(last));
+    return out;
   }
   function clockNow() {
     var d = new Date();
@@ -867,11 +1130,11 @@
     return bits.length === 3 ? bits[1] + '/' + bits[2] : key;
   }
   var CHAT_DIVIDER_PATTERNS = [
-    '₊⁺ ♡₊⁺',
-    '°. ⑅♡⑅.°',
-    '𓂃𓈒𓐍 *ﾟ.',
-    'ଘ*⑅┈⋆°˖┈⑅*ଓ',
-    '✩₊ ·̩͙. ᘏ▸◂ᘏ .·̩͙ ₊ ✩'
+    '· ─ ·',
+    '─ · ─',
+    '· · ·',
+    '─ ┈ ─',
+    '· ─── ·'
   ];
   function chatDivider(day, index) {
     var pattern = CHAT_DIVIDER_PATTERNS[Math.abs(Number(index) || 0) % CHAT_DIVIDER_PATTERNS.length];
@@ -897,12 +1160,7 @@
     return 0;
   }
   function sortChatLogChronologically() {
-    CHAT_LOG.forEach(function (m, i) {
-      if (m && m._stableOrder == null) {
-        var saved = Number(m.stableOrder);
-        m._stableOrder = isFinite(saved) ? saved : i;
-      }
-    });
+    CHAT_LOG.forEach(function (m, i) { if (m && m._stableOrder == null) m._stableOrder = i; });
     CHAT_LOG.sort(function (a, b) {
       var am = chatSortMs(a), bm = chatSortMs(b);
       if (am && bm && am !== bm) return am - bm;
@@ -917,11 +1175,20 @@
     if (m && m.who !== 'sys' && m.optimistic === undefined) m.optimistic = true;
     if (m && m.who !== 'sys' && m.localOwned === undefined) m.localOwned = true;
     if (m && !m.sid) m.sid = CHAT_LOG_SESSION; /* 标记归属会话，落盘/恢复都按它过滤 */
-    CHAT_LOG.push(m);
+    var ref = String(m && (m.segmentKey || m.messageRef || m.messageId) || '');
+    var existing = ref && CHAT_LOG.filter(function (row) {
+      return String(row && (row.segmentKey || row.messageRef || row.messageId) || '') === ref;
+    })[0];
+    if (existing) {
+      Object.keys(m || {}).forEach(function (key) { if (m[key] !== undefined) existing[key] = m[key]; });
+      m = existing;
+    } else {
+      CHAT_LOG.push(m);
+    }
     persistChatLog();
     /* 你没看着的时候进来的 AI 消息 = 未读（记下最早那条，点胶囊要跳过去） */
     if (m.who === 'ai' && !chatAtBottom()) {
-      if (!UNREAD.n) UNREAD.first = CHAT_LOG.length - 1;
+      if (!UNREAD.n) UNREAD.first = CHAT_LOG.indexOf(m);
       UNREAD.n++;
     }
     return m;
@@ -946,6 +1213,16 @@
   /* 历史搜索：像微信的搜索记录那样**按时间线排列**（今天 / 昨天 / 更早）。
      模块级，删除与清空都是真的生效（只在本会话内）。 */
   var SEARCH_LOG = [];
+  var SEARCH_RESULTS = [];
+  var SEARCH_RESULT_CACHE = Object.create(null);
+  var SEARCH_QUERY = '';
+  var PENDING_QUOTE = null;
+  function searchResultTime(raw) {
+    var n = Number(raw || 0);
+    if (!isFinite(n) || !n) return '';
+    var d = new Date(n < 100000000000 ? n * 1000 : n);
+    return isNaN(d.getTime()) ? '' : ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
   function logRender() {
     var lastDay = '';
     return CHAT_LOG.map(function (m, index) {
@@ -954,8 +1231,8 @@
       lastDay = day;
       var row = m.who === 'sys' ? sysMsg(m.html, m.time)
         : (m.who === 'ai'
-          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '')
-          : meMsg(m.html, m.meta || '', m.time));
+          ? aiMsg(m.html, m.cls || '', m.time, '', 'idle', m.activity || '', m.messageRef || '')
+          : meMsg(m.html, m.meta || '', m.time, MY_AVA, m.messageRef || m.messageId || ''));
       return divider + row;
     }).join('');
   }
@@ -981,7 +1258,15 @@
       /* —— 历史搜索（顶栏右上角放大镜进入）：按时间线排列，可筛选 / 删除 / 清空 —— */
       if (s === 'search') {
         var groups = [];
-        SEARCH_LOG.forEach(function (it) {
+        var searchRows = SEARCH_RESULTS.length ? SEARCH_RESULTS.map(function (it) {
+          var copy = Object.assign({}, it);
+          copy.k = String(it.text || '').slice(0, 80);
+          copy.g = chatDayLabel(chatDayKey(it.created_at));
+          copy.t = searchResultTime(it.created_at);
+          copy.sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
+          return copy;
+        }) : SEARCH_LOG;
+        searchRows.forEach(function (it) {
           var g = groups.length ? groups[groups.length - 1] : null;
           if (!g || g.name !== it.g) { g = { name: it.g, items: [] }; groups.push(g); }
           g.items.push(it);
@@ -990,13 +1275,17 @@
           return '<div class="srch__g">' + esc(g.name) + '</div>'
             + g.items.map(function (it) {
                 /* 点一条 → 回人人星并**定位到那条消息**（find=关键词），和微信一样 */
+                var ref = String(it.message_ref || '');
+                var jump = '#/chat?state=normal&find=' + encodeURIComponent(SEARCH_QUERY || it.k)
+                  + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '')
+                  + (it.session_id ? '&jump_session=' + encodeURIComponent(it.session_id) : '');
                 return '<div class="srch__row" data-kw="' + esc(it.k) + '"'
-                  + ' data-nav="#/chat?state=normal&find=' + encodeURIComponent(it.k) + '">'
+                  + ' data-nav="' + esc(jump) + '">'
                   + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
-                  + '<span class="srch__kw">' + esc(it.k) + '</span>'
+                  + '<span class="srch__kw"><b>' + esc(it.sender || '') + '</b>' + esc(it.k) + '</span>'
                   + '<span class="srch__t">' + esc(it.t) + '</span>'
-                  + '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">'
-                  + icon('close', 12) + '</button>'
+                  + (ref ? '<button class="srch__quote" type="button" data-quote-ref="' + esc(ref) + '" aria-label="引用这条消息">' + icon('link', 12) + '</button>' : '')
+                  + (!SEARCH_RESULTS.length ? '<button class="srch__x" type="button" data-delsrch="' + esc(it.k) + '" aria-label="删除这条记录">' + icon('close', 12) + '</button>' : '')
                   + '</div>';
               }).join('');
         }).join('');
@@ -1018,7 +1307,7 @@
             <div class="srch__head"><span>历史搜索</span>
               <button class="srch__clear" type="button" data-clearsrch>${icon('trash', 12)}清空</button></div>
             <div class="srch__list" data-srchlist>${rows}</div>
-            ${note('搜索只针对当前已加载的真实聊天记录。')}
+            ${note('搜索整个连续聊天记录，点击结果定位；使用引用按钮可带入当前对话。')}
           </div>
         </div>`;
       }
@@ -1076,6 +1365,13 @@
         + '<button class="qbtn" data-nav="#/call?state=share">' + icon('screen', 13) + '<span>屏幕共享</span></button>'
         + '</div>';
       var popLayer = plusPopLayer(origin);
+      var quoteRef = q && q.get('quote_ref') || '';
+      var quote = PENDING_QUOTE && String(PENDING_QUOTE.message_ref || '') === String(quoteRef)
+        ? PENDING_QUOTE : null;
+      var quoteBar = quote ? '<div class="quote-bar" data-quote-bar><span class="quote-bar__main"><b>引用'
+        + (String(quote.role || '') === 'assistant' ? '叶青栩' : '我的消息') + '</b><span>'
+        + esc(String(quote.text || '').slice(0, 90)) + '</span></span><button type="button" data-quote-clear aria-label="取消引用">'
+        + icon('close', 13) + '</button></div>' : '';
       var composer = '<div class="composer">'
         + popLayer
         + '<button class="composer__btn" aria-label="添加" data-plus-toggle>' + icon('plus', 19) + '</button>'
@@ -1105,7 +1401,10 @@
           <!-- 右上角：历史搜索（按时间线排列，见 state=search） -->
           <button class="iconbtn chathead__search" data-nav="#/chat?state=search" aria-label="搜索">${icon('search')}</button>
           <div class="chathead__row">
-            <button class="hsel${(menu === 'provider' || menu === 'model') ? ' is-open' : ''}" data-chat-menu="model">
+            <button class="hsel${menu === 'provider' ? ' is-open' : ''}" data-chat-menu="provider">
+              <span class="hsel__k">供应商</span><span class="hsel__v">${esc(curProvider.v)}</span>${icon('chevron', 11, 'hsel__car')}
+            </button>
+            <button class="hsel${menu === 'model' ? ' is-open' : ''}" data-chat-menu="model">
               <span class="hsel__k">模型</span><span class="hsel__v">${esc(curModel.v)}</span>${icon('chevron', 11, 'hsel__car')}
             </button>
             <button class="hsel${menu === 'effort' ? ' is-open' : ''}" data-chat-menu="effort">
@@ -1116,13 +1415,13 @@
         ${topBanner}
         <div class="chatbody">${emptyBlock}${base}</div>
         <div class="chatstatus" data-session-status hidden></div>
-        <!-- 输入区位于聊天页 flex 文档流底部；真机键盘由浏览器 viewport 自然处理。 -->
+        <!-- 输入区悬浮在聊天内容上，框外透明；底部留白随实际高度同步。 -->
         <div class="composerwrap">
           <!-- 未读胶囊：浮在输入区上方，点了跳到**最早**那条未读 -->
           <button class="unread" data-unread type="button"${UNREAD.n ? '' : ' hidden'}>
             <span data-unread-n>${UNREAD.n || 0}</span> 条新消息 ↓
           </button>
-          ${stkPanel}${quickbar}${composer}</div>
+          ${quoteBar}${stkPanel}${quickbar}${composer}</div>
         <div data-chat-menu-host>${menuLayer}</div>
         ${sessionDrawerHtml()}
         ${bs === 'request-enter' ? modal({
@@ -1144,6 +1443,74 @@
       var sIn = root.querySelector('input.srchbox__in');
       if (sIn) {
         var listEl = root.querySelector('[data-srchlist]');
+        var searchTimer = null;
+        var searchSeq = 0, searchInFlight = false, pendingSearch = null, localMatches = [];
+        function paintRemoteResults(rows) {
+          if (!listEl) return;
+          if (!rows.length) {
+            listEl.innerHTML = '<div class="srch__empty">没有找到匹配的聊天记录</div>';
+            return;
+          }
+          var grouped = {};
+          rows.forEach(function (it) {
+            var cachedRef = String(it && it.message_ref || '');
+            if (cachedRef) SEARCH_RESULT_CACHE[cachedRef] = it;
+            var day = chatDayLabel(chatDayKey(it.created_at));
+            if (!grouped[day]) grouped[day] = [];
+            grouped[day].push(it);
+          });
+          listEl.innerHTML = Object.keys(grouped).map(function (day) {
+            return '<div class="srch__g">' + esc(day) + '</div>' + grouped[day].map(function (it) {
+              var ref = String(it.message_ref || '');
+              var q = String(sIn.value || '').trim();
+              var jump = '#/chat?state=normal&find=' + encodeURIComponent(q)
+                + (ref ? '&jump_ref=' + encodeURIComponent(ref) : '')
+                  + (it.session_id ? '&jump_session=' + encodeURIComponent(it.session_id) : '');
+              var sender = String(it.role || '') === 'assistant' ? '叶青栩' : '我';
+              return '<div class="srch__row" data-kw="' + esc(String(it.text || '')) + '" data-message-ref="' + esc(ref) + '" data-nav="' + esc(jump) + '">'
+                + '<span class="srch__ic">' + icon('clock', 13) + '</span>'
+                + '<span class="srch__kw"><b>' + esc(sender) + '</b>' + esc(String(it.text || '')) + '</span>'
+                + '<span class="srch__t">' + esc(searchResultTime(it.created_at)) + '</span>'
+                + (ref ? '<button class="srch__quote" type="button" data-quote-ref="' + esc(ref) + '" aria-label="引用这条消息">' + icon('link', 12) + '</button>' : '')
+                + '</div>';
+            }).join('');
+          }).join('');
+        }
+        function runPendingSearch() {
+          if (searchInFlight || !pendingSearch) return;
+          var task = pendingSearch; pendingSearch = null;
+          var transport = window.KissneTransport;
+          if (!transport || !transport.search) return;
+          searchInFlight = true;
+          transport.search(task.value, 500).then(function (payload) {
+            if (task.seq !== searchSeq) return;
+            var seen = Object.create(null);
+            SEARCH_RESULTS = (Array.isArray(payload && payload.results) ? payload.results : []).concat(localMatches).filter(function (row) {
+              var key = row.message_ref || (row.role + ':' + row.text + ':' + row.created_at);
+              if (seen[key]) return false; seen[key] = true; return true;
+            }); paintRemoteResults(SEARCH_RESULTS);
+          }).catch(function () { if (task.seq === searchSeq && !localMatches.length) listEl.innerHTML = '<div class="srch__empty">本地暂无匹配记录，远端搜索失败，请重试</div>'; })
+            .finally(function () { searchInFlight = false; runPendingSearch(); });
+        }
+        function remoteSearch() {
+          var value = (sIn.value || '').trim(), seq = ++searchSeq;
+          SEARCH_QUERY = value; SEARCH_RESULTS = []; localMatches = []; pendingSearch = null; clearTimeout(searchTimer);
+          if (!value) { listEl.innerHTML = '<div class="srch__empty">输入关键词，搜索全部聊天记录</div>'; return; }
+          listEl.innerHTML = '<div class="srch__empty">正在搜索聊天记录…</div>';
+          var transport = window.KissneTransport;
+          if (transport && transport.searchLocal) transport.searchLocal(value, 500).then(function (payload) {
+            if (seq !== searchSeq) return;
+            localMatches = Array.isArray(payload && payload.results) ? payload.results : [];
+            if (localMatches.length) {
+              var seenLocal = Object.create(null);
+              SEARCH_RESULTS = SEARCH_RESULTS.concat(localMatches).filter(function (row) {
+                var key = row.message_ref || (row.role + ':' + row.text + ':' + row.created_at);
+                if (seenLocal[key]) return false; seenLocal[key] = true; return true;
+              }); paintRemoteResults(SEARCH_RESULTS);
+            }
+          }).catch(function () {});
+          searchTimer = setTimeout(function () { if (seq === searchSeq) { pendingSearch = { value: value, seq: seq }; runPendingSearch(); } }, 300);
+        }
         function sweep() {
           if (!listEl) return;
           var gs = listEl.querySelectorAll('.srch__g');
@@ -1180,16 +1547,36 @@
           sweep();
         }
         function onClear() {
+          searchSeq++; pendingSearch = null; clearTimeout(searchTimer);
           SEARCH_LOG.length = 0;
+          SEARCH_RESULTS = [];
+          SEARCH_QUERY = '';
+          sIn.value = '';
           if (listEl) listEl.innerHTML = '<div class="srch__empty">没有搜索记录</div>';
         }
-        sIn.addEventListener('input', filter);
+        function onQuote(e) {
+          var button = e.target && e.target.closest ? e.target.closest('[data-quote-ref]') : null;
+          if (!button || !root.contains(button)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          var ref = String(button.getAttribute('data-quote-ref') || '');
+          PENDING_QUOTE = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === ref; })[0]
+            || SEARCH_RESULT_CACHE[ref]
+            || { message_ref: ref, text: '' };
+          if (window.KissneApp && typeof window.KissneApp.nav === 'function') window.KissneApp.nav('#/chat?state=normal&quote_ref=' + encodeURIComponent(ref));
+          else location.hash = '#/chat?state=normal&quote_ref=' + encodeURIComponent(ref);
+        }
+        sIn.addEventListener('input', remoteSearch);
+        root.addEventListener('click', onQuote);
         var xBtns = root.querySelectorAll('[data-delsrch]');
         for (var xi = 0; xi < xBtns.length; xi++) xBtns[xi].addEventListener('click', onDel);
         var clr = root.querySelector('[data-clearsrch]');
         if (clr) clr.addEventListener('click', onClear);
         return function () {
+          searchSeq++; pendingSearch = null; clearTimeout(searchTimer);
           sIn.removeEventListener('input', filter);
+          sIn.removeEventListener('input', remoteSearch);
+          root.removeEventListener('click', onQuote);
           for (var xj = 0; xj < xBtns.length; xj++) xBtns[xj].removeEventListener('click', onDel);
           if (clr) clr.removeEventListener('click', onClear);
         };
@@ -1202,10 +1589,35 @@
       var list  = root.querySelector('.chatbody');
       if (!input || !send || !list) return null;
       var p = ctx && ctx.params;      /* 放在最前面：下面的 find / sticker 都要用 */
+      var quoteClear = root.querySelector('[data-quote-clear]');
+      if (quoteClear) quoteClear.addEventListener('click', function () {
+        PENDING_QUOTE = null;
+        try { history.replaceState(null, '', '#/chat?state=normal'); } catch (ignore) {}
+        var bar = root.querySelector('[data-quote-bar]');
+        if (bar) bar.parentNode.removeChild(bar);
+      });
 
       /* 我们自己的"程序化滚动"（打开就到底 / 发完消息 / 点胶囊跳过去）**不算已读**，
          否则一进聊天页就自动把未读清掉了。400ms 内的滚动事件一律忽略。 */
       var scrollGuard = 0;
+      var followLatest = true, readGestureUntil = 0, followFrame = null;
+      var progressHint = document.createElement('button');
+      progressHint.className = 'chat-progress-hint'; progressHint.textContent = '有新进展，回到底部'; progressHint.hidden = true;
+      root.appendChild(progressHint);
+      function readGesture() { readGestureUntil = Date.now() + 800; }
+      function trackReading() {
+        if (Date.now() <= readGestureUntil) followLatest = list.scrollTop + list.clientHeight >= list.scrollHeight - 48;
+        if (followLatest) progressHint.hidden = true;
+      }
+      function resumeFollowing() { followLatest = true; progressHint.hidden = true; jumpTo(list.scrollHeight); }
+      list.addEventListener('wheel', readGesture, {passive:true}); list.addEventListener('touchmove', readGesture, {passive:true}); list.addEventListener('scroll', trackReading);
+      progressHint.addEventListener('click', resumeFollowing);
+      var followObserver = typeof MutationObserver === 'function' ? new MutationObserver(function (records) {
+        if (followFrame != null) return;
+        if (!followLatest) { if (records.some(function (r) { return r.target.closest && r.target.closest('[data-live-activity], [data-live-answer]'); })) progressHint.hidden = false; return; }
+        followFrame = requestAnimationFrame(function () { followFrame = null; if (followLatest) jumpTo(list.scrollHeight); });
+      }) : null;
+      if (followObserver) followObserver.observe(list, {childList:true,subtree:true,characterData:true});
       function jumpTo(top) {
         scrollGuard = Date.now() + 400;
         list.scrollTop = top;
@@ -1221,8 +1633,9 @@
       function append(html) {
         var emptyEl = list.querySelector('.chatempty');
         if (emptyEl && emptyEl.parentNode) emptyEl.parentNode.removeChild(emptyEl);
+        if (/msg--me/.test(html)) followLatest = true;
         list.insertAdjacentHTML('beforeend', html);
-        jumpTo(list.scrollHeight);
+        if (followLatest) jumpTo(list.scrollHeight);
       }
       function appendSystemNotice(text) {
         var html = esc(String(text || '系统通知'));
@@ -1231,12 +1644,59 @@
         pushLog({ who: 'sys', html: html, time: time, localOnly: true });
       }
       var T = window.KissneTransport;
+      var lastSystemNotification = '';
+      function updateSystemNotification(state, title, body) {
+        if (!T || typeof T.updateNotification !== 'function') return;
+        if (state === 'ready' && livePendingTurns && Object.keys(livePendingTurns).length) {
+          state = 'working'; title = 'Kissne 正在工作'; body = '正在处理你的消息';
+        }
+        var key = String(state || '') + '|' + String(title || '') + '|' + String(body || '');
+        if (key === lastSystemNotification) return;
+        lastSystemNotification = key;
+        try { T.updateNotification(state, title, body); } catch (ignore) {}
+      }
       var live = !!(T && T.hasToken());
       var liveStopped = false;
+      var localOutboundRows = [];
+      var liveEpoch = 0;
+      var liveSwitching = false;
+      var livePollBusy = false;
+      var liveClosedTurns = Object.create(null);
       var livePollTimer = null;
       var liveTurns = Object.create(null);
       var liveCompleted = Object.create(null);
+      var liveTurnStartMs = Object.create(null);
+      var bubbleDeliveries = Object.create(null);
+      var deliveryAnswers = Object.create(null);
+      function stopBubbleDeliveries(flush) {
+        Object.keys(bubbleDeliveries).forEach(function (id) { bubbleDeliveries[id].stop(flush); });
+        bubbleDeliveries = Object.create(null);
+      }
+      function deliverBubbles(turnId, text, pending) {
+        var id = String(turnId || 'pending');
+        deliveryAnswers[id] = String(text || '');
+        CHAT_LOG.forEach(function (row) {
+          if (row.segmentKey === id + ':part:0') row.answerText = deliveryAnswers[id];
+        });
+        if (!bubbleDeliveries[id]) {
+          var count = CHAT_LOG.filter(function (row) { return row.segmentKey && row.turnId === id; }).length;
+          bubbleDeliveries[id] = window.KissneChatPresentation.delivery(function (part, index) {
+            var ref = 'turn:' + id + ':assistant';
+            pushLog({ who: 'ai', html: part, time: clockNow(), turnId: id, messageRef: ref,
+              segmentKey: id + ':part:' + index, answerText: index === 0 ? deliveryAnswers[id] : '',
+              sortAt: Math.max(Date.now(), liveTurnStartMs[id] || 0),
+              localOwned: true, optimistic: !liveClosedTurns[id] });
+            if (!liveStopped && !liveSwitching) append(aiMsg(part, '', clockNow(), '', 'talk', '', ref));
+          }, setTimeout, clearTimeout, count);
+        }
+        var answerHtml = chatHtmlFromWire(text);
+        var parts = splitAssistantBubbleParts(window.KissneExpressionFilter ? window.KissneExpressionFilter.html(answerHtml) : answerHtml);
+        if (pending && parts.length) parts.pop();
+        bubbleDeliveries[id].update(parts);
+        persistChatLog();
+      }
       var liveCovered = Object.create(null);
+      var liveSeenEvents = Object.create(null);
       var liveCurrentTurn = '';
       var livePendingTurns = Object.create(null);
       var liveSteeredTurns = Object.create(null);
@@ -1274,12 +1734,11 @@
           var active = sessionIsCurrent(s);
           return '<div class="sessiondrawer__item' + (active ? ' is-active' : '') + '"'
             + ' data-session-key="' + esc(s.key) + '" data-session-id="' + esc(s.id) + '">'
-            + '<button type="button" class="sessiondrawer__select" data-session-select'
-            + ((s.key || s.id) ? '' : ' disabled') + '>'
+            + '<button type="button" class="sessiondrawer__select"' + ((s.key || s.id) ? '' : ' disabled') + '>'
             + '<span class="sessiondrawer__title">' + esc(s.title || '未命名会话') + '</span>'
             + '<span class="sessiondrawer__meta">' + esc(sessionMetaText(s, active)) + '</span></button>'
-            + (active ? '' : '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话">删除</button>')
-            + '</div>';
+            + '<button type="button" class="sessiondrawer__delete" data-session-delete aria-label="删除会话"'
+            + ((s.id && !active) ? '' : ' disabled') + '>' + icon('trash', 14) + '</button></div>';
         }).join('');
       }
       function setSessionDrawer(open) {
@@ -1396,12 +1855,8 @@
         if (providerPick && root.contains(providerPick)) {
           e.preventDefault();
           e.stopPropagation();
-          var providerList = providerPick.closest('.modelpick__list');
-          var providerScrollTop = providerList ? providerList.scrollTop : 0;
           pickerProvider = String(providerPick.getAttribute('data-provider-pick') || '');
           paintChatMenu('model-picker');
-          var restoredProviderList = root.querySelector('.modelpick__providers .modelpick__list');
-          if (restoredProviderList) restoredProviderList.scrollTop = providerScrollTop;
           return;
         }
         var toggle = e.target && e.target.closest ? e.target.closest('[data-chat-menu]') : null;
@@ -1443,16 +1898,46 @@
         var providerValue = kind === 'model' ? String(el.getAttribute('data-hermes-provider') || '') : '';
         var modelKey = kind === 'model' ? String(el.getAttribute('data-hermes-key') || '') : '';
         T.setModel(modelValue, kind === 'effort' ? value : '', providerValue)
-          .then(function () {
-            if (kind === 'model') {
-              MODEL_CURRENT = modelKey || value;
-              PROVIDER_CURRENT = providerValue || PROVIDER_CURRENT;
+          .then(function (result) {
+            result = result || {};
+            if (result.ok !== true) {
+              var rejected = new Error(String(result.error || 'Hermes 切换未生效'));
+              rejected.payload = result;
+              throw rejected;
             }
-            if (kind === 'effort') EFFORT_CURRENT = value;
+            if (kind === 'model') {
+              var actualModel = String(result.model || '').trim();
+              var actualProvider = String(result.provider || '').trim();
+              if (actualModel !== modelValue || actualProvider !== providerValue) {
+                var mismatch = new Error('model_switch_not_applied');
+                mismatch.payload = {
+                  error: '模型切换未真正生效',
+                  requested_model: modelValue,
+                  requested_provider: providerValue,
+                  actual_model: actualModel,
+                  actual_provider: actualProvider
+                };
+                throw mismatch;
+              }
+            }
+            if (kind === 'effort') {
+              var actualEffort = String(result.effort || '').trim();
+              if (actualEffort !== value) {
+                var effortMismatch = new Error('reasoning_switch_not_applied');
+                effortMismatch.payload = {
+                  error: '思考强度切换未真正生效',
+                  requested_effort: value,
+                  actual_effort: actualEffort
+                };
+                throw effortMismatch;
+              }
+            }
             MODEL_OPTIONS_LOADED_AT = 0;
+            return refreshHermesModelControls(true);
+          })
+          .then(function () {
             paintChatMenu(null);
             updateHeaderControls();
-            refreshHermesModelControls(true);
           })
           .catch(function (err) {
             el.disabled = false;
@@ -1501,6 +1986,7 @@
         return match ? match[1] : '';
       }
       function hydrateHistory(history) {
+        stopBubbleDeliveries(true);
         /* Never use role+text equality to reconcile fresh local messages. Repeated identical
            messages are valid, and stale bootstrap history can otherwise swallow the newest one.
            Local rows that have received a Hermes turn ref are matched by message_ref; rows still
@@ -1531,16 +2017,48 @@
         CHAT_LOG.length = 0;
         liveApprovals = Object.create(null);
         var historyTurnCursor = '';
+        var reasoningReplayCursor = Object.create(null);
+        var reasoningReplayPhase = Object.create(null);
+        function restoreHistoryReasoning(turnId, value) {
+          var id = String(turnId || 'history'), text = normalizeReasoningText(value);
+          if (!text) return;
+          var state = activityForTurn(id);
+          var from = reasoningReplayCursor[id] === undefined ? 0 : reasoningReplayCursor[id] + (reasoningReplayPhase[id] ? 0 : 1);
+          for (var ri = from; ri < state.timeline.length; ri++) {
+            var item = state.timeline[ri];
+            if (item.kind !== 'reasoning') continue;
+            var cachedText = normalizeReasoningText(item.text);
+            if (cachedText === text || cachedText.indexOf(text) >= 0) {
+              reasoningReplayCursor[id] = ri;
+              reasoningReplayPhase[id] = true;
+              return;
+            }
+          }
+          appendActivity(id, 'reasoning', value);
+          reasoningReplayCursor[id] = state.timeline.length - 1;
+          reasoningReplayPhase[id] = true;
+        }
         (history || []).forEach(function (item) {
           if (!item) return;
           var role = String(item.role || '');
+          var attachments = Array.isArray(item.attachments) ? item.attachments : [];
           var rawText = typeof item.text === 'string' ? String(item.text) : '';
-          if (role === 'user') rawText = visibleChatText(rawText);
-          var historyPresentation = String(item.presentation || '');
+          if (role === 'user') rawText = visibleAttachmentText(rawText, attachments);
+          var historyPresentation = String(item.presentation || item.channel || item.display_kind || '');
+          if (historyPresentation === 'analysis') historyPresentation = 'reasoning';
           var messageRef = String(item.message_ref || '');
           var explicitTurnId = String(item.turn_id || '') || turnIdFromMessageRef(messageRef);
-          if (role === 'user' && explicitTurnId) historyTurnCursor = explicitTurnId;
+          if (role === 'user') historyTurnCursor = explicitTurnId;
           var historyTurnId = explicitTurnId || historyTurnCursor;
+          if (role === 'tool' || /^tool_/.test(historyPresentation) || (item.tool_calls && item.tool_calls.length)) {
+            reasoningReplayPhase[String(historyTurnId || 'history')] = false;
+          }
+          if (role === 'assistant' && !historyPresentation) {
+            var taggedHistory = window.KissneChatPresentation.channels(rawText);
+            if (taggedHistory.reasoning) restoreHistoryReasoning(historyTurnId, taggedHistory.reasoning);
+            rawText = taggedHistory.answer;
+            if (!rawText.trim() && taggedHistory.reasoning) return;
+          }
           /* Prefer the transport's semantic presentation. Do not let persisted
              commentary/tool frames fall through to generic assistant/system rows. */
           if (historyPresentation === 'hidden' || historyPresentation === 'internal_notification') return;
@@ -1555,6 +2073,13 @@
             }, historyPresentation === 'tool_result' ? 'result' : 'call');
             return;
           }
+          if (historyPresentation === 'reasoning' || historyPresentation === 'thinking') {
+            /* Reasoning is process, never spoken content: park it in the timeline
+               instead of letting it fall through to an assistant bubble. */
+            if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
+            restoreHistoryReasoning(historyTurnId, rawText);
+            return;
+          }
           if (historyPresentation === 'commentary') {
             if (!rawText.trim() || looksLikeRuntimeControl(rawText)) return;
             if (looksLikeToolTranscript(rawText)) {
@@ -1566,11 +2091,7 @@
               }, 'result');
               return;
             }
-            CHAT_LOG.push({
-              who: 'ai', html: chatHtmlFromWire(rawText), cls: 'commentary',
-              time: historyClock(item.created_at), day: chatDayKey(item.created_at), sortAt: item.created_at,
-              messageRef: messageRef, turnId: historyTurnId, localOwned: false, optimistic: false
-            });
+            restoreHistoryReasoning(historyTurnId, rawText);
             return;
           }
           var historyCalls = Array.isArray(item.tool_calls) ? item.tool_calls : [];
@@ -1624,9 +2145,39 @@
           }
 
           var localRows = messageRef && localByRef[messageRef];
+          if (role === 'assistant' && localRows && localRows.every(function (row) { return !!row.segmentKey; })) {
+            if (localRows[0].answerText === rawText) {
+              localRows.forEach(function (row) { row.optimistic = false; CHAT_LOG.push(row); });
+              delete localByRef[messageRef];
+              return;
+            }
+            localRows = [localRows[0]];
+            delete localRows[0].segmentKey;
+          }
+          if ((!localRows || !localRows.length) && unboundLocal.length) {
+            var legacyText = String(rawText || '').replace(/\s+/g, ' ').trim();
+            var legacyIndex = -1;
+            for (var li = 0; li < unboundLocal.length; li++) {
+              var candidateText = String(unboundLocal[li].html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (legacyText && candidateText.indexOf(legacyText) >= 0) { legacyIndex = li; break; }
+            }
+            if (legacyIndex >= 0) {
+              localRows = [unboundLocal[legacyIndex]];
+              unboundLocal.splice(legacyIndex, 1);
+            }
+          }
           if (localRows && localRows.length) {
             localRows.forEach(function (m) {
+              /* History is authoritative for role/content. This repairs old caches that
+                 incorrectly restored an assistant row as a user bubble. */
+              m.who = role === 'user' ? 'me' : 'ai';
+              m.html = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
+              m.attachments = attachments;
+              m.replyTo = String(item.reply_to || m.replyTo || '');
+              m.replyPreview = item.reply_preview || m.replyPreview || null;
               m.optimistic = false;
+              m.localOwned = false;
+              m.sid = boundSid;
               if (item.created_at != null) m.sortAt = item.created_at;
               m.day = chatDayKey(item.created_at || m.sortAt || Date.now());
               m.time = historyClock(item.created_at) || m.time;
@@ -1636,20 +2187,25 @@
             return;
           }
 
-          var turnId = turnIdFromMessageRef(messageRef);
+          var turnId = historyTurnId;
           var activity = '';
           if (role === 'assistant' && turnId) {
             var state = TURN_ACTIVITY[turnId];
-            if (state && (state.reasoning || (state.toolOrder && state.toolOrder.length))) {
+            if (state && state.timeline && state.timeline.length) {
               state.done = true;
               activity = activityMarkupForTurn(turnId, true);
             }
           }
-          if (!activity && role === 'assistant') activity = FINAL_ACTIVITY_BY_TEXT[rawText] || '';
+          if (!activity && role === 'assistant' && historyTurnId) activity = FINAL_ACTIVITY_BY_TEXT[historyTurnId + '\u0000' + rawText] || '';
+          var historyHtml = chatHtmlFromWire(rawText) + historyAttachmentHtml(item);
+          if (messageRef && CHAT_LOG.some(function (row) { return row.messageRef === messageRef; })) return;
           CHAT_LOG.push({
             who: role === 'user' ? 'me' : 'ai',
-            html: chatHtmlFromWire(rawText),
+            html: historyHtml,
             activity: activity,
+            attachments: attachments,
+            replyTo: String(item.reply_to || ''),
+            replyPreview: item.reply_preview || null,
             time: historyClock(item.created_at),
             day: chatDayKey(item.created_at),
             sortAt: item.created_at,
@@ -1658,6 +2214,20 @@
             localOwned: false,
             optimistic: false
           });
+        });
+
+        /* Tool/reasoning frames can arrive after the assistant history row. Reattach the
+           completed activity to its own assistant turn after the whole history is read,
+           instead of leaving it as a late item at the bottom of the chat. */
+        var restoredActivityTurns = Object.create(null);
+        CHAT_LOG.forEach(function (m) {
+          if (!m || m.who !== 'ai' || !m.turnId) return;
+          if (restoredActivityTurns[m.turnId]) { m.activity = ''; return; }
+          var recoveredState = TURN_ACTIVITY[String(m.turnId)];
+          if (!recoveredState || !recoveredState.timeline || !recoveredState.timeline.length) return;
+          recoveredState.done = true;
+          m.activity = activityMarkupForTurn(String(m.turnId), true);
+          restoredActivityTurns[m.turnId] = true;
         });
 
         function keepRecoveredLocal(m) {
@@ -1692,27 +2262,91 @@
         stop.disabled = !on;
       }
       function liveEnsure(turnId) {
-        var id = String(turnId || '');
+        var requestedId = String(turnId || '');
+        var id = requestedId || String(liveCurrentTurn || 'pending');
         if (id && liveTurns[id] && liveTurns[id].isConnected) return liveTurns[id];
-        append('<div class="msg msg--ai is-awaiting">' + ava('FOX_CHAT_AVATAR', '', 'read')
-          + '<div class="msg__body"><div class="aipresence" data-live-presence>'
-          + '<span class="aipresence__text">正在看你刚才说的话</span>' + dots() + '</div>'
-          + '<div data-live-activity></div>'
-          + '<div class="liveanswer bubble" data-live-answer hidden></div>'
-          + '<span class="msg__time">' + clockNow() + '</span></div></div>');
+        append('<div class="live-turn" data-live-turn>'
+          + '<div class="turn-bridge" data-turn-bridge aria-hidden="true" hidden><svg viewBox="0 0 320 70" class="turn-bridge__art">'
+          + '<defs><linearGradient data-wait-fade gradientUnits="userSpaceOnUse"><stop stop-color="currentColor" stop-opacity="0"/><stop offset="1" stop-color="currentColor" stop-opacity=".7"/></linearGradient></defs>'
+          + '<path data-wait-tail fill="none" stroke="currentColor" stroke-width=".8" stroke-linecap="round" opacity=".45"/>'
+          + '<g data-wait-star><path d="M0 -7 Q1 -1 7 0 Q1 1 0 7 Q-1 1 -7 0 Q-1 -1 0 -7" fill="white" stroke="currentColor" stroke-width=".8"/>'
+          + '</g></svg></div>'
+          + '<div class="activity-history" data-live-activity></div>'
+          + '<div class="msg msg--ai" data-live-message hidden>' + ava('FOX_CHAT_AVATAR', '', 'idle')
+          + '<div class="msg__body"><div class="liveanswer" data-live-answer hidden></div>'
+          + '</div><span class="msg__time msg__time--avatar">' + clockNow() + '</span></div></div>');
         var el = list.lastElementChild;
-        if (id) liveTurns[id] = el;
+        if (id) {
+          el.setAttribute('data-turn-id', id);
+          liveTurns[id] = el;
+          if (!liveTurnStartMs[id]) liveTurnStartMs[id] = Date.now();
+        }
         return el;
       }
       function livePresence(el, visible, text) {
         if (!el) return;
-        var presence = el.querySelector('[data-live-presence]');
-        if (presence) {
-          presence.hidden = !visible;
-          var label = presence.querySelector('.aipresence__text');
-          if (label && text) label.textContent = text;
+        var message = el.querySelector('[data-live-message]');
+        if (message && !el.querySelector('[data-live-answer]:not([hidden])')) message.hidden = true;
+        el.classList.toggle('is-process-only', !el.querySelector('[data-live-answer]:not([hidden])'));
+      }
+      var waitBridgeSequence = 0;
+      function paintWaitingPose(bridge, pose) {
+        bridge._waitProgress = pose.progress;
+        var fade = bridge.querySelector('[data-wait-fade]');
+        fade.setAttribute('x1', pose.tailStart.x); fade.setAttribute('y1', pose.tailStart.y);
+        fade.setAttribute('x2', pose.star.x); fade.setAttribute('y2', pose.star.y);
+        bridge.querySelector('[data-wait-tail]').setAttribute('d', pose.tail);
+        bridge.querySelector('[data-wait-star]').setAttribute('transform', 'translate(' + pose.star.x + ' ' + pose.star.y + ')');
+      }
+      function arriveTurnBridge(el, event) {
+        var bridge = el.querySelector('[data-turn-bridge]');
+        bridge._waitEvents = bridge._waitEvents || []; bridge._waitEvents.push(event);
+        if (bridge._waitArriving) return;
+        bridge._waitArriving = true;
+        if (bridge._waitFrame != null) cancelAnimationFrame(bridge._waitFrame);
+        var from = bridge._waitProgress || 0, started = performance.now(), duration = 80 + 100 * (1 - from);
+        function frame() {
+          if (liveStopped || !bridge.isConnected || bridge.hidden) return;
+          var progress = Math.min(1, (performance.now() - started) / duration);
+          paintWaitingPose(bridge, window.KissneChatPresentation.waitingPose(from + (1 - from) * progress));
+          if (progress < 1) bridge._waitFrame = requestAnimationFrame(frame);
+          else dismissTurnBridge(el);
         }
-        el.classList.toggle('is-awaiting', !!visible);
+        bridge._waitFrame = requestAnimationFrame(frame);
+      }
+      function startTurnBridge(el) {
+        if (!el || liveStopped) return;
+        var state = activityForTurn(el.getAttribute('data-turn-id'));
+        // A processing event may have arrived before the send acknowledgement.
+        if (state.done || (state.timeline && state.timeline.length) || el.dataset.processing === 'true') return;
+        var bridge = el.querySelector('[data-turn-bridge]');
+        if (!bridge || bridge._waitFrame != null) return;
+        Object.keys(liveTurns).forEach(function (id) { if (liveTurns[id] !== el) dismissTurnBridge(liveTurns[id]); });
+        el.hidden = false; bridge.hidden = false;
+        var fade = bridge.querySelector('[data-wait-fade]');
+        fade.id = 'wait-tail-' + (++waitBridgeSequence);
+        bridge.querySelector('[data-wait-tail]').setAttribute('stroke', 'url(#' + fade.id + ')');
+        var started = performance.now();
+        function frame() {
+          if (liveStopped || !bridge.isConnected || bridge.hidden) return;
+          var pose = window.KissneChatPresentation.waitingFrame(performance.now() - started);
+          paintWaitingPose(bridge, pose);
+          bridge._waitFrame = requestAnimationFrame(frame);
+        }
+        frame();
+      }
+      function dismissTurnBridge(el, drop) {
+        if (!el) return;
+        el.dataset.processing = 'true';
+        var bridge = el.querySelector('[data-turn-bridge]');
+        if (!bridge) return;
+        if (bridge._waitFrame != null) cancelAnimationFrame(bridge._waitFrame);
+        bridge._waitFrame = null;
+        bridge.hidden = true;
+        bridge._waitArriving = false;
+        var events = bridge._waitEvents || []; bridge._waitEvents = [];
+        if (!el.querySelector('[data-live-activity]').textContent && !el.querySelector('[data-live-answer]').textContent) el.hidden = true;
+        if (!drop && !liveStopped) events.forEach(function (event) { event._waitDelivered = true; applyLiveEvent(event); });
       }
       function liveAvatar(el, state) {
         if (el) K.swapAsset(el.querySelector('.msg__ava .ph__asset'), 'FOX_CHAT_AVATAR', state);
@@ -1721,29 +2355,116 @@
         if (!el) return;
         var host = el.querySelector('[data-live-activity]');
         if (!host) return;
-        host.innerHTML = activityMarkupForTurn(turnId || 'pending', !!done);
+        el.hidden = false;
+        host.innerHTML = activityMarkupForTurn(turnId || liveCurrentTurn || 'pending', !!done);
       }
       function addActivity(el, kind, turnId, text) {
-        if (!el || !appendActivity(turnId || 'pending', kind, text)) return;
+        var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
+        if (!el || !appendActivity(resolvedTurnId, kind, text)) return;
+        if (kind !== 'tool_result' && !liveClosedTurns[resolvedTurnId]) activityForTurn(resolvedTurnId).answerStarted = false;
+        dismissTurnBridge(el);
+        if (!liveClosedTurns[resolvedTurnId]) updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
         paintActivity(el, turnId, false);
       }
       function finishActivities(el, turnId) {
-        var state = activityForTurn(turnId || 'pending');
+        dismissTurnBridge(el);
+        var resolvedTurnId = turnId || liveCurrentTurn || 'pending';
+        var state = activityForTurn(resolvedTurnId);
         state.done = true;
+        Object.keys(state.toolCalls || {}).forEach(function (key) {
+          var tool = state.toolCalls[key];
+          if (tool && tool.status === 'running') tool.status = 'completed';
+        });
         state.updatedAt = Date.now();
         persistTurnActivity();
-        paintActivity(el, turnId, true);
+        paintActivity(el, resolvedTurnId, true);
       }
       function liveText(el, text, pending) {
         if (!el) return;
+        if (text) {
+          var id = el.getAttribute('data-turn-id') || liveCurrentTurn;
+          activityForTurn(id).answerStarted = true;
+          paintActivity(el, id, true);
+          dismissTurnBridge(el);
+          deliverBubbles(el.getAttribute('data-turn-id') || liveCurrentTurn, text, pending);
+          return;
+        }
         var box = el.querySelector('[data-live-answer]') || el.querySelector('.msg__text');
         if (!box) return;
         var value = String(text || '');
-        box.hidden = !value;
-        box.classList.toggle('is-pending', !!pending && !!value);
+        var frozen = box.getAttribute('data-live-frozen-prefix') || '';
+        var display = value;
+        if (frozen && value.indexOf(frozen) === 0) display = value.slice(frozen.length).replace(/^\s+/, '');
+        box.hidden = !display;
+        var message = el.querySelector('[data-live-message]');
+        if (message) message.hidden = !display;
+        el.classList.toggle('is-process-only', !display);
+        box.classList.toggle('is-pending', !!pending && !!display);
+        box.setAttribute('data-live-raw', value);
         /* Drafts can already contain a complete sticker marker. Rendering through the
            same wire decoder prevents [表情包：…] from flashing/sticking as plain text. */
-        box.innerHTML = chatHtmlFromWire(value);
+        box.innerHTML = assistantBubbleHtml(chatHtmlFromWire(display));
+      }
+      function freezeVisibleAnswerBeforeUser() {
+        var id = String(liveCurrentTurn || '');
+        var el = id && liveTurns[id];
+        if (!el || !el.isConnected) return null;
+        var box = el.querySelector('[data-live-answer]');
+        var raw = box && box.getAttribute('data-live-raw') || '';
+        if (!raw.trim()) return null;
+        /* Keep the already spoken part before the user's new bubble, then let the
+           same logical turn continue below it. This is visual interleaving only;
+           the persisted assistant message still has one turn_id. */
+        append(aiMsg(chatHtmlFromWire(raw), '', clockNow(), '', 'talk', '', ''));
+        box.innerHTML = '';
+        box.setAttribute('data-live-frozen-prefix', raw);
+        box.removeAttribute('data-live-raw');
+        box.hidden = true;
+        var message = el.querySelector('[data-live-message]');
+        if (message) message.hidden = true;
+        el.classList.add('is-process-only');
+        return el;
+      }
+      var liveClarifies = Object.create(null);
+      function resolveClarifyCard(id, status) {
+        var card = liveClarifies[id]; if (!card) return;
+        card.querySelectorAll('button,input,textarea').forEach(function (control) { control.disabled = true; });
+        card.querySelector('[data-clarify-status]').textContent = status === 'answered' ? '已选择' : '请求已结束';
+      }
+      function showClarify(request) {
+        var id = String(request.clarify_id || ''); if (!id || (liveClarifies[id] && liveClarifies[id].isConnected)) return;
+        var card = document.createElement('section'); card.className = 'choicecard card'; card.setAttribute('data-clarify-id', id);
+        card.innerHTML = '<b>' + esc(request.question || '请选择') + '</b><div data-clarify-options></div><textarea aria-label="其他回答" hidden></textarea><button class="btn btn--primary" data-clarify-submit hidden>提交</button><p class="muted" data-clarify-status></p>';
+        var choices = Array.isArray(request.choices) ? request.choices : [], host = card.querySelector('[data-clarify-options]');
+        var editor = card.querySelector('textarea'), submit = card.querySelector('[data-clarify-submit]'), busy = false;
+        async function respond(response, other) {
+          if (busy || !T || !T.respondClarify) return;
+          busy = true; card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+          try {
+            var result = await T.respondClarify(id, response, other);
+            if (result.status === 'awaiting_text') { editor.hidden = false; submit.hidden = false; submit.disabled = false; editor.focus(); }
+            else resolveClarifyCard(id, 'answered');
+          } catch (err) {
+            if (err && (err.status === 404 || err.status === 409)) resolveClarifyCard(id, 'expired');
+            else { card.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); card.querySelector('[data-clarify-status]').textContent = '提交失败，请重试'; }
+          } finally { busy = false; }
+        }
+        choices.forEach(function (label, index) {
+          if (request.multi_select) {
+            var option = document.createElement('label'), box = document.createElement('input'); box.type = 'checkbox'; box.value = String(index + 1);
+            option.appendChild(box); option.appendChild(document.createTextNode(String(label))); host.appendChild(option);
+          } else {
+            var button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn--ghost'; button.textContent = String(label);
+            button.addEventListener('click', function () { respond(String(index + 1), false); }); host.appendChild(button);
+          }
+        });
+        if (choices.length) {
+          var other = document.createElement('button'); other.type = 'button'; other.className = 'btn btn--ghost'; other.textContent = '其他回答'; other.addEventListener('click', function () { respond('', true); }); host.appendChild(other);
+          if (request.multi_select) submit.hidden = false;
+        } else { editor.hidden = false; submit.hidden = false; }
+        if (request.awaiting_text) { editor.hidden = false; submit.hidden = false; }
+        submit.addEventListener('click', function () { var value = editor.hidden ? Array.from(host.querySelectorAll('input:checked')).map(function (box) { return box.value; }).join(',') : editor.value.trim(); if (value) respond(value, false); });
+        liveClarifies[id] = card; list.appendChild(card); jumpTo(list.scrollHeight);
       }
       function approvalCard(approval) {
         var id = String(approval && approval.approval_id || '');
@@ -1788,13 +2509,60 @@
       }
       function applyLiveEvent(event) {
         if (!event || typeof event !== 'object') return;
+        if (event.session_id && CURRENT_SESSION_ID && String(event.session_id) !== CURRENT_SESSION_ID) return;
+        var waitingEl = liveTurns[String(event.turn_id || '')], bridge = waitingEl && waitingEl.querySelector('[data-turn-bridge]');
+        if (event.type === 'cancelled' && waitingEl) dismissTurnBridge(waitingEl, true);
+        var processing = event.type === 'completed' || (event.type === 'delta' && String(event.text || '').trim())
+          || /^(?:reasoning|thinking|analysis|commentary|tool_progress|tool_call|tool_result)$/.test(String(event.presentation || event.channel || event.type || ''));
+        var noise = /^(?:hidden|internal_notification)$/.test(String(event.presentation || event.channel || event.display_kind || '')) || looksLikeRuntimeControl(String(event.text || ''));
+        if (!event._waitDelivered && processing && !noise && bridge && !bridge.hidden) { arriveTurnBridge(waitingEl, event); return; }
+        var eventKey = String(event.event_id || event.message_id || '');
+        if (eventKey) {
+          if (liveSeenEvents[eventKey]) return;
+          liveSeenEvents[eventKey] = true;
+        }
+        if (event.type === 'clarify_required') { dismissTurnBridge(waitingEl, true); showClarify(event); return; }
+        if (event.type === 'clarify_resolved') { resolveClarifyCard(String(event.clarify_id || ''), event.status); return; }
         var type = String(event.type || '');
         var turnId = String(event.turn_id || '');
-        var presentation = String(event.presentation || '');
+        var presentation = String(event.presentation || event.channel || event.display_kind || (/^(?:reasoning|tool_progress|tool_call|tool_result)$/.test(type) ? type : ''));
+        if (presentation === 'analysis' || presentation === 'thinking') presentation = 'reasoning';
 
         /* Hidden/internal frames never enter user-visible chat. A reasoning fold is created only
            when Hermes actually sends reasoning text; tool progress follows the same rule. */
         if (presentation === 'hidden' || presentation === 'internal_notification') return;
+        var terminal = !!(turnId && (liveClosedTurns[turnId] || liveCompleted[turnId]
+          || (TURN_ACTIVITY[turnId] && TURN_ACTIVITY[turnId].done)));
+        var action = window.KissneChatLifecycle.eventAction({ type: type, presentation: presentation }, terminal);
+        if (action === 'ignore') return;
+        if (action === 'late_activity') {
+          var lateValue = event.activity && typeof event.activity === 'object'
+            ? Object.assign({}, event.activity) : {};
+          var lateKind = 'reasoning';
+          if (presentation.indexOf('tool') === 0) {
+            lateKind = presentation === 'tool_result' ? 'tool_result' : 'tool';
+            lateValue.tool_call_id = lateValue.tool_call_id || event.tool_call_id || event.call_id || event.id || '';
+            lateValue.tool_name = lateValue.tool_name || event.tool_name || event.function_name || '';
+            lateValue.arguments = lateValue.arguments || event.arguments || '';
+            lateValue.result = lateValue.result || event.result || event.output || '';
+            lateValue.detail = lateValue.detail || event.text || '';
+            lateValue.status = lateValue.status || event.status || (lateKind === 'tool_result' ? 'completed' : 'running');
+          } else lateValue = event.text || '';
+          appendActivity(turnId, lateKind, lateValue);
+          var lateState = activityForTurn(turnId);
+          lateState.done = true;
+          var lateHtml = activityMarkupForTurn(turnId, true);
+          CHAT_LOG.forEach(function (m) { if (m.who === 'ai' && m.turnId === turnId) m.activity = lateHtml; });
+          var lateEl = liveTurns[turnId];
+          if (lateEl && lateEl.isConnected) paintActivity(lateEl, turnId, true);
+          list.querySelectorAll('[data-activity-turn]').forEach(function (node) {
+            if (node.getAttribute('data-activity-turn') === turnId) node.outerHTML = lateHtml;
+          });
+          persistTurnActivity();
+          persistChatLog();
+          return;
+        }
+
         if (presentation === 'reasoning') {
           var reasoningText = cleanActivityText(event.text || '', '');
           if (!reasoningText) return;
@@ -1845,8 +2613,10 @@
           }
           var commentaryEl = liveEnsure(turnId);
           livePresence(commentaryEl, false);
-          liveText(commentaryEl, commentaryText, true);
-          liveAvatar(commentaryEl, 'talk');
+          /* Commentary is process narration, not final answer text. Keep it in the
+             activity lane so only answer/delta/completed frames can own the bubble. */
+          addActivity(commentaryEl, 'reasoning', turnId, commentaryText);
+          liveAvatar(commentaryEl, 'think');
           liveCurrentTurn = turnId || liveCurrentTurn;
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
@@ -1875,8 +2645,9 @@
           if (turnId) {
             livePendingTurns[turnId] = true;
             liveCurrentTurn = turnId;
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
             var pendingEl = liveEnsure(turnId);
-            livePresence(pendingEl, true, '正在看你刚才说的话');
+            livePresence(pendingEl, false);
             liveAvatar(pendingEl, 'read');
             liveSetCancel(true);
           }
@@ -1886,6 +2657,10 @@
         var el = liveEnsure(turnId);
         if (type === 'delta') {
           var deltaText = String(event.text || '');
+          var taggedDelta = window.KissneChatPresentation.channels(deltaText);
+          if (taggedDelta.reasoning) addActivity(el, 'reasoning', turnId, taggedDelta.reasoning);
+          deltaText = taggedDelta.answer;
+          if (!deltaText && taggedDelta.reasoning) return;
           if (looksLikeRuntimeControl(deltaText)) return;
           if (looksLikeToolTranscript(deltaText)) {
             livePresence(el, false);
@@ -1903,18 +2678,26 @@
           if (turnId) livePendingTurns[turnId] = true;
           liveSetCancel(!!liveCurrentTurn);
         } else if (type === 'completed') {
+          if (turnId) liveClosedTurns[turnId] = true;
           livePresence(el, false);
+          dismissTurnBridge(el);
           setSessionStatus('');
           var finalText = String(event.text || '');
+          var taggedFinal = window.KissneChatPresentation.channels(finalText);
+          if (taggedFinal.reasoning) addActivity(el, 'reasoning', turnId, taggedFinal.reasoning);
+          finalText = taggedFinal.answer;
           if (looksLikeRuntimeControl(finalText)) {
+            if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
             finishActivities(el, turnId);
             liveText(el, '', false);
             if (turnId) delete livePendingTurns[turnId];
             if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
             scheduleOutboxDrain();
+            updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
             return;
           }
           if (looksLikeToolTranscript(finalText)) {
+            if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
             addActivity(el, 'tool', turnId, finalText);
             finishActivities(el, turnId);
             liveText(el, '', false);
@@ -1926,42 +2709,52 @@
             liveAvatar(el, 'happy');
             if (turnId && !liveCompleted[turnId]) {
               liveCompleted[turnId] = true;
-              CHAT_LOG.push({
-                who: 'ai',
-                html: chatHtmlFromWire(finalText),
-                activity: finalActivity,
-                time: clockNow(),
-                day: chatDayKey(Date.now()),
-                messageRef: turnId ? 'turn:' + turnId + ':assistant' : '',
-                turnId: turnId,
-                localOwned: true,
-                optimistic: true
+              CHAT_LOG.forEach(function (row) {
+                if (row.segmentKey && row.turnId === turnId) {
+                  if (row.segmentKey === turnId + ':part:0') row.answerText = finalText;
+                  row.optimistic = false;
+                  if (row.segmentKey === turnId + ':part:0') row.activity = finalActivity;
+                }
               });
+              sortChatLogChronologically();
               persistChatLog();
             }
+            if (T && typeof T.notifyReply === 'function') T.notifyReply(
+              turnId || String(event.event_id || event.message_id || ''), 'Kissne 回复完成',
+              finalText.replace(/\s+/g, ' ').slice(0, 64) || '打开人人星查看回复');
           }
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
+          updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         } else if (type === 'cancelled') {
+          if (bubbleDeliveries[turnId]) bubbleDeliveries[turnId].stop(false);
+          if (turnId) liveClosedTurns[turnId] = true;
           livePresence(el, false);
+          dismissTurnBridge(el);
           setSessionStatus('');
           finishActivities(el, turnId);
-          liveText(el, '', false);
-          if (liveSteeredTurns[turnId]) delete liveSteeredTurns[turnId];
+          if (liveSteeredTurns[turnId]) {
+            liveText(el, '', false);
+            delete liveSteeredTurns[turnId];
+          } else {
+            /* Cancellation is transport state, not a spoken assistant message. */
+            liveText(el, '', false);
+          }
           liveAvatar(el, 'idle');
           if (turnId) delete livePendingTurns[turnId];
           if (!turnId || liveCurrentTurn === turnId) { liveCurrentTurn = ''; liveSetCancel(false); }
           scheduleOutboxDrain();
+          updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
         }
       }
       function scheduleLivePoll(ms) {
         clearTimeout(livePollTimer);
-        if (!liveStopped && live) livePollTimer = setTimeout(livePoll, ms);
+        if (!liveStopped && !liveSwitching && live) livePollTimer = setTimeout(livePoll, ms);
       }
       function scheduleLiveBootstrap(ms) {
         clearTimeout(liveBootstrapTimer);
-        if (!liveStopped && live) liveBootstrapTimer = setTimeout(liveBootstrap, ms);
+        if (!liveStopped && !liveSwitching && live) liveBootstrapTimer = setTimeout(function () { liveBootstrap(true); }, ms);
       }
       async function recoverLiveAuth() {
         if (!T || typeof T.ensureToken !== 'function') return false;
@@ -1978,29 +2771,36 @@
         }
       }
       async function livePoll() {
-        if (!live || liveStopped) return;
+        if (!live || liveStopped || liveSwitching) return;
+        if (livePollBusy) { scheduleLivePoll(100); return; }
+        livePollBusy = true;
+        var pollEpoch = liveEpoch;
         try {
           var payload = await T.poll();
+          if (liveStopped || liveSwitching || pollEpoch !== liveEpoch) return;
           var events = (payload && payload.events) || [];
           for (var ei = 0; ei < events.length; ei++) {
             var ev = events[ei], seq = Number(ev && ev.seq);
-            if (isFinite(seq) && liveCovered[seq]) delete liveCovered[seq];
-            else applyLiveEvent(ev);
+            if (isFinite(seq) && liveCovered[seq]) continue;
+            applyLiveEvent(ev);
           }
           if (payload && payload.next_cursor !== undefined) await T.ack(payload.next_cursor);
           scheduleLivePoll(payload && payload.has_more ? 30 : 850);
         } catch (err) {
+          if (liveStopped || liveSwitching || pollEpoch !== liveEpoch) return;
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
           scheduleLivePoll(1800);
-        }
+        } finally { livePollBusy = false; }
       }
-      async function liveBootstrap() {
-        if (!live) return;
+      async function liveBootstrap(force) {
+        if (!live || liveStopped || liveSwitching) return;
+        var bootEpoch = liveEpoch;
         try {
-          var boot = await T.bootstrap();
+          var boot = await T.bootstrap(!!force);
+          if (liveStopped || liveSwitching || bootEpoch !== liveEpoch) return;
           if (!boot || !boot.bound) {
             setSessionStatus('会话准备中…');
             scheduleLiveBootstrap(1800);
@@ -2012,32 +2812,61 @@
           CURRENT_SESSION_KEY = String(conversation.session_key || conversation.key || CURRENT_SESSION_KEY || '');
           /* bootstrap 确认会话身份后，才把该会话的本地缓存装进内存（namespace 对齐） */
           bindChatLogSession(chatLogSessionId());
+          // Preserve only messages actually sent in this mount before its first session binding.
+          localOutboundRows.forEach(function (row) {
+            if (!row.sid && CHAT_LOG.indexOf(row) < 0) {
+              row.sid = CHAT_LOG_SESSION;
+              CHAT_LOG.push(row);
+            }
+          });
           bindTurnActivitySession(chatLogSessionId());
           var sessionIndex = window.KissneSessionIndex || {};
           (sessionIndex.sessions || []).forEach(function (s) {
             s.active = sessionIsCurrent(s);
           });
           paintSessionList();
-          hydrateHistory(boot.history || []);
+          hydrateHistory(searchJumpHistory.concat(boot.history || []));
+          focusSearchJump();
+          restoreSendDraft();
+          paintBrowserReturn();
           (boot.pending_approvals || []).forEach(showApproval);
+          (boot.pending_clarifies || []).forEach(showClarify);
           (boot.covered_event_seqs || []).forEach(function (seq) { liveCovered[Number(seq)] = true; });
           var restoredPendingTurn = String(boot.pending_turn_id || '');
+          /* A turn whose assistant reply is already in history is finished server-side;
+             never resurrect it as a live (animated) turn. */
+          var finishedPendingTurn = restoredPendingTurn && (
+            (TURN_ACTIVITY[restoredPendingTurn] && TURN_ACTIVITY[restoredPendingTurn].done) ||
+            CHAT_LOG.some(function (row) {
+              return row && row.messageRef === 'turn:' + restoredPendingTurn + ':assistant';
+            }));
+          if (finishedPendingTurn) restoredPendingTurn = '';
+          Object.keys(livePendingTurns).forEach(function (id) {
+            if (id === restoredPendingTurn) return;
+            liveClosedTurns[id] = true;
+            var staleEl = liveTurns[id];
+            if (staleEl && staleEl.isConnected) finishActivities(staleEl, id);
+          });
+          livePendingTurns = Object.create(null);
           liveCurrentTurn = restoredPendingTurn;
           liveSetCancel(!!restoredPendingTurn);
           if (restoredPendingTurn) {
             livePendingTurns[restoredPendingTurn] = true;
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
             var pendingEl = liveEnsure(restoredPendingTurn);
             var pendingState = TURN_ACTIVITY[restoredPendingTurn];
-            if (pendingState && (pendingState.reasoning
-                || (pendingState.toolOrder && pendingState.toolOrder.length))) {
+            if (pendingState && pendingState.timeline && pendingState.timeline.length) {
               livePresence(pendingEl, false);
               pendingState.done = false;
               paintActivity(pendingEl, restoredPendingTurn, false);
-              liveAvatar(pendingEl, pendingState.toolOrder && pendingState.toolOrder.length ? 'work' : 'think');
+              var lastPendingStep = pendingState.timeline[pendingState.timeline.length - 1];
+              liveAvatar(pendingEl, lastPendingStep && lastPendingStep.kind === 'tool' ? 'work' : 'think');
             } else {
-              livePresence(pendingEl, true, '正在继续处理刚才的消息');
+              livePresence(pendingEl, false);
               liveAvatar(pendingEl, 'read');
             }
+          } else {
+            updateSystemNotification('ready', 'Kissne 已就绪', '打开人人星继续对话');
           }
           scheduleOutboxDrain();
           scheduleLivePoll(0);
@@ -2046,6 +2875,7 @@
             live = false;
             if (await recoverLiveAuth()) { scheduleLiveBootstrap(0); return; }
           }
+          if (liveStopped || liveSwitching || bootEpoch !== liveEpoch) return;
           setSessionStatus('正在恢复服务…');
           scheduleLiveBootstrap(1200);
         }
@@ -2057,7 +2887,10 @@
           await T.cancel(id);
           applyLiveEvent({ type: 'cancelled', turn_id: id });
         } catch (err) {
-          if (err && err.status === 409) { liveCurrentTurn = ''; liveSetCancel(false); }
+          if (err && err.status === 409) {
+            applyLiveEvent({ type: 'cancelled', turn_id: id });
+            scheduleLiveBootstrap(0);
+          }
         }
       }
       function voiceErrorText(err) {
@@ -2108,28 +2941,46 @@
         }
       }
 
-      var OUTBOX_BATCH_DELAY_MS = 1600;
-      var USER_TYPING_IDLE_MS = 420;
       function nextMessageId() {
         var r = '';
         try { r = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
         if (!r) r = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
         return 'android-web-batch-' + r;
       }
+      function saveSendDraft(sid, draft) {
+        if (!sid) return;
+        try { localStorage.setItem('kissne.chat.draft.v1:' + sid, JSON.stringify(draft)); } catch (ignore) {}
+      }
+      function getSendDraft(sid) {
+        try { return JSON.parse(localStorage.getItem('kissne.chat.draft.v1:' + sid) || 'null'); } catch (ignore) { return null; }
+      }
+      var restoredDraftSession = '';
+      function restoreSendDraft() {
+        var sid = CHAT_LOG_SESSION;
+        if (!sid || restoredDraftSession === sid) return;
+        restoredDraftSession = sid;
+        var draft = getSendDraft(sid);
+        if (draft && draft.text && !input.value) input.value = draft.text;
+      }
+      restoreSendDraft();
       function outboxWaitMs() {
-        var now = Date.now();
-        var sinceBubble = now - CHAT_OUTBOX_UPDATED_AT;
-        var sinceTyping = now - CHAT_USER_INPUT_AT;
-        /* If the composer is still non-empty, typing is authoritative: wait for a short idle
-           edge, capped by the 1.6s coalescing guard. Once the composer is empty, do not make
-           every ordinary message pay the full 1.6s latency. */
-        if (String(input && input.value || '').trim() && CHAT_USER_INPUT_AT) {
-          return Math.max(0, Math.min(
-            OUTBOX_BATCH_DELAY_MS - sinceBubble,
-            USER_TYPING_IDLE_MS - sinceTyping
-          ));
-        }
-        return 0;
+        return window.KissneChatLifecycle.outboxWait({
+          items: CHAT_OUTBOX, now: Date.now(), updatedAt: CHAT_OUTBOX_UPDATED_AT,
+          inputAt: CHAT_USER_INPUT_AT, composerText: String(input && input.value || ''),
+          isComposing: composerIsComposing
+        });
+      }
+      function mergeUserFragments(items) {
+        var result = '';
+        (items || []).forEach(function (item) {
+          var value = String(item && item.text || '').trim();
+          if (!value) return;
+          if (!result) { result = value; return; }
+          var left = result.slice(-1), right = value.charAt(0);
+          var needsSpace = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right);
+          result += (needsSpace ? ' ' : '') + value;
+        });
+        return result;
       }
       function scheduleOutboxDrain() {
         clearTimeout(liveOutboxTimer);
@@ -2139,8 +2990,18 @@
       function queueOutboundText(text, logEntry) {
         var value = String(text || '').trim();
         if (!value) return;
-        CHAT_OUTBOX.push({ text: value, log: logEntry || null });
+        var quote = PENDING_QUOTE;
+        if (logEntry) { logEntry.pendingSend = true; localOutboundRows.push(logEntry); persistChatLog(); }
+        CHAT_OUTBOX.push({
+          text: value, log: logEntry || null, queuedAt: Date.now(),
+          replyTo: quote && quote.message_ref ? String(quote.message_ref) : ''
+        });
+        PENDING_QUOTE = null;
         CHAT_OUTBOX_UPDATED_AT = Date.now();
+        var queuedDraft = getSendDraft(CHAT_LOG_SESSION) || {};
+        queuedDraft.composerText = input.value || '';
+        queuedDraft.text = mergeUserFragments(CHAT_OUTBOX) + (queuedDraft.composerText ? ' ' + queuedDraft.composerText : '');
+        saveSendDraft(CHAT_LOG_SESSION, queuedDraft);
         scheduleOutboxDrain();
       }
       async function interruptForSteer() {
@@ -2156,6 +3017,8 @@
             applyLiveEvent({ type: 'cancelled', turn_id: id, reason: 'steer' });
           } catch (err) {
             if (err && (err.status === 404 || err.status === 409)) {
+              dismissTurnBridge(liveTurns[id], true);
+              activityForTurn(id).answerStarted = true; paintActivity(liveTurns[id], id, true);
               delete livePendingTurns[id];
               if (liveCurrentTurn === id) liveCurrentTurn = '';
               delete liveSteeredTurns[id];
@@ -2180,43 +3043,93 @@
           }
           var count = CHAT_OUTBOX.length;
           var pendingItems = CHAT_OUTBOX.slice(0, count);
+          var mergedText = mergeUserFragments(pendingItems), retryDraft = getSendDraft(CHAT_LOG_SESSION);
+          var retryMatches = retryDraft && retryDraft.retryText === mergedText;
           CHAT_OUTBOX_RETRY = {
             count: count,
-            text: pendingItems.map(function (item) { return item.text; }).join('\n'),
-            messageId: nextMessageId(),
+            text: mergedText,
+            messageId: (retryMatches && retryDraft.messageId) || nextMessageId(),
+            sessionId: CHAT_LOG_SESSION,
+            replyTo: retryMatches ? String(retryDraft.replyTo || '') : (pendingItems.length ? String(pendingItems[0].replyTo || '') : ''),
             logs: pendingItems.map(function (item) { return item.log; }).filter(Boolean)
           };
         }
 
         var batch = CHAT_OUTBOX_RETRY;
+        saveSendDraft(batch.sessionId, { text: mergeUserFragments(CHAT_OUTBOX) + (input.value ? ' ' + input.value : ''), composerText: input.value || '', retryText: batch.text, messageId: batch.messageId, replyTo: batch.replyTo });
         CHAT_OUTBOX_BUSY = true;
         liveSendInFlight += 1;
         try {
-          if (liveCurrentTurn || Object.keys(livePendingTurns).length) {
-            /* A second user message is steering, not a user-requested stop. Cancel only the
-               obsolete execution turn; liveSteeredTurns suppresses its cancelled UI. */
-            await interruptForSteer();
-          }
-          var accepted = await T.sendText(batch.text, batch.messageId);
+          var accepted = await T.sendText(batch.text, batch.messageId, batch.replyTo);
           CHAT_OUTBOX.splice(0, batch.count);
           CHAT_OUTBOX_RETRY = null;
           var acceptedTurn = String((accepted && accepted.turn_id) || '');
+          (batch.logs || []).forEach(function (row) { row.pendingSend = false; });
+          var acceptedDraft = getSendDraft(batch.sessionId) || {};
+          var acceptedComposer = acceptedDraft.composerText !== undefined ? acceptedDraft.composerText : (input.value || '');
+          saveSendDraft(batch.sessionId, { text: mergeUserFragments(CHAT_OUTBOX) + (acceptedComposer ? ' ' + acceptedComposer : ''), composerText: acceptedComposer });
           if (acceptedTurn) {
             (batch.logs || []).forEach(function (logEntry) {
               if (!logEntry) return;
               logEntry.messageRef = 'turn:' + acceptedTurn + ':user';
               logEntry.turnId = acceptedTurn;
+              logEntry.replyTo = batch.replyTo || '';
             });
-            livePendingTurns[acceptedTurn] = true;
-            liveCurrentTurn = acceptedTurn;
-            liveSetCancel(true);
-            var acceptedEl = liveEnsure(acceptedTurn);
-            liveAvatar(acceptedEl, 'read');
-            livePresence(acceptedEl, true, '正在看你刚才说的话');
+            if (accepted.duplicate && CHAT_LOG.some(function (row) {
+              return row.messageRef === 'turn:' + acceptedTurn + ':user' && batch.logs.indexOf(row) < 0;
+            })) {
+              batch.logs.forEach(function (row) {
+                var at = CHAT_LOG.indexOf(row); if (at >= 0) CHAT_LOG.splice(at, 1);
+                var localAt = localOutboundRows.indexOf(row); if (localAt >= 0) localOutboundRows.splice(localAt, 1);
+                if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+              });
+              window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: {
+                sessionId: batch.sessionId, messageIds: batch.logs.map(function (row) { return row.messageId; })
+              } }));
+            } else if (batch.logs.length > 1) {
+              var mergedRow = window.KissneChatLifecycle.coalesceUserRows(
+                batch.logs, esc(batch.text), CHAT_LOG, localOutboundRows
+              );
+              var mergedNode = mergedRow && mergedRow.pendingNode;
+              if (mergedNode && mergedNode.isConnected) {
+                var mergedBubble = mergedNode.querySelector('.bubble');
+                if (mergedBubble) mergedBubble.textContent = batch.text;
+                mergedNode.setAttribute('data-message-text', batch.text);
+                mergedNode.setAttribute('data-message-ref', mergedRow.messageRef);
+              }
+              batch.logs.slice(1).forEach(function (row) {
+                if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+              });
+            }
+            if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
+              livePendingTurns[acceptedTurn] = true;
+              liveCurrentTurn = acceptedTurn;
+              liveSetCancel(true);
+              var acceptedEl = liveEnsure(acceptedTurn);
+              liveAvatar(acceptedEl, 'read');
+              startTurnBridge(acceptedEl);
+              updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
+              livePresence(acceptedEl, false);
+            }
           }
+          persistChatLog();
+          window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: { sessionId: batch.sessionId, accepted: true } }));
           scheduleLivePoll(0);
         } catch (err) {
-          setSessionStatus('消息暂未送达，服务恢复后会继续发送。');
+          var unsent = CHAT_OUTBOX.splice(0); CHAT_OUTBOX_RETRY = null;
+          unsent.forEach(function (item) {
+            var row = item.log; if (!row) return;
+            var at = CHAT_LOG.indexOf(row); if (at >= 0) CHAT_LOG.splice(at, 1);
+            var localAt = localOutboundRows.indexOf(row); if (localAt >= 0) localOutboundRows.splice(localAt, 1);
+            if (row.pendingNode && row.pendingNode.isConnected) row.pendingNode.remove();
+            list.querySelectorAll('[data-message-ref]').forEach(function (node) { if (row.messageId && node.getAttribute('data-message-ref') === row.messageId) node.remove(); });
+          });
+          var failedDraft = getSendDraft(batch.sessionId) || {};
+          var failedComposer = failedDraft.composerText !== undefined ? failedDraft.composerText : (input.value || '');
+          var draftText = mergeUserFragments(unsent) + (failedComposer ? ' ' + failedComposer : '');
+          saveSendDraft(batch.sessionId, { text: draftText, composerText: draftText, retryText: batch.text, messageId: batch.messageId, replyTo: batch.replyTo });
+          window.dispatchEvent(new CustomEvent('kissne-send-settled', { detail: { failed: true, sessionId: batch.sessionId, messageIds: unsent.map(function (item) { return item.log && item.log.messageId; }).filter(Boolean) } }));
+          persistChatLog(); setSessionStatus('未确认送达，内容已保留在输入框。');
           if (err && err.status === 401) {
             live = false;
             if (await recoverLiveAuth()) setSessionStatus('');
@@ -2227,12 +3140,13 @@
         }
 
         /* New bubbles typed after this batch started remain in CHAT_OUTBOX and are grouped separately.
-           On failure CHAT_OUTBOX_RETRY preserves the exact same payload + id for idempotent retry. */
+           A failed batch becomes a composer draft; only the user can retry it. */
         if (live && (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY)) {
           scheduleOutboxDrain();
         }
       }
       async function push() {
+        if (composerIsComposing) return;
         var v = (input.value || '').trim();
         if (!v) return;
         if (!live) {
@@ -2243,38 +3157,52 @@
         input.value = '';
         /* The text just sent is complete. Only NEW typing after this point should hold the batch. */
         CHAT_USER_INPUT_AT = 0;
+        var frozenTurn = freezeVisibleAnswerBeforeUser();
         append(meMsg(esc(v), '', clockNow()));
-        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow() });
+        var pendingUserNode = list.lastElementChild;
+        /* Whatever this turn is still saying goes on below the new message,
+           so the two conversations interleave like two people talking. */
+        if (frozenTurn && frozenTurn.isConnected) {
+          list.appendChild(frozenTurn);
+          jumpTo(list.scrollHeight);
+        }
+        var localLog = pushLog({ who: 'me', html: esc(v), time: clockNow(), pendingSend: true, messageId: nextMessageId() });
+        localLog.pendingNode = pendingUserNode;
+        if (pendingUserNode) pendingUserNode.setAttribute('data-message-ref', localLog.messageId);
         queueOutboundText(v, localLog);
       }
 
       /* 从历史搜索点进来：滚到那条消息并高亮（微信式的"定位到原文"） */
       var findKw = (p && p.get('find')) || '';
+      var jumpRef = (p && p.get('jump_ref')) || '';
       var hitT = null;
-      if (findKw) {
-        var msgs2 = list.querySelectorAll('.msg');
-        var hit = null;
-        for (var mi = 0; mi < msgs2.length; mi++) {
-          if ((msgs2[mi].textContent || '').indexOf(findKw) >= 0) hit = msgs2[mi];
+      var jumpItem = SEARCH_RESULTS.filter(function (row) { return String(row.message_ref || '') === String(jumpRef); })[0]
+        || SEARCH_RESULT_CACHE[String(jumpRef)];
+      var jumpSession = String((p && p.get('jump_session')) || (jumpItem && jumpItem.session_id) || '');
+      var searchJumpHistory = [];
+      function focusSearchJump() {
+        if (!findKw && !jumpRef) return;
+        var messages = list.querySelectorAll('.msg'), hit = null;
+        for (var mi = 0; mi < messages.length; mi++) {
+          if ((jumpRef && messages[mi].getAttribute('data-message-ref') === jumpRef)
+              || (!jumpRef && findKw && messages[mi].textContent.indexOf(findKw) >= 0)) { hit = messages[mi]; break; }
         }
-        if (hit) {
-          var top = 0, node = hit;
-          while (node && node !== list) { top += node.offsetTop; node = node.offsetParent; }
-          list.scrollTop = Math.max(0, top - 56);
-          hit.classList.add('is-hit');
-          hitT = setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
-        } else {
-          list.insertAdjacentHTML('afterbegin',
-            '<div class="srchmiss">没有找到「' + esc(findKw) + '」，可能已被清理。</div>');
-        }
+        if (!hit) return;
+        var top = 0, node = hit;
+        while (node && node !== list) { top += node.offsetTop; node = node.offsetParent; }
+        jumpTo(Math.max(0, top - 56)); hit.classList.add('is-hit');
+        clearTimeout(hitT); hitT = setTimeout(function () { hit.classList.remove('is-hit'); }, 1800);
       }
+      focusSearchJump();
 
       /* 「+」里的照片 / 文件使用 Android 系统选择器并真正上传给当前 Hermes turn。 */
       var plusToggle = root.querySelector('[data-plus-toggle]');
       var plusPanel = root.querySelector('[data-plus-panel]');
       function setPlusPanel(open) {
+        if (open) setStickerPanel(false);
         if (plusPanel) plusPanel.hidden = !open;
         if (plusToggle) plusToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        syncComposerHeight();
       }
       function onPlusToggle(e) {
         e.preventDefault();
@@ -2293,7 +3221,7 @@
         var kind = String(btn.getAttribute('data-attachment-kind') || 'file');
         var sendSession = chatLogSessionId();
         btn.disabled = true;
-        setSessionStatus(kind === 'photo' ? '正在选择照片…' : '正在选择文件…');
+        setSessionStatus(kind === 'photo' ? '正在选择照片…' : (kind === 'audio' ? '正在选择语音文件…' : '正在选择文件…'));
         try {
           var localId = 'attachment-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
           var selectedMeta = null;
@@ -2313,8 +3241,9 @@
               selectedMeta = meta || {};
               if (chatLogSessionId() !== sendSession) return;
               var html = attachmentMsg(selectedMeta, kind, 'sending', localId);
+              freezeVisibleAnswerBeforeUser();
               append(meMsg(html, '', clockNow()));
-              selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+              selectedLog = pushLog({ who: 'me', html: html, time: clockNow(), attachments: [Object.assign({}, selectedMeta, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })] });
               setPlusPanel(false);
               setSessionStatus('');
             }
@@ -2327,9 +3256,13 @@
           bindChatLogSession(sendSession);
           if (!selectedLog) {
             var html = attachmentMsg(result, kind, 'sent', localId);
-            if (chatLogSessionId() === sendSession) append(meMsg(html, '', clockNow()));
-            selectedLog = pushLog({ who: 'me', html: html, time: clockNow() });
+            if (chatLogSessionId() === sendSession) {
+              freezeVisibleAnswerBeforeUser();
+              append(meMsg(html, '', clockNow()));
+            }
+            selectedLog = pushLog({ who: 'me', html: html, time: clockNow(), attachments: [Object.assign({}, result, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })] });
           } else {
+            selectedLog.attachments = [Object.assign({}, selectedMeta || {}, result || {}, { type: kind === 'photo' ? 'image' : (kind === 'audio' ? 'audio' : 'file') })];
             paintAttachment('sent', Object.assign({}, selectedMeta || {}, result || {}));
           }
           selectedLog.messageRef = turn ? 'turn:' + turn + ':user' : '';
@@ -2337,13 +3270,15 @@
           persistChatLog();
           setPlusPanel(false);
           setSessionStatus('');
-          if (turn) {
+          if (turn && !liveClosedTurns[turn] && !liveCompleted[turn]) {
             livePendingTurns[turn] = true;
             liveCurrentTurn = turn;
             liveSetCancel(true);
             var attachmentEl = liveEnsure(turn);
-            livePresence(attachmentEl, true, '正在查看你发来的' + (kind === 'photo' ? '照片' : '文件'));
+            livePresence(attachmentEl, false);
             liveAvatar(attachmentEl, 'read');
+            startTurnBridge(attachmentEl);
+            updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
           }
           scheduleLivePoll(0);
         } catch (err) {
@@ -2366,48 +3301,72 @@
       var stickerToggle = root.querySelector('[data-sticker-toggle]');
       var stickerPanel = root.querySelector('.stkpanel');
       function setStickerPanel(open) {
+        if (open) setPlusPanel(false);
         if (stickerPanel) stickerPanel.hidden = !open;
         if (stickerToggle) {
           stickerToggle.classList.toggle('is-on', !!open);
           stickerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
         }
+        syncComposerHeight();
       }
       function onStickerToggle(e) {
         e.preventDefault();
         e.stopPropagation();
         setStickerPanel(stickerPanel ? stickerPanel.hidden : false);
       }
-      function onStkTap(e) {
+      async function onStkTap(e) {
+        e.preventDefault();
+        e.stopPropagation();
         var s2 = pick(STICKERS, e.currentTarget.getAttribute('data-stk'), STICKERS[0].k);
         var html = '<span class="stkmsg">' + K.sticker(s2.k, { alt: s2.label }) + '</span>';
-        append(meMsg(html, '', clockNow()));
-        var stickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        /* Sticker media must use the same real attachment lane as photos/files.
-           Never turn it into "[表情包：…]" text: that loses the actual pixels and makes
-           Hermes treat a visual reaction as a caption. Until a bundled sticker asset is
-           resolved to bytes by the native bridge, keep the local bubble but do not fake-send it. */
-        if (live && T && typeof T.sendSticker === 'function') {
-          T.sendSticker(s2.k, s2.label).then(function (accepted) {
-            var turn = String(accepted && accepted.turn_id || '');
-            if (!turn) return;
-            stickerLog.messageRef = 'turn:' + turn + ':user';
-            stickerLog.turnId = turn;
-            persistChatLog();
-            livePendingTurns[turn] = true;
-            liveCurrentTurn = turn;
-            liveSetCancel(true);
-            scheduleLivePoll(0);
-          }).catch(function () {
-            setSessionStatus('表情包发送失败，请重试。');
-          });
-        } else if (live) {
-          setSessionStatus('当前版本暂不能发送真实表情包图片。');
+        if (!live || !T || typeof T.sendSticker !== 'function') {
+          setSessionStatus('服务正在自动恢复，暂时无法发送表情包。');
+          return;
         }
+        freezeVisibleAnswerBeforeUser();
+        append(meMsg(html, '', clockNow()));
+        var stickerLog = pushLog({
+          who: 'me', html: html, time: clockNow(), messageId: nextMessageId(),
+          stickerKey: s2.k, stickerLabel: s2.label
+        });
+        localOutboundRows.push(stickerLog);
+        setSessionStatus('正在发送表情包…');
         /* 收起表情面板但不触发整页 hashchange/render。之前这里重渲染聊天页，
            会把仍在 DOM 里的工具/思考进度一起销毁。 */
         setStickerPanel(false);
+        try {
+          var accepted = await T.sendSticker(s2.k, s2.label);
+          var acceptedTurn = String(accepted && accepted.turn_id || '');
+          if (acceptedTurn) {
+            stickerLog.messageRef = 'turn:' + acceptedTurn + ':user';
+            stickerLog.turnId = acceptedTurn;
+            if (!liveClosedTurns[acceptedTurn] && !liveCompleted[acceptedTurn]) {
+              livePendingTurns[acceptedTurn] = true;
+              liveCurrentTurn = acceptedTurn;
+              liveSetCancel(true);
+              var stickerEl = liveEnsure(acceptedTurn);
+              livePresence(stickerEl, false);
+              liveAvatar(stickerEl, 'read');
+              startTurnBridge(stickerEl);
+              updateSystemNotification('working', 'Kissne 正在工作', '正在处理你的消息');
+            }
+          }
+          persistChatLog();
+          setSessionStatus('');
+          scheduleLivePoll(0);
+        } catch (err) {
+          var code = String(err && err.payload && err.payload.error || err && err.message || '');
+          setSessionStatus(code ? '表情包发送失败：' + code : '表情包发送失败，请重试。');
+        }
         try { history.replaceState(null, '', '#/chat?state=' + stkState); } catch (ignore) {}
       }
+      function closeComposerPanelsOutside(e) {
+        var target = e.target;
+        if (!target || !target.closest) return;
+        if (!target.closest('[data-plus-panel], [data-plus-toggle]')) setPlusPanel(false);
+        if (!target.closest('.stkpanel, [data-sticker-toggle]')) setStickerPanel(false);
+      }
+      document.addEventListener('pointerdown', closeComposerPanelsOutside, true);
       if (stickerToggle) stickerToggle.addEventListener('click', onStickerToggle);
       for (var si = 0; si < stkItems.length; si++) stkItems[si].addEventListener('click', onStkTap);
 
@@ -2416,6 +3375,15 @@
          就把输入区按实际遮挡高度抬起。这样不会写死 150/180px。 */
       var scr = root.querySelector('.screen--chat');
       var cwrap = root.querySelector('.composerwrap');
+      function syncComposerHeight() {
+        if (!scr || !cwrap) return;
+        var height = cwrap.getBoundingClientRect().height;
+        if (height) scr.style.setProperty('--composer-height', height + 'px');
+      }
+      var composerObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(syncComposerHeight) : null;
+      if (composerObserver && cwrap) composerObserver.observe(cwrap);
+      syncComposerHeight();
+
       var vv = window.visualViewport || null;
       var keyboardT = null;
       function syncKeyboardLift() {
@@ -2483,18 +3451,73 @@
       list.addEventListener('scroll', onScroll);
       /* GPT 风格 Activity：默认只是浅灰动作行；点某一行，只展开这一项的详情。 */
       function onActivityTap(e) {
+        var summary = e.target && e.target.closest ? e.target.closest('[data-activity-summary]') : null;
+        if (summary && list.contains(summary)) {
+          e.preventDefault();
+          var stream = summary.closest('[data-activity-turn]'), steps = stream.querySelector('[data-activity-steps]');
+          var expanded = steps.hidden; steps.hidden = !expanded;
+          activityForTurn(stream.getAttribute('data-activity-turn')).expanded = expanded;
+          summary.setAttribute('aria-expanded', String(expanded)); persistTurnActivity(); return;
+        }
         var row = e.target && e.target.closest ? e.target.closest('[data-activity-toggle]') : null;
         if (!row || !list.contains(row)) return;
         e.preventDefault();
-        var item = row.closest('.activity-item');
+        var item = row.closest('.process-step');
         var detail = item && item.querySelector('.activity-detail');
         if (!detail) return;
         var open = detail.hidden;
         detail.hidden = !open;
         row.setAttribute('aria-expanded', open ? 'true' : 'false');
         item.classList.toggle('is-open', open);
+        var stream = item.closest('[data-activity-turn]');
+        var state = stream && activityForTurn(stream.getAttribute('data-activity-turn'));
+        var step = state && state.timeline[Number(item.getAttribute('data-activity-index'))];
+        if (step) { step.expanded = open; state.expanded = true; persistTurnActivity(); }
       }
       list.addEventListener('click', onActivityTap);
+      function copyText(value) {
+        var text = String(value || '');
+        if (!text) return Promise.resolve(false);
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          return navigator.clipboard.writeText(text).then(function () { return true; });
+        }
+        var area = document.createElement('textarea');
+        area.value = text; area.setAttribute('readonly', '');
+        area.style.position = 'fixed'; area.style.opacity = '0';
+        document.body.appendChild(area); area.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (ignore) {}
+        area.parentNode.removeChild(area);
+        return Promise.resolve(ok);
+      }
+      async function onCopyTap(e) {
+        var button = e.target && e.target.closest ? e.target.closest('[data-copy-text]') : null;
+        if (!button || !list.contains(button)) return;
+        e.preventDefault(); e.stopPropagation();
+        var ok = await copyText(button.getAttribute('data-copy-text') || '');
+        var original = button.textContent;
+        button.textContent = ok ? '已复制' : '复制失败';
+        setTimeout(function () { if (button.isConnected) button.textContent = original; }, 1200);
+      }
+      list.addEventListener('click', onCopyTap);
+      function paintBrowserReturn() {
+        var old = list.querySelector('[data-browser-return]'); if (old) old.remove();
+        var transfer = window.KissneBrowserTransfer && window.KissneBrowserTransfer.pending(); if (!transfer) return;
+        var card = document.createElement('section'); card.className = 'browser-return card'; card.setAttribute('data-browser-return', '');
+        var wrongSession = transfer.session_id && CURRENT_SESSION_ID && transfer.session_id !== CURRENT_SESSION_ID;
+        var url = /^https:\/\//i.test(transfer.source_url || '') ? transfer.source_url : '';
+        card.innerHTML = '<b>外部网页回传预览</b><p>' + esc(transfer.source_title || '网页资料') + (url ? ' · <a target="_blank" rel="noopener noreferrer" href="' + esc(url) + '">来源</a>' : '') + '</p><textarea aria-label="回传内容"></textarea><p class="muted">' + (wrongSession ? '请回到发起回传的聊天后发送。' : '确认后作为你的消息发送给叶青栩。') + '</p><button class="btn btn--primary" data-browser-send>发送</button> <button class="btn btn--ghost" data-browser-discard>取消</button>';
+        var editor = card.querySelector('textarea'); editor.value = transfer.text;
+        card.querySelector('[data-browser-send]').disabled = !!wrongSession;
+        card.querySelector('[data-browser-send]').addEventListener('click', function () {
+          if (!live || wrongSession || !editor.value.trim()) return;
+          input.value = '【外部网页资料：' + (transfer.source_title || '网页') + '】\n' + editor.value.trim() + (url ? '\n来源：' + url : '');
+          push(); window.KissneBrowserTransfer.clear(); card.remove();
+        });
+        card.querySelector('[data-browser-discard]').addEventListener('click', function () { window.KissneBrowserTransfer.clear(); card.remove(); });
+        list.appendChild(card);
+      }
+      window.addEventListener('kissne-browser-transfer-ready', paintBrowserReturn); paintBrowserReturn();
       async function onApprovalTap(e) {
         var control = e.target.closest && e.target.closest('[data-approval-decision]');
         if (!control || !list.contains(control)) return;
@@ -2537,23 +3560,7 @@
         var html = '<span class="stkmsg">' + K.sticker(sk.k, { alt: sk.label }) + '</span>';
         append(meMsg(html, '', clockNow()));
         var routedStickerLog = pushLog({ who: 'me', html: html, time: clockNow() });
-        if (live && T && typeof T.sendSticker === 'function') {
-          T.sendSticker(sk.k, sk.label).then(function (accepted) {
-            var turn = String(accepted && accepted.turn_id || '');
-            if (!turn) return;
-            routedStickerLog.messageRef = 'turn:' + turn + ':user';
-            routedStickerLog.turnId = turn;
-            persistChatLog();
-            livePendingTurns[turn] = true;
-            liveCurrentTurn = turn;
-            liveSetCancel(true);
-            scheduleLivePoll(0);
-          }).catch(function () {
-            setSessionStatus('表情包发送失败，请重试。');
-          });
-        } else if (live) {
-          setSessionStatus('当前版本暂不能发送真实表情包图片。');
-        }
+        if (live) queueOutboundText('[表情包：' + sk.label + ']', routedStickerLog);
       }
 
       async function onSessionDrawerClick(e) {
@@ -2568,33 +3575,32 @@
           return;
         }
 
+        var del = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
+        if (del && root.contains(del)) {
+          e.preventDefault();
+          e.stopPropagation();
+          var delRow = del.closest('[data-session-key]');
+          var delId = String(delRow && delRow.getAttribute('data-session-id') || '');
+          if (!delId || !T || typeof T.deleteSession !== 'function') return;
+          if (typeof window.confirm === 'function' && !window.confirm('删除这个会话？删除后无法恢复。')) return;
+          del.disabled = true;
+          setSessionStatus('正在删除会话…');
+          try {
+            await T.deleteSession(delId);
+            await refreshSessions();
+            setSessionStatus('会话已删除。');
+          } catch (err) {
+            del.disabled = false;
+            setSessionStatus('会话删除失败，请稍后重试。');
+          }
+          return;
+        }
+
         var item = e.target && e.target.closest ? e.target.closest('[data-session-key]') : null;
         if (!item || !root.contains(item)) return;
         e.preventDefault();
         var key = String(item.getAttribute('data-session-key') || '');
         var id = String(item.getAttribute('data-session-id') || '');
-        var deleteButton = e.target && e.target.closest ? e.target.closest('[data-session-delete]') : null;
-        if (deleteButton) {
-          e.stopPropagation();
-          if (!id || !T || typeof T.deleteSession !== 'function') {
-            setSessionStatus('当前版本暂不支持删除服务器会话。');
-            return;
-          }
-          deleteButton.disabled = true;
-          setSessionStatus('正在删除会话…');
-          try {
-            await T.deleteSession(id);
-            await refreshSessions();
-            setSessionStatus('');
-          } catch (err) {
-            var code = String(err && err.payload && err.payload.error || '');
-            setSessionStatus(code === 'active_session_delete_forbidden'
-              ? '当前会话不能直接删除，请先切换到其他会话。'
-              : '删除会话失败，请稍后重试。');
-            deleteButton.disabled = false;
-          }
-          return;
-        }
         if (!key && !id) return;
         var alreadyCurrent = CURRENT_SESSION_ID
           ? (id && id === CURRENT_SESSION_ID)
@@ -2615,6 +3621,10 @@
           return;
         }
 
+        if (liveSwitching) return;
+        liveSwitching = true;
+        stopBubbleDeliveries(true);
+        liveEpoch += 1;
         setSessionStatus('正在切换会话…');
         setSessionDrawer(false);
         clearTimeout(livePollTimer);
@@ -2631,11 +3641,13 @@
           bindTurnActivitySession('');
           liveTurns = Object.create(null);
           liveCompleted = Object.create(null);
+          liveClosedTurns = Object.create(null);
           liveCovered = Object.create(null);
           livePendingTurns = Object.create(null);
           liveCurrentTurn = '';
           liveSetCancel(false);
           list.innerHTML = liveEmpty();
+          liveSwitching = false;
           await liveBootstrap();
           await refreshSessions();
         } catch (err) {
@@ -2645,6 +3657,8 @@
           bindTurnActivitySession(previousSessionId || previousSessionKey || '');
           paintSessionList();
           setSessionStatus('会话切换失败，请稍后重试。');
+          liveSwitching = false;
+          scheduleLiveBootstrap(0);
         }
       }
       function onSessionOpen(e) {
@@ -2665,6 +3679,25 @@
         }
         try {
           if (typeof T.ensureToken === 'function') await T.ensureToken(false);
+          if (jumpSession) {
+            live = false;
+            var jumpBoot = await T.bootstrap(true);
+            var currentJumpSession = String(jumpBoot && jumpBoot.conversation && jumpBoot.conversation.session_id || '');
+            if (currentJumpSession !== jumpSession) {
+              if (jumpBoot.pending_turn_id || CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY || CHAT_OUTBOX_BUSY) {
+                setSessionStatus('当前回复尚未结束，请先完成或停止，再打开搜索结果的会话。');
+                live = true; liveBootstrap(); return;
+              }
+              await T.selectSession('', jumpSession);
+              CURRENT_SESSION_ID = ''; CURRENT_SESSION_KEY = '';
+              bindChatLogSession(''); bindTurnActivitySession('');
+            }
+            if (jumpItem && String(jumpItem.session_id || '') === jumpSession) {
+              var page = T.history ? await T.history(100, jumpRef, jumpSession) : {};
+              searchJumpHistory = (page.messages || []).filter(function (row) { return row.session_id === jumpSession; }).concat([jumpItem]);
+            }
+          }
+          if (liveStopped) return;
           live = true;
           refreshHermesModelControls(true);
           liveBootstrap();
@@ -2675,7 +3708,37 @@
       }
       startLiveTransport();
 
+      function onSendSettled(e) {
+        var detail = e.detail || {};
+        if (liveStopped || detail.sessionId !== CHAT_LOG_SESSION) return;
+        list.querySelectorAll('[data-message-ref]').forEach(function (node) {
+          if ((detail.messageIds || []).indexOf(node.getAttribute('data-message-ref')) >= 0) node.remove();
+        });
+        if (detail.failed) {
+          var draft = getSendDraft(CHAT_LOG_SESSION);
+          if (draft) input.value = draft.text || '';
+          setSessionStatus('未确认送达，内容已保留在输入框。');
+        } else if (detail.accepted) {
+          var acceptedDraft = getSendDraft(CHAT_LOG_SESSION);
+          if (acceptedDraft) input.value = acceptedDraft.composerText || '';
+        }
+      }
+      window.addEventListener('kissne-send-settled', onSendSettled);
+      var composerIsComposing = false;
+      function onCompositionStart() {
+        composerIsComposing = true;
+        onComposerInput();
+      }
+      function onCompositionEnd() {
+        composerIsComposing = false;
+        onComposerInput();
+      }
       function onComposerInput() {
+        var draft = getSendDraft(CHAT_LOG_SESSION) || {};
+        draft.composerText = input.value || '';
+        draft.text = mergeUserFragments(CHAT_OUTBOX) + (draft.composerText ? ' ' + draft.composerText : '');
+        draft.text = draft.text.trim();
+        saveSendDraft(CHAT_LOG_SESSION, draft);
         CHAT_USER_INPUT_AT = Date.now();
         if (CHAT_OUTBOX.length || CHAT_OUTBOX_RETRY) scheduleOutboxDrain();
       }
@@ -2683,6 +3746,8 @@
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') push();
       }
+      input.addEventListener('compositionstart', onCompositionStart);
+      input.addEventListener('compositionend', onCompositionEnd);
       input.addEventListener('input', onComposerInput);
       input.addEventListener('keydown', onKey);
       send.addEventListener('click', push);
@@ -2694,6 +3759,8 @@
         if (sessionOpen) sessionOpen.removeEventListener('click', onSessionOpen);
         if (sessionScrim) sessionScrim.removeEventListener('click', onSessionDrawerClick);
         if (sessionDrawer) sessionDrawer.removeEventListener('click', onSessionDrawerClick);
+        input.removeEventListener('compositionstart', onCompositionStart);
+        input.removeEventListener('compositionend', onCompositionEnd);
         input.removeEventListener('input', onComposerInput);
         input.removeEventListener('keydown', onKey);
         send.removeEventListener('click', push);
@@ -2706,18 +3773,28 @@
           vv.removeEventListener('scroll', syncKeyboardLift);
         }
         clearTimeout(keyboardT);
+        if (composerObserver) composerObserver.disconnect();
 
+        document.removeEventListener('pointerdown', closeComposerPanelsOutside, true);
+        Object.keys(liveTurns).forEach(function (id) { dismissTurnBridge(liveTurns[id], true); });
         if (plusToggle) plusToggle.removeEventListener('click', onPlusToggle);
         root.removeEventListener('click', onAttachmentPick);
         if (stickerToggle) stickerToggle.removeEventListener('click', onStickerToggle);
         for (var sj = 0; sj < stkItems.length; sj++) stkItems[sj].removeEventListener('click', onStkTap);
         if (upill) upill.removeEventListener('click', onPill);
         list.removeEventListener('scroll', onScroll);
+        if (followObserver) followObserver.disconnect(); if (followFrame != null) cancelAnimationFrame(followFrame);
+        list.removeEventListener('wheel', readGesture); list.removeEventListener('touchmove', readGesture); list.removeEventListener('scroll', trackReading); progressHint.remove();
+        window.removeEventListener('kissne-browser-transfer-ready', paintBrowserReturn);
+        window.removeEventListener('kissne-send-settled', onSendSettled);
         list.removeEventListener('click', onApprovalTap);
         list.removeEventListener('click', onActivityTap);
         send.removeEventListener('click', push);
         if (mic) mic.removeEventListener('click', onVoiceInput);
         liveStopped = true;
+        stopBubbleDeliveries(true);
+        liveEpoch += 1;
+        clearTimeout(liveBootstrapTimer);
         clearTimeout(livePollTimer);
         clearTimeout(liveOutboxTimer);
         clearTimeout(hitT);
@@ -3380,12 +4457,28 @@
   };
   K.activityPillTime = callClock;
 
+  function screenShareState(action) {
+    var bridge = window.KissneNativeTransport;
+    if (!bridge || typeof bridge.screenShare !== 'function') return { active: false, message: '屏幕共享需要安装新版 Android App' };
+    try { return JSON.parse(bridge.screenShare(action || 'status')); } catch (_) { return { active: false, message: '屏幕状态暂时无法读取' }; }
+  }
+  function screenShareMarkup() {
+    return '<div class="screen screen--call" data-real-screen-share><div class="call">'
+      + '<div class="call__share">' + icon('screen', 36) + '<h2>让叶青栩看屏幕</h2><p data-share-state>尚未共享</p></div>'
+      + '<p>授权后，手机持续采集你选择的屏幕。点击这里或通知栏的“让叶哥看当前屏幕”，才把当前画面发给他。</p>'
+      + '<p>切换到其他 App 后，可直接从通知栏发送画面。发送后回到人人星查看回复。</p>'
+      + '<div class="call__ctl"><button class="btn btn--primary" data-screen-action="start">授权共享</button>'
+      + '<button class="btn" data-screen-action="send">让叶哥看看</button><button class="btn" data-screen-action="pause">暂停／继续</button>'
+      + '<button class="btn" data-screen-action="stop">停止共享</button></div><button class="btn btn--ghost" data-nav="#/chat">回到人人星</button></div></div>';
+  }
+
   K.registerScreen({
     no: '05b', id: 'call', name: '实时语音通话页', route: '#/call', tab: null,
     purpose: '通话 / 屏幕共享页：叶青栩素材、状态、静音 / 扬声器 / 屏幕共享 / 挂断。可以后台（退出本页顶部留"流体云"提示）；说的话转成文字落到人人星。',
     out: ['#/chat'],
     states: CALL_STATES,
     render: function (ctx) {
+      if (ctx.state === 'share' || CALL.kind === 'share') return screenShareMarkup();
       var s = ctx.state || 'ongoing';
       /* 状态以**模块级会话**为准，URL 只是入口 —— 这样从流体云点回来能还原现场 */
       if (s === 'share') CALL.kind = 'share';
@@ -3440,6 +4533,22 @@
 
     /* 会话状态、通话记录、说话转文字都在这里处理（页面本身不做字幕） */
     mount: function (root) {
+      if (root.querySelector('[data-real-screen-share]')) {
+        function paintShare() {
+          var state = screenShareState();
+          CALL.active = !!state.active; CALL.kind = 'share';
+          var label = root.querySelector('[data-share-state]');
+          if (label) label.textContent = (state.active ? (state.paused ? '共享已暂停' : '正在共享') : '尚未共享') + (state.message ? ' · ' + state.message : '');
+          root.querySelectorAll('[data-screen-action]').forEach(function (button) {
+            var action = button.getAttribute('data-screen-action');
+            button.disabled = action === 'start' ? !!state.active : !state.active || (action === 'send' && (state.paused || state.sending));
+          });
+        }
+        function controlShare(event) { var button = event.target.closest('[data-screen-action]'); if (button) { screenShareState(button.getAttribute('data-screen-action')); setTimeout(paintShare, 100); } }
+        root.addEventListener('click', controlShare); paintShare(); var shareTimer = setInterval(paintShare, 500);
+        return function () { clearInterval(shareTimer); root.removeEventListener('click', controlShare); };
+      }
+
       if (!CALL.active) callStart(CALL.kind);      /* 进这一页 = 建立会话 */
 
       /* 挂断 / 结束共享：先结束会话，再按 data-nav 回人人星 */
@@ -3523,7 +4632,7 @@
         <div class="screen__body">
           ${fromChat ? '' : card(
             '<div class="stkup">'
-            + '<span class="stkup__box">' + icon('plus', 20) + '</span>'
+            + '<button type="button" class="stkup__box" data-sticker-upload aria-label="上传表情包">' + icon('plus', 20) + '</button>'
             + '<span class="stkup__main"><b>上传表情包</b>'
             + '<span>从相册选图，上传后我和叶青栩都能用</span></span>'
             + '</div>'
@@ -3549,7 +4658,6 @@
     /* 表情包页（从首页进来）：点一张只是选中，不跳转到人人星 */
     mount: function (root) {
       var picks = root.querySelectorAll('[data-pick]');
-      if (!picks.length) return null;
       var hint = root.querySelector('[data-stkpick]');
       function onPick(e) {
         var el = e.currentTarget;
@@ -3562,8 +4670,31 @@
         }
       }
       for (var i = 0; i < picks.length; i++) picks[i].addEventListener('click', onPick);
+      var upload = root.querySelector('[data-sticker-upload]');
+      var transport = window.KissneTransport;
+      async function onUpload(e) {
+        e.preventDefault();
+        if (!upload || !transport || typeof transport.pickAttachment !== 'function') {
+          if (hint) hint.textContent = '当前连接不支持表情包上传，请先完成配对。';
+          return;
+        }
+        upload.disabled = true;
+        if (hint) hint.textContent = '正在选择表情包…';
+        try {
+          var result = await transport.pickAttachment('sticker');
+          if (hint) hint.textContent = result && result.turn_id
+            ? '表情包已上传并发送到当前对话。'
+            : '表情包上传完成。';
+        } catch (err) {
+          if (hint) hint.textContent = '表情包上传失败，请重试。';
+        } finally {
+          upload.disabled = false;
+        }
+      }
+      if (upload) upload.addEventListener('click', onUpload);
       return function () {
         for (var j = 0; j < picks.length; j++) picks[j].removeEventListener('click', onPick);
+        if (upload) upload.removeEventListener('click', onUpload);
       };
     }
   });

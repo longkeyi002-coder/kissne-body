@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import time
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,7 +25,11 @@ HEADERS = {"X-Hermes-Session-Token": _SESSION_TOKEN}
 __all__ = ["free_account", "portal"]  # fixtures imported from the CLI test module
 
 
-def _wait_for_terminal(session_id: str, timeout: float = 10.0) -> dict:
+def _wait_for_terminal(session_id: str, timeout: float = 30.0) -> dict:
+    # The route deliberately completes the transfer in a daemon worker.  Under
+    # the file-isolated full suite that worker can wait behind CPU-heavy files,
+    # so retain the asynchronous contract without turning scheduler pressure
+    # into a false "pending forever" result.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         body = client.get(f"/api/providers/oauth/nous/poll/{session_id}", headers=HEADERS).json()
@@ -97,11 +100,13 @@ def test_a_sign_in_cancelled_while_waiting_never_persists_the_account(portal, fr
         return {"status": "completed", "user_id": "nas_user:9", "account_email": EMAIL}
     monkeypatch.setattr(anon_auth, "wait_for_promotion", _wait_until_released)
 
+    threads_before = set(threading.enumerate())
     start = client.post("/api/providers/oauth/nous/start", headers=HEADERS).json()
     assert client.delete(f"/api/providers/oauth/sessions/{start['session_id']}", headers=HEADERS).json()["ok"] is True
     release.set()
-    for _ in range(100):
-        time.sleep(0.05)
+    # Let the poller finish whatever it does with the "completed" result before asserting.
+    for t in set(threading.enumerate()) - threads_before:
+        t.join(timeout=5)
     assert portal.token_grants == 0
     state = _load_auth_store()["providers"]["nous"]
     assert state["anon_token"] == guest["anon_token"] and anon_auth.is_guest_state(state)

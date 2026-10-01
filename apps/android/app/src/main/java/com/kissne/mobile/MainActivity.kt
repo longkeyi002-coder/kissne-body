@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.provider.OpenableColumns
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -30,6 +31,11 @@ import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
+    companion object {
+        @Volatile
+        var isVisible: Boolean = false
+    }
+
     private lateinit var webView: WebView
     private lateinit var bridge: PrototypeBridge
     private lateinit var updateManager: UpdateManager
@@ -38,6 +44,34 @@ class MainActivity : AppCompatActivity() {
     private var pendingVoiceRequestId: String? = null
     private var pendingAttachmentRequestId: String? = null
     private var pendingAttachmentKind: String? = null
+
+    private val screenPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, ScreenShareService::class.java).putExtra("data", result.data))
+        }
+    }
+    private fun screenAction(action: String) {
+        if (action == "start") {
+            if (!ScreenShareService.active) screenPermission.launch(getSystemService(android.media.projection.MediaProjectionManager::class.java).createScreenCaptureIntent())
+        } else if (ScreenShareService.active) startService(Intent(this, ScreenShareService::class.java).setAction(action))
+    }
+
+    private val browserResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        val route = data?.getStringExtra("route")
+        if (result.resultCode == RESULT_OK && route in listOf("#/chat", "#/universe") && ::webView.isInitialized) webView.evaluateJavascript("location.hash=" + JSONObject.quote(route) + ";", null)
+        val text = data?.getStringExtra(BrowserActivity.EXTRA_TEXT)?.trim().orEmpty()
+        if (result.resultCode == RESULT_OK && text.isNotEmpty() && ::webView.isInitialized) {
+            val payload = JSONObject().put("text", text).put("source_url", data?.getStringExtra(BrowserActivity.EXTRA_URL).orEmpty())
+                .put("source_title", data?.getStringExtra(BrowserActivity.EXTRA_TITLE).orEmpty()).put("session_id", data?.getStringExtra(BrowserActivity.EXTRA_SESSION).orEmpty())
+            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('kissne-browser-return',{detail:$payload}));", null)
+        }
+    }
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) KissneMessageJob.schedule(this)
+        }
 
     private val attachmentPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -123,6 +157,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         setContentView(root)
+        ensureResidentNotification()
 
         /*
          * Android 15/16 edge-to-edge: consume the system bars on the native root,
@@ -160,6 +195,7 @@ class MainActivity : AppCompatActivity() {
             startAttachmentPicker = { requestId, kind -> startAttachmentPicker(requestId, kind) },
             openBrowser = { url -> openBrowser(url) },
             openBrowserWithText = { url, text -> openBrowser(url, text) },
+            screenControl = { action -> screenAction(action) },
         )
         webView.addJavascriptInterface(bridge, "KissneNativeTransport")
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -170,15 +206,31 @@ class MainActivity : AppCompatActivity() {
         webView.postDelayed({ updateManager.checkForUpdates() }, 1_500)
     }
 
+    private fun ensureResidentNotification() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            KissneMessageJob.schedule(this)
+        }
+    }
+
     private fun openBrowser(url: String?, text: String? = null) {
-        startActivity(Intent(this, BrowserActivity::class.java).apply {
+        browserResult.launch(Intent(this, BrowserActivity::class.java).apply {
+            putExtra(BrowserActivity.EXTRA_SESSION, MobileSessionStore(this@MainActivity).cachedSessionId)
             url?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_URL, it) }
             text?.takeIf { it.isNotBlank() }?.let { putExtra(BrowserActivity.EXTRA_TEXT, it) }
         })
     }
 
     private fun startAttachmentPicker(requestId: String, rawKind: String) {
-        val kind = if (rawKind == "photo") "photo" else "file"
+        val kind = when (rawKind) {
+            "photo" -> "photo"
+            "sticker" -> "sticker"
+            "audio" -> "audio"
+            else -> "file"
+        }
         pendingAttachmentRequestId?.takeIf { it != requestId }?.let { previous ->
             if (::bridge.isInitialized) {
                 bridge.resolveNative(
@@ -190,7 +242,11 @@ class MainActivity : AppCompatActivity() {
         }
         pendingAttachmentRequestId = requestId
         pendingAttachmentKind = kind
-        attachmentPicker.launch(if (kind == "photo") arrayOf("image/*") else arrayOf("*/*"))
+        attachmentPicker.launch(when (kind) {
+            "photo", "sticker" -> arrayOf("image/*")
+            "audio" -> arrayOf("audio/*")
+            else -> arrayOf("*/*")
+        })
     }
 
     private fun readAndUploadAttachment(requestId: String, kind: String, uri: Uri) {
@@ -201,14 +257,13 @@ class MainActivity : AppCompatActivity() {
                 val mime = contentResolver.getType(uri)?.takeIf { it.isNotBlank() }
                     ?: "application/octet-stream"
                 val size = queryAttachmentSize(uri)
-                if (::bridge.isInitialized) {
-                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size)
-                }
                 val bytes = readAttachmentBytes(uri, 20 * 1024 * 1024)
+                val preview = imagePreviewDataUrl(bytes, mime)
                 if (::bridge.isInitialized) {
+                    bridge.notifyAttachmentSelected(requestId, kind, name, mime, size, preview)
                     val attachmentId = "local-attachment-" + java.util.UUID.randomUUID().toString()
                     bridge.emitAttachmentSelected(attachmentId, kind, name, mime, bytes.size)
-                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes)
+                    bridge.uploadPickedAttachment(requestId, attachmentId, kind, name, mime, bytes, preview)
                 }
             } catch (error: Throwable) {
                 if (::bridge.isInitialized) {
@@ -221,6 +276,40 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    /** Downscale an image to <=720px JPEG (q70) as a data URL for the WebView preview. */
+    private fun imagePreviewDataUrl(bytes: ByteArray, mime: String): String? {
+        if (!mime.startsWith("image/")) return null
+        return try {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 720 && bounds.outHeight / (sample * 2) >= 720) sample *= 2
+            val decoded = android.graphics.BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+            ) ?: return null
+            val longest = maxOf(decoded.width, decoded.height)
+            val bitmap = if (longest > 720) {
+                val scale = 720f / longest
+                android.graphics.Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * scale).toInt().coerceAtLeast(1),
+                    (decoded.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                ).also { if (it !== decoded) decoded.recycle() }
+            } else {
+                decoded
+            }
+            val out = ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+            bitmap.recycle()
+            "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (error: Throwable) {
+            null
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String {
@@ -396,6 +485,16 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::updateManager.isInitialized) updateManager.onResume()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        isVisible = true
+    }
+
+    override fun onStop() {
+        isVisible = false
+        super.onStop()
     }
 
     @Deprecated("Deprecated in Java")

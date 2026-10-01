@@ -15,6 +15,7 @@ class PrototypeBridge(
     private val startVoiceInput: (String) -> Unit = {},
     private val startAttachmentPicker: (String, String) -> Unit = { _, _ -> },
     private val openBrowser: (String?) -> Unit = {},
+    private val screenControl: (String) -> Unit = {},
     private val openBrowserWithText: (String?, String?) -> Unit = { _, _ -> },
 ) {
     /*
@@ -37,12 +38,38 @@ class PrototypeBridge(
         tokenProvider = { store.deviceToken },
     )
 
+    @JavascriptInterface fun screenShare(action: String): String {
+        if (action != "status") webView.post { screenControl(action) }
+        return JSONObject().put("active", ScreenShareService.active).put("paused", ScreenShareService.paused).put("sending", ScreenShareService.sending).put("message", ScreenShareService.error).toString()
+    }
+    @JavascriptInterface fun copyText(text: String) { webView.post {
+        val clipboard = webView.context.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Kissne", text))
+    } }
+    @JavascriptInterface fun openAttachment(turn: String, index: Int) { backgroundExecutor.execute {
+        try {
+            val result = client().attachmentPayload(turn, index)
+            val directory = java.io.File(webView.context.cacheDir, "attachments").apply { mkdirs() }
+            val file = java.io.File(directory, java.io.File(result.optString("file_name", "file")).name)
+            file.writeBytes(Base64.decode(result.getString("base64"), Base64.DEFAULT))
+            val uri = androidx.core.content.FileProvider.getUriForFile(webView.context, webView.context.packageName + ".files", file)
+            webView.post {
+                try { webView.context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, result.optString("mime_type", "application/octet-stream")).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                catch (_: Exception) { webView.context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType(result.optString("mime_type", "application/octet-stream")).putExtra(android.content.Intent.EXTRA_STREAM, uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION), "保存或分享附件")) }
+            }
+        } catch (_: Exception) { webView.post { android.widget.Toast.makeText(webView.context, "附件暂时无法读取，请检查服务器版本", android.widget.Toast.LENGTH_SHORT).show() } }
+    } }
+
     @JavascriptInterface fun getBase(): String = baseUrl()
 
     @JavascriptInterface fun setBase(value: String): String {
         store.apiBase = value
         return baseUrl()
     }
+
+    @JavascriptInterface fun cacheIdentity(): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest((baseUrl() + "|" + store.deviceToken.orEmpty()).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 255) }
 
     @JavascriptInterface fun installationId(): String = store.installationId()
     @JavascriptInterface fun hasToken(): Boolean = !store.deviceToken.isNullOrBlank()
@@ -120,8 +147,8 @@ class PrototypeBridge(
 
     private fun shouldRecoverUnauthorized(action: String): Boolean =
         action in setOf(
-            "sessions", "history", "search", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
-            "modelOptions", "setModel", "approval",
+            "sessions", "history", "search", "memoryTimeline", "memoryCandidates", "reviewMemory", "deleteSession", "bootstrap", "sendText", "sendSticker", "poll", "ack", "cancel",
+            "toolsets", "modelOptions", "setModel", "approval", "clarify", "adminMemory", "deleteAdminMemory", "adminSkills", "adminMcp",
             "adminStatus",
         )
 
@@ -145,12 +172,29 @@ class PrototypeBridge(
             "history" -> client().historyPayload(
                 limit = body.optInt("limit", 50),
                 before = body.optString("before").takeIf { it.isNotBlank() },
+                sessionId = body.optString("session_id").takeIf { it.isNotBlank() }
+                    ?: cachedBootstrapPayload()
+                        ?.optJSONObject("conversation")
+                        ?.optString("session_id")
+                        ?.takeIf { it.isNotBlank() },
             )
             "search" -> {
                 val query = body.optString("q").trim()
                 if (query.isBlank()) throw IllegalArgumentException("query_required")
-                client().searchPayload(query, body.optInt("limit", 20))
+                client().searchPayload(query, body.optInt("limit", 500))
             }
+            "memoryTimeline" -> client().memoryTimelinePayload(
+                limit = body.optInt("limit", 50),
+                before = body.optString("before").takeIf { it.isNotBlank() },
+                space = body.optString("space").takeIf { it.isNotBlank() },
+                queryText = body.optString("q").takeIf { it.isNotBlank() },
+            )
+            "memoryCandidates" -> client().memoryCandidatesPayload()
+            "reviewMemory" -> client().reviewMemoryPayload(body)
+            "adminMemory" -> client().adminMemoryPayload()
+            "deleteAdminMemory" -> client().deleteAdminMemoryPayload(body.optString("memory_id"))
+            "adminSkills" -> client().adminSkillsPayload()
+            "adminMcp" -> client().adminMcpPayload()
             "deleteSession" -> {
                 val sessionId = body.optString("session_id").trim()
                 if (sessionId.isBlank()) throw IllegalArgumentException("session_id_required")
@@ -215,17 +259,23 @@ class PrototypeBridge(
             "poll" -> client().pollPayload(body.optLong("cursor", store.cursor))
             "ack" -> {
                 val cursor = body.optLong("cursor", store.cursor)
-                client().ack(cursor)
-                store.cursor = cursor
+                if (cursor > store.cursor) {
+                    client().ack(cursor)
+                    store.cursor = maxOf(cursor, store.cursor)
+                }
                 JSONObject().put("ok", true).put("cursor", cursor)
             }
-            "cancel" -> client().cancelPayload(body.optString("turn_id"))
+            "cancel" -> client().cancelPayload(body.optString("turn_id")).also {
+                invalidateBootstrapCache(clearPersistedMetadata = false)
+            }
             "modelOptions" -> client().modelOptionsPayload()
             "setModel" -> client().setModelPayload(
                 model = body.optString("model").takeIf { it.isNotBlank() },
                 effort = body.optString("effort").takeIf { it.isNotBlank() },
                 provider = body.optString("provider").takeIf { it.isNotBlank() },
             )
+            "toolsets" -> client().toolsetsPayload(if (body.has("toolset")) body else null)
+            "clarify" -> client().clarifyPayload(body.optString("clarify_id"), body.optString("response"), body.optBoolean("other", false))
             "approval" -> client().approvalPayload(
                 approvalId = body.optString("approval_id"),
                 decision = body.optString("decision"),
@@ -238,6 +288,9 @@ class PrototypeBridge(
                 result
             }
             "adminStatus" -> client().adminStatusPayload()
+            "layaStatus" -> LayaLocal.status(webView.context)
+            "layaDownload" -> LayaLocal.download(webView.context)
+            "layaClassify" -> LayaLocal.classify(webView.context, body.optString("text"))
             else -> throw IllegalArgumentException("unknown_native_action")
         }
 
@@ -264,6 +317,27 @@ class PrototypeBridge(
     }
 
     @JavascriptInterface
+    fun notifyReply(id: String?, title: String?, body: String?) {
+        val replyId = id?.trim().orEmpty()
+        if (replyId.isBlank()) return
+        webView.post {
+            KissneNotificationService.notifyReply(
+                webView.context, replyId, title.orEmpty(), body.orEmpty(),
+            )
+        }
+    }
+
+    @JavascriptInterface
+    fun updateNotification(state: String?, title: String?, body: String?) {
+        val safeState = state?.trim().orEmpty().ifBlank { "ready" }
+        val safeTitle = title?.trim().orEmpty().ifBlank { "Kissne 已就绪" }
+        val safeBody = body?.trim().orEmpty().ifBlank { "打开人人星继续对话" }
+        webView.post {
+            KissneNotificationService.update(webView.context, safeState, safeTitle, safeBody)
+        }
+    }
+
+    @JavascriptInterface
     fun request(id: String, action: String, payload: String) {
         if (action == "voiceInput") {
             webView.post { startVoiceInput(id) }
@@ -278,12 +352,17 @@ class PrototypeBridge(
                 return
             }
             val kind = body.optString("kind", "file").let {
-                if (it == "photo") "photo" else "file"
+                when (it) {
+                    "photo" -> "photo"
+                    "sticker" -> "sticker"
+                    "audio" -> "audio"
+                    else -> "file"
+                }
             }
             webView.post { startAttachmentPicker(id, kind) }
             return
         }
-        val executor = when (bridgeLane(action)) {
+        val executor = if (action.startsWith("laya")) controlExecutor else when (bridgeLane(action)) {
             BridgeLane.TRANSPORT -> transportExecutor
             BridgeLane.BACKGROUND -> backgroundExecutor
             BridgeLane.CONTROL -> controlExecutor
@@ -351,6 +430,7 @@ class PrototypeBridge(
         fileName: String,
         mimeType: String,
         bytes: ByteArray,
+        preview: String? = null,
     ) {
         transportExecutor.execute {
             val messageId = "android-media-" + UUID.randomUUID().toString()
@@ -361,6 +441,7 @@ class PrototypeBridge(
                 )
                 invalidateBootstrapCache(clearPersistedMetadata = false)
                 result.put("attachment_id", attachmentId)
+                if (!preview.isNullOrEmpty()) result.put("preview", preview)
                 resolve(requestId, true, result)
             } catch (firstError: Throwable) {
                 var finalError = firstError
@@ -374,6 +455,7 @@ class PrototypeBridge(
                         )
                         invalidateBootstrapCache(clearPersistedMetadata = false)
                         retried.put("attachment_id", attachmentId)
+                        if (!preview.isNullOrEmpty()) retried.put("preview", preview)
                         resolve(requestId, true, retried)
                         return@execute
                     } catch (retryError: Throwable) {
@@ -399,12 +481,14 @@ class PrototypeBridge(
         fileName: String,
         mimeType: String,
         size: Long,
+        preview: String? = null,
     ) {
         val payload = JSONObject()
             .put("kind", kind)
             .put("file_name", fileName)
             .put("mime_type", mimeType)
             .put("size", size)
+        if (!preview.isNullOrEmpty()) payload.put("preview", preview)
         val script = "window.KissneNativeBridge && window.KissneNativeBridge.attachmentSelected(" +
             JSONObject.quote(requestId) + "," + JSONObject.quote(payload.toString()) + ");"
         webView.post { webView.evaluateJavascript(script, null) }
@@ -444,3 +528,4 @@ class PrototypeBridge(
         controlExecutor.shutdownNow()
     }
 }
+

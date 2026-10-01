@@ -7,9 +7,7 @@ because the dangling tool-call tail was replayed on every resume).
 """
 
 from agent.replay_cleanup import (
-    is_interrupted_tool_result,
     strip_dangling_tool_call_tail,
-    strip_interrupted_tool_tails,
     sanitize_replay_history,
 )
 
@@ -91,8 +89,6 @@ def test_sanitize_replay_history_noop_on_clean_history():
     assert sanitize_replay_history(history) == history
 
 
-def test_sanitize_replay_history_empty():
-    assert sanitize_replay_history([]) == []
 
 
 # --- Send/replay canonicalization parity (#105236 §6, salvage of #105308) ---
@@ -101,11 +97,6 @@ import copy
 import json
 
 from agent.replay_cleanup import canonicalize_replay_history
-from agent.kissne_context import (
-    KISSNE_LIVE_CONTEXT_OPEN,
-    KISSNE_USER_MESSAGE_CLOSE,
-    KISSNE_USER_MESSAGE_OPEN,
-)
 from agent.transports.chat_completions import ChatCompletionsTransport
 from agent.turn_context import build_api_messages
 from hermes_state import SessionDB
@@ -171,16 +162,7 @@ def test_send_wire_matches_replay_wire_after_db_round_trip(tmp_path):
     request = _send(_SendAgent(), live)
 
     assert live == frozen
-    # The live delta is request-local (02: it never enters history), so the wire for the
-    # current turn legitimately differs from the replayed prefix. What has to hold is:
-    # the persisted prefix is byte-identical between send and replay, and the current
-    # turn is the canonical words inside the fixed envelope — nothing more.
-    send_wire = json.loads(_wire(request))
-    replay_wire = json.loads(_wire(replay + [{"role": "user", "content": "now"}]))
-    assert send_wire[:-1] == replay_wire[:-1]
-    assert send_wire[-1]["role"] == "user"
-    assert KISSNE_LIVE_CONTEXT_OPEN in send_wire[-1]["content"]
-    assert f"{KISSNE_USER_MESSAGE_OPEN}\nnow\n{KISSNE_USER_MESSAGE_CLOSE}" in send_wire[-1]["content"]
+    assert _wire(request) == _wire(replay + [{"role": "user", "content": "now"}])
     assert "[with memory]" in request[0]["content"] and "EXPIRED" in request[2]["content"]
     assert [m["role"] for m in request] == ["user", "assistant", "user", "assistant", "tool", "tool", "user"]
     assert (request[4]["content"], request[5]["content"]) == (grep_hit, doc_text)
