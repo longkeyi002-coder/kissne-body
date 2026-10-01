@@ -201,6 +201,7 @@
       layaDownload: function () { return nativeCall('layaDownload', {}, 1800000); },
       layaClassify: function (text) { return nativeCall('layaClassify', { text: String(text || '') }, 300000); },
       adminStatus: function () { return nativeCall('adminStatus', {}); },
+      adminRestart: function () { return nativeCall('adminRestart', {}); },
       revoke: function () { return nativeCall('revoke', {}); }
     };
     if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
@@ -458,6 +459,11 @@
   function adminStatus() {
     return request('/admin/status', { method: 'GET', base: adminBase(), clearAuthOn401: false });
   }
+  function adminRestart() {
+    // No clearAuthOn401: the gateway answers first and dies second, so a lost response
+    // during the restart window must not look like a credential failure.
+    return request('/admin/restart', { method: 'POST', base: adminBase(), clearAuthOn401: false });
+  }
 
   window.KissneTransport = {
     ApiError: ApiError,
@@ -497,7 +503,8 @@
     setModel: setModel,
     respondClarify: function (id, response, other) { return request('/mobile/clarify', { method: 'POST', body: { clarify_id: String(id || ''), response: String(response || ''), other: !!other } }); },
     respondApproval: respondApproval,
-    adminStatus: adminStatus
+    adminStatus: adminStatus,
+    adminRestart: adminRestart
   };
   if (window.KissneChatHistory) window.KissneChatHistory.attach(window.KissneTransport);
 })();

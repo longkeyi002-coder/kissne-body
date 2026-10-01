@@ -608,6 +608,9 @@
             <button type="button" class="btn btn--ghost is-block" data-admin-op="rollback">
               ${icon('refresh', 17)}<span>回滚到 GitHub 最新版</span>
             </button>
+            <button type="button" class="btn btn--danger is-block" data-admin-op="restart">
+              ${icon('refresh', 17)}<span>重启网关</span>
+            </button>
           </div>
 
           <div class="adminconfirm" data-admin-confirm hidden>
@@ -637,6 +640,7 @@
       var confirmBox = root.querySelector('[data-admin-confirm]');
       var mergeBtn = root.querySelector('[data-admin-op="merge"]');
       var rollbackBtn = root.querySelector('[data-admin-op="rollback"]');
+      var restartBtn = root.querySelector('[data-admin-op="restart"]');
 
       function setText(sel, value) {
         var el = root.querySelector(sel);
@@ -656,7 +660,7 @@
         return m + ' 分钟';
       }
       function setBusy(busy) {
-        [mergeBtn, rollbackBtn].forEach(function (el) {
+        [mergeBtn, rollbackBtn, restartBtn].forEach(function (el) {
           if (!el) return;
           el.disabled = !!busy;
           el.setAttribute('aria-disabled', busy ? 'true' : 'false');
@@ -766,22 +770,111 @@
         confirmKind = kind;
         if (!confirmBox) return;
         confirmBox.hidden = false;
-        setText('[data-admin-confirm-title]', kind === 'rollback' ? '确认回滚？' : '确认合并上游更新？');
+        setText('[data-admin-confirm-title]', kind === 'rollback' ? '确认回滚？' : (kind === 'restart' ? '确认重启网关？' : '确认合并上游更新？'));
         setText(
           '[data-admin-confirm-body]',
           kind === 'rollback'
             ? '代码将恢复到 GitHub 上 kissne-main 的最新版本，随后网关会重启。'
-            : '将合并上游更新并重启网关，App 会短暂断连。'
+            : (kind === 'restart'
+              ? '不改任何代码，只让网关重启一次。App 会短暂断连约 3 秒，恢复后微信也会一起回来。'
+              : '将合并上游更新并重启网关，App 会短暂断连。')
         );
       }
       function closeConfirm() {
         confirmKind = '';
         if (confirmBox) confirmBox.hidden = true;
       }
+      /* A restart is not a deploy: it never writes to the deploy log, so it gets its own
+         small state machine — send → confirm it went down → wait for it to answer again.
+         Both halves matter: the server answers first and dies second, so the immediate
+         response proves nothing, and a status poll that succeeds too early proves nothing
+         either. Anything short of an explicit 403/503 is treated as "still in flight". */
+      var restartPhase = '';
+      var restartTimer = null;
+      var restartStartedAt = 0;
+      var restartBaselineUptime = null;
+      var RESTART_TIMEOUT_MS = 60000;
+      function runRestart() {
+        return (async function () {
+          if (typeof T.adminRestart !== 'function') {
+            showNotice('error', '当前 App 版本不支持重启，请升级到最新版。');
+            return;
+          }
+          restartPhase = 'sending';
+          restartStartedAt = Date.now();
+          restartBaselineUptime = null;
+          setBusy(true);
+          showNotice('working', '正在通知网关重启…');
+          /* A gateway that merely answers again is not proof — it may never have gone down.
+             Remember its current uptime: only a *smaller* uptime afterwards means a new
+             process actually replaced it. */
+          try {
+            var before = await T.adminStatus();
+            if (before && before.uptime_seconds != null) {
+              restartBaselineUptime = Number(before.uptime_seconds);
+            }
+          } catch (e) { /* a flaky read here is fine; the timeout still bounds the wait */ }
+          try {
+            await T.adminRestart();
+          } catch (err) {
+            var code = err && (err.status || err.code);
+            if (code === 403 || code === 503) {
+              showNotice('error', code === 403 ? '这台设备还没有重启权限。' : '网关暂时无法执行重启，请稍后再试。');
+              setBusy(false);
+              return;
+            }
+          }
+          showNotice('working', '重启指令已发出，网关将在 3 秒后重启，约 5–10 秒恢复。');
+          scheduleRestartCheck();
+        })();
+      }
+      function scheduleRestartCheck() {
+        clearTimeout(restartTimer);
+        if (!disposed && restartPhase) restartTimer = setTimeout(checkRestart, 2000);
+      }
+      function checkRestart() {
+        if (disposed || !restartPhase) return;
+        if (Date.now() - restartStartedAt > RESTART_TIMEOUT_MS) {
+          restartPhase = '';
+          setBusy(false);
+          showNotice('error', restartBaselineUptime == null
+            ? '等了 1 分钟网关还没恢复，请检查服务器状态，或回到运维页手动刷新。'
+            : '等了 1 分钟网关还在应答但没换进程，重启可能没生效，请检查服务器状态。');
+          return;
+        }
+        T.adminStatus()
+          .then(function (now) {
+            if (disposed || !restartPhase) return;
+            var uptime = now && now.uptime_seconds != null ? Number(now.uptime_seconds) : null;
+            var restarted = restartBaselineUptime == null
+              ? uptime != null && uptime < 5
+              : uptime != null && uptime < restartBaselineUptime;
+            if (!restarted) {
+              /* Still the same process: either the delayed unit hasn't fired, or it failed. */
+              showNotice('working', '还在等待网关真正重启…');
+              scheduleRestartCheck();
+              return;
+            }
+            restartPhase = '';
+            setBusy(false);
+            showNotice('ok', '网关已重启完成，运行正常。');
+            loadStatus();
+          })
+          .catch(function () {
+            if (disposed || !restartPhase) return;
+            restartPhase = 'waiting';
+            showNotice('working', '网关已断线，正在等待它回来…');
+            scheduleRestartCheck();
+          });
+      }
       async function runConfirmed() {
         var kind = confirmKind;
         closeConfirm();
         if (!kind) return;
+        if (kind === 'restart') {
+          await runRestart();
+          return;
+        }
         setBusy(true);
         showNotice('working', kind === 'rollback' ? '正在启动回滚…' : '正在启动上游合并…');
         try {
@@ -822,6 +915,7 @@
       return function () {
         disposed = true;
         clearTimeout(pollTimer);
+        clearTimeout(restartTimer);
         root.removeEventListener('click', onClick);
       };
     }

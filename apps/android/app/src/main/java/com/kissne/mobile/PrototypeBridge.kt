@@ -288,6 +288,7 @@ class PrototypeBridge(
                 result
             }
             "adminStatus" -> client().adminStatusPayload()
+            "adminRestart" -> client().adminRestartPayload()
             "layaStatus" -> LayaLocal.status(webView.context)
             "layaDownload" -> LayaLocal.download(webView.context)
             "layaClassify" -> LayaLocal.classify(webView.context, body.optString("text"))

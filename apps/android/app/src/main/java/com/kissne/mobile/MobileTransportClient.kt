@@ -257,6 +257,14 @@ class MobileTransportClient(
     fun adminStatusPayload(): JSONObject =
         request("GET", "/admin/status")
 
+    /**
+     * Ask the gateway to restart itself. The server hands the restart to a detached
+     * transient unit, so this call answers *before* the gateway goes down — the response
+     * returning is not evidence the restart finished.
+     */
+    fun adminRestartPayload(): JSONObject =
+        request("POST", "/admin/restart")
+
 
 }
 
