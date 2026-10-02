@@ -552,6 +552,8 @@ class SessionEntry:
         if self.model_override:
             # Defence-in-depth against an unsanitized dict stored directly.
             result["model_override"] = sanitize_model_override(self.model_override)
+        if self.transport_profile:
+            result["transport_profile"] = self.transport_profile
         if self.origin:
             result["origin"] = self.origin.to_dict()
         return result
@@ -571,6 +573,7 @@ class SessionEntry:
         if not isinstance(token, str) or not token:
             # The pair is written atomically; a partial/malformed pair must not auto-resume.
             token = started_at = None
+        transport_profile = data.get("transport_profile")
 
         session_key, session_id = data["session_key"], data["session_id"]
         # CWE-22: session_id becomes a filename (strict); session_key allows interior ``/``.
@@ -590,7 +593,11 @@ class SessionEntry:
             chat_type=data.get("chat_type", "dm"), metadata=dict(data.get("metadata") or {}),
             last_resume_marked_at=_parse_iso(data.get("last_resume_marked_at")),
             active_turn_token=token, active_turn_started_at=started_at,
-            model_override=sanitize_model_override(data.get("model_override")), **plain,
+            model_override=sanitize_model_override(data.get("model_override")),
+            transport_profile=(
+                transport_profile if isinstance(transport_profile, str) and transport_profile else None
+            ),
+            **plain,
         )
 
 
@@ -1159,6 +1166,7 @@ class SessionStore(
             self._record_gateway_session_peer(
                 target_session_id, session_key, new_entry.origin,
                 display_name=new_entry.display_name, include_compression_ancestors=True,
+                transport_profile=new_entry.transport_profile,
             )
         return new_entry
 
