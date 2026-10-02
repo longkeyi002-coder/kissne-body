@@ -1,6 +1,6 @@
 """Persistent real picker configuration, authenticated HTTP, isolated homes A→B→A."""
 from pathlib import Path
-import yaml
+import hermes_yaml as yaml
 from _transport_harness import build_session_store, http, isolated_runtime, make_adapter, pair, preexisting_conversation, run, start, stop
 
 

@@ -473,14 +473,18 @@ async def _run_deploy(deploy_type: str, cmd: list[str], log_path: Path) -> None:
 CONFIG_PATH = Path.home() / ".hermes" / "config.yaml"
 
 def _read_config_yaml() -> dict:
-    import yaml
+    import hermes_yaml as yaml
     with open(CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 def _write_config_yaml(cfg: dict) -> None:
-    import yaml
+    # hermes_yaml (the project's PyYAML-compatible shim over ruamel.yaml) exposes
+    # safe_load/safe_dump, not the unsuffixed load/dump — and PyYAML is not a
+    # dependency (pyproject pins ruamel.yaml), so a bare `import yaml` raises
+    # ModuleNotFoundError on a real install, not just in CI.
+    import hermes_yaml as yaml
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        yaml.safe_dump(cfg, f, default_flow_style=False, allow_unicode=True)
 
 
 async def _handle_admin_config(request: Any) -> Any:

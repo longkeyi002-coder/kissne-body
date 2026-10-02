@@ -494,6 +494,10 @@ class SessionEntry:
     auto_reset_reason: Optional[str] = None
     reset_had_activity: bool = False
     prev_session_id: Optional[str] = None  # feeds the continuity note
+    # Multiplex routing: the receiving bot's profile, persisted alongside the routing
+    # entry so a reconnecting adapter restores the same identity (session_recovery passes
+    # it, authz_mixin restores it). None outside multiplexing — never guessed.
+    transport_profile: Optional[str] = None
     # Explicit /new or /reset triggers topic/channel skill re-injection on the first turn.
     is_fresh_reset: bool = False
     # Historical finalization fence; timers no longer write it.
