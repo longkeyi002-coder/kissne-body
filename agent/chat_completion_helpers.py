@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from hermes_cli.timeouts import get_provider_request_timeout, get_provider_stale_timeout
 from hermes_constants import PARTIAL_STREAM_STUB_ID, FINISH_REASON_LENGTH
+from agent.degenerate_response_guard import DegenerateResponseGuard, FINISH_REASON as DEGENERATE_FINISH_REASON
 from agent.error_classifier import (
     FailoverReason, PROVIDER_STREAM_EMPTY_FRAME_ERROR_CODE, PROVIDER_STREAM_NON_JSON_ERROR_CODE,
     _extract_status_code)
@@ -3070,6 +3071,11 @@ class _StreamingCall(StreamingWaitMonitor):
         # stream and burns the empty-response retries (the non-streaming fix is #46013).
         refusal_parts: list[str] = []
         reasoning_details: list = []  # OpenRouter replay data (signatures, encrypted blocks)
+        # Degenerate-response guard: local deterministic detection of repetitive
+        # streaming only; it never touches tool-call argument JSON.
+        degenerate_guard = DegenerateResponseGuard(
+            enabled=getattr(self.agent, "_degenerate_guard_enabled", True)
+        )
         pending_text_parts: list[str] = []
         tool_calls = _ToolCallAccumulator()
         tool_calls_acc = tool_calls.acc
@@ -3138,6 +3144,11 @@ class _StreamingCall(StreamingWaitMonitor):
             if hasattr(chunk, "usage") and chunk.usage:
                 usage_obj = chunk.usage
 
+            # Read tool-call presence once, before any text scoring. Once a tool-call delta
+            # starts, repetitive prose must never interrupt or truncate its JSON arguments.
+            delta_tool_calls = getattr(delta, "tool_calls", None)
+            guard_may_stop = not tool_calls_acc and not delta_tool_calls
+
             reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
             # Same ``model_extra`` fallback as the non-streaming path: a reasoning-only stream
             # whose deltas carry only this field otherwise trips the empty-stream guard (#56516).
@@ -3149,6 +3160,15 @@ class _StreamingCall(StreamingWaitMonitor):
                     reasoning_parts[-1] if reasoning_parts else "", reasoning_text)
                 reasoning_parts.append(reasoning_text)
                 self._emit_reasoning(reasoning_text)
+                if guard_may_stop and degenerate_guard.feed(reasoning_text):
+                    finish_reason = DEGENERATE_FINISH_REASON
+                    logger.warning(
+                        "Degenerate-response guard stopped repetitive reasoning at %s chars "
+                        "(model=%s provider=%s).",
+                        degenerate_guard.trip_at_chars, self.agent.model, self.agent.provider,
+                    )
+                    self.agent._touch_activity("degenerate response guard stopped stream")
+                    break
             # Structured reasoning_details deltas carry the provider's replay data; the
             # non-streaming path already keeps them, so dropping them here lost
             # reasoning continuity on nearly every turn. Pydantic parks unknown fields
@@ -3171,6 +3191,15 @@ class _StreamingCall(StreamingWaitMonitor):
             delta_content = flatten_message_text(getattr(delta, "content", None), sep="")
             if delta_content:
                 content_parts.append(delta_content)
+                if guard_may_stop and degenerate_guard.feed(delta_content):
+                    finish_reason = DEGENERATE_FINISH_REASON
+                    logger.warning(
+                        "Degenerate-response guard stopped repetitive content at %s chars "
+                        "(model=%s provider=%s).",
+                        degenerate_guard.trip_at_chars, self.agent.model, self.agent.provider,
+                    )
+                    self.agent._touch_activity("degenerate response guard stopped stream")
+                    break
                 if tool_calls_acc:
                     self._route_suppressed_text(delta_content)
                 elif (pending_text_parts or _provider_stream_text_may_be_sse(delta_content)
@@ -3185,7 +3214,6 @@ class _StreamingCall(StreamingWaitMonitor):
                 else:
                     self._emit_text(delta_content)
 
-            delta_tool_calls = getattr(delta, "tool_calls", None)
             if delta_tool_calls:
                 _flush_pending_stream_text()
                 for tc_delta in delta_tool_calls:

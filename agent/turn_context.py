@@ -1196,6 +1196,11 @@ def build_api_messages(
     replayed verbatim."""
     from agent.agent_runtime_helpers import fill_empty_non_final_wire_payload
     from agent.conversation_loop import _clone_message_for_send
+    from agent.historical_context_projection import (
+        build_tool_call_index,
+        find_referenced_tool_result_ids,
+        project_historical_message,
+    )
     from agent.replay_cleanup import canonicalize_replay_history
 
     has_current = isinstance(current_turn_user_idx, int) and 0 <= current_turn_user_idx < len(messages)
@@ -1213,6 +1218,30 @@ def build_api_messages(
     turn_now = agent._current_turn_timestamp
     split = current_turn_user_idx if has_current else 0
     canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
+    canonical_prefix = canonical_messages[:split]
+
+    # Index historical tool calls/results once, so the projection below can tell a
+    # typed result (compact it) from an argument blob (bound it) and can protect the
+    # few results a later message still references.
+    historical_tool_calls = build_tool_call_index(canonical_messages)
+    referenced_tool_result_ids = find_referenced_tool_result_ids(
+        canonical_messages, historical_tool_calls
+    )
+
+    # Projection boundary. Keep the immediately previous completed turn exact for
+    # one grace turn: 413 recovery may need to evict its most recent tool image,
+    # and corrupt-image recovery must be able to strip the exact bytes that the
+    # provider rejected. Older turns are safe to project.
+    #
+    # Scan ONLY the canonicalized prefix. Replay cleanup may drop rows, so ``split``
+    # is no longer a valid index into canonical_messages; scanning the combined list
+    # can accidentally land on the current user row and project live recovery bytes.
+    projection_boundary = len(canonical_prefix)
+    for _idx in range(len(canonical_prefix) - 1, -1, -1):
+        entry = canonical_prefix[_idx]
+        if isinstance(entry, dict) and entry.get("role") == "user":
+            projection_boundary = _idx
+            break
 
     api_messages = []
     for idx, msg in enumerate(canonical_messages):
@@ -1250,6 +1279,21 @@ def build_api_messages(
             # prefix stays byte-stable. User rows carry the injection sidecar; user
             # and assistant rows may carry a sanitize-divergence sidecar.
             api_msg["content"] = _api_content
+
+        # Historical tool arguments and image parts are replayed on every later
+        # request. Keep the durable transcript lossless, but send only bounded
+        # argument metadata and image references for old messages. The current
+        # turn is excluded: its tool loop may still need exact arguments/images.
+        if idx < projection_boundary:
+            tool_call = historical_tool_calls.get(str(api_msg.get("tool_call_id")))
+            api_msg = project_historical_message(
+                api_msg,
+                tool_name=tool_call[0] if tool_call else "",
+                tool_arguments=tool_call[1] if tool_call else None,
+                protected_tool_result=(
+                    str(api_msg.get("tool_call_id")) in referenced_tool_result_ids
+                ),
+            )
 
         # Pass reasoning back to the API for ALL assistant messages so multi-turn
         # reasoning context is preserved.
